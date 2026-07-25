@@ -1,0 +1,183 @@
+.shell {
+  display: flex;
+  min-height: 520px;
+  background: #f7f7f7;
+  color: #4a4a4a;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  border: 1px solid #e2e2e2;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.sidebar {
+  width: 220px;
+  background: #fff;
+  border-right: 1px solid #e2e2e2;
+  padding: 16px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.brand {
+  font-size: 1.15rem;
+  font-weight: 800;
+  margin: 0;
+  color: #4a4a4a;
+}
+
+.tagline {
+  font-size: 0.7rem;
+  color: #8a8a8a;
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+
+.chip {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #5c8228;
+  background: #f1f8e7;
+  padding: 4px 8px;
+  border-radius: 4px;
+  margin-bottom: 12px;
+}
+
+.navBtn {
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: #4a4a4a;
+  cursor: pointer;
+  width: 100%;
+}
+
+.navBtn:hover {
+  background: #f1f8e7;
+}
+
+.navBtnActive {
+  background: #8dc63f;
+  color: #fff;
+}
+
+.navBtnActive:hover {
+  background: #7ab536;
+}
+
+.main {
+  flex: 1;
+  padding: 16px 20px;
+  min-width: 0;
+  background: #f7f7f7;
+}
+
+.title {
+  margin: 0 0 4px;
+  font-size: 1.35rem;
+  font-weight: 700;
+}
+
+.subtitle {
+  margin: 0 0 16px;
+  color: #8a8a8a;
+  font-size: 0.875rem;
+}
+
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.stat {
+  background: #fff;
+  border: 1px solid #e2e2e2;
+  border-radius: 8px;
+  padding: 12px 14px;
+  min-width: 110px;
+}
+
+.statValue {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 700;
+}
+
+.statLabel {
+  margin: 4px 0 0;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #8a8a8a;
+}
+
+.panel {
+  background: #fff;
+  border: 1px solid #e2e2e2;
+  border-radius: 8px;
+  padding: 14px;
+  overflow: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid #e2e2e2;
+}
+
+.table th {
+  background: #f7f7f7;
+  font-weight: 700;
+}
+
+.muted {
+  color: #8a8a8a;
+  font-size: 0.875rem;
+}
+
+.error {
+  color: #dc2626;
+  font-size: 0.875rem;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.toolbar button {
+  border: 1px solid #e2e2e2;
+  background: #fff;
+  color: #4a4a4a;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.toolbar button:hover {
+  border-color: #8dc63f;
+  background: #f1f8e7;
+}
+
+.toolbarBtnActive {
+  background: #8dc63f !important;
+  border-color: #8dc63f !important;
+  color: #fff !important;
+}

@@ -1,0 +1,22 @@
+{
+  "@microsoft/generator-sharepoint": {
+    "plusBeta": false,
+    "isCreatingSolution": true,
+    "nodeVersion": "18.20.4",
+    "sdksVersions": {
+      "@microsoft/microsoft-graph-client": "3.0.2",
+      "@microsoft/teams-js": "2.24.0"
+    },
+    "version": "1.20.0",
+    "libraryName": "pave-training-portal-spfx",
+    "libraryId": "a7c4e2f1-9b3d-4e5a-8c1f-2d6b0a9e7f34",
+    "environment": "spo",
+    "packageManager": "npm",
+    "solutionName": "pave-training-portal-spfx",
+    "solutionShortDescription": "PAVE Training Portal admin and customer web parts for SharePoint",
+    "skipFeatureDeployment": true,
+    "isDomainIsolated": false,
+    "componentType": "webpart",
+    "template": "react"
+  }
+}

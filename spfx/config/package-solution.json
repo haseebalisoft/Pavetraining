@@ -1,0 +1,40 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/package-solution.schema.json",
+  "solution": {
+    "name": "pave-training-portal-spfx-client-side-solution",
+    "id": "a7c4e2f1-9b3d-4e5a-8c1f-2d6b0a9e7f34",
+    "version": "1.0.0.0",
+    "includeClientSideAssets": true,
+    "skipFeatureDeployment": true,
+    "isDomainIsolated": false,
+    "developer": {
+      "name": "PAVE Training",
+      "websiteUrl": "https://pavetraining.sharepoint.com/sites/PaveTrainingOperationAdmin",
+      "privacyUrl": "",
+      "termsOfUseUrl": "",
+      "mpnId": "Undefined-1.20.0"
+    },
+    "metadata": {
+      "shortDescription": {
+        "default": "PAVE Training Portal (Admin + Customer) inside SharePoint"
+      },
+      "longDescription": {
+        "default": "Same portal concept as the Next.js app: admin and customer training portals reading SharePoint lists directly via REST (no external API)."
+      },
+      "screenshotPaths": [],
+      "videoUrl": "",
+      "categories": []
+    },
+    "features": [
+      {
+        "title": "PAVE Training Portal Feature",
+        "description": "Deploys Admin and Customer portal web parts",
+        "id": "b8d5f3a2-1c4e-4f6b-9d2a-3e7c1b0f8a56",
+        "version": "1.0.0.0"
+      }
+    ]
+  },
+  "paths": {
+    "zippedPackage": "solution/pave-training-portal-spfx.sppkg"
+  }
+}

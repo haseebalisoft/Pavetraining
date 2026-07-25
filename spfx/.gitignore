@@ -1,0 +1,10 @@
+node_modules
+dist
+lib
+release
+temp
+*.sppkg
+.heft
+*.log
+.DS_Store
+Thumbs.db

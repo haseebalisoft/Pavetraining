@@ -36,6 +36,14 @@ yarn-error.log*
 # vercel
 .vercel
 
+# SPFx
+/spfx/node_modules
+/spfx/dist
+/spfx/lib
+/spfx/release
+/spfx/temp
+/spfx/sharepoint/solution/*.sppkg
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
