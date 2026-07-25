@@ -42,3 +42,4 @@ next-env.d.ts
 
 # local auth temp
 .device-code-tmp.json
+.vercel

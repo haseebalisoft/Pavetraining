@@ -20,6 +20,7 @@ function logsConfigured(): boolean {
 
 /**
  * Writes an audit entry to Training Manager Logs when configured.
+ * Maps to live SharePoint columns (User_x0020_Email, ListName, ItemsId, Notes…).
  * Failures are swallowed so logging never breaks the primary request.
  */
 export async function writeAuditLog(input: AuditLogInput): Promise<void> {
@@ -40,15 +41,22 @@ export async function writeAuditLog(input: AuditLogInput): Promise<void> {
       entry.itemId ? ` · ${entry.itemId}` : ""
     }`;
 
+    const notes = [
+      `Action: ${entry.action}`,
+      `Success: ${entry.success ? "Yes" : "No"}`,
+      entry.errorMessage ? `Error: ${entry.errorMessage}` : null,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
     const fields = toSharePointFields("trainingManagerLogs", {
       title,
       userEmail: entry.userEmail,
-      action: entry.action,
-      entityName: entry.entityName,
-      itemId: entry.itemId ?? null,
+      listName: entry.entityName,
+      itemsId: entry.itemId ?? null,
+      areaViewed: entry.entityName,
       timestamp: entry.timestamp,
-      success: entry.success,
-      errorMessage: entry.errorMessage ?? null,
+      notes,
     });
 
     await createListItemByKey("trainingManagerLogs", fields);

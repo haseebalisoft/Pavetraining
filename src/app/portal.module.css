@@ -2,9 +2,10 @@
   min-height: 100vh;
   padding: 2rem clamp(1.25rem, 4vw, 3rem) 3rem;
   background:
-    radial-gradient(circle at top right, rgba(15, 76, 129, 0.12), transparent 40%),
-    linear-gradient(165deg, #f5f8fb 0%, #e8eef4 100%);
-  color: #182433;
+    radial-gradient(circle at top right, rgba(141, 198, 63, 0.1), transparent 40%),
+    var(--pave-bg);
+  color: var(--pave-charcoal);
+  font-family: var(--pave-font-family);
 }
 
 .header {
@@ -17,26 +18,34 @@
 
 .brand {
   margin: 0 0 0.35rem;
-  font-family: var(--font-body);
-  font-size: 1.55rem;
-  font-weight: 700;
+  font-family: var(--pave-font-family);
+  font-size: var(--pave-font-size-title);
+  font-weight: var(--pave-font-weight-title);
+  line-height: var(--pave-line-height-title);
   letter-spacing: -0.02em;
-  color: #14324f;
+  color: var(--pave-charcoal);
 }
 
 .title {
   margin: 0;
-  font-size: 1.1rem;
-  font-weight: 600;
+  font-size: var(--pave-font-size-heading);
+  font-weight: var(--pave-font-weight-heading);
+  line-height: var(--pave-line-height-heading);
 }
 
 .ghostButton {
-  border: 1px solid rgba(20, 40, 60, 0.18);
-  background: transparent;
+  border: 1px solid var(--pave-border);
+  background: var(--pave-surface);
   padding: 0.55rem 0.9rem;
   cursor: pointer;
-  color: #243447;
+  color: var(--pave-charcoal);
   font-weight: 600;
+  border-radius: var(--radius-md);
+}
+
+.ghostButton:hover {
+  background: var(--pave-lime-tint);
+  border-color: var(--pave-lime);
 }
 
 .metaGrid {
@@ -48,16 +57,19 @@
 
 .label {
   margin: 0 0 0.25rem;
-  font-size: 0.78rem;
+  font-size: var(--pave-font-size-caption);
+  font-weight: var(--pave-font-weight-caption);
+  line-height: var(--pave-line-height-caption);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: #607487;
+  color: var(--pave-charcoal-muted);
 }
 
 .value {
   margin: 0;
-  font-size: 1rem;
+  font-size: var(--pave-font-size-body);
   font-weight: 600;
+  color: var(--pave-charcoal);
 }
 
 .cardGrid {
@@ -68,50 +80,60 @@
 
 .card {
   padding: 1.25rem;
-  border: 1px dashed rgba(20, 40, 60, 0.22);
-  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid var(--pave-border);
+  background: var(--pave-surface);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
 }
 
 .card h2 {
   margin: 0.35rem 0 0.5rem;
-  font-size: 1rem;
+  font-size: var(--pave-font-size-card-title);
+  font-weight: var(--pave-font-weight-card-title);
+  line-height: var(--pave-line-height-card-title);
+  color: var(--pave-charcoal);
 }
 
 .card p {
   margin: 0;
-  color: #4d5f70;
-  line-height: 1.45;
-  font-size: 0.92rem;
+  color: var(--pave-charcoal-muted);
+  font-size: var(--pave-font-size-body);
+  line-height: var(--pave-line-height-body);
 }
 
 .placeholderBadge {
   display: inline-block;
   margin: 0;
-  font-size: 0.72rem;
-  font-weight: 700;
+  font-size: var(--pave-font-size-caption);
+  font-weight: var(--pave-font-weight-caption);
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: #8a5a00;
+  color: #92400e;
 }
 
 .footerNote {
   margin-top: 2rem;
-  color: #607487;
+  color: var(--pave-charcoal-muted);
   font-size: 0.9rem;
 }
 
 .footerNote a {
-  color: #0f4c81;
+  color: var(--pave-lime-dark);
+}
+
+.footerNote a:hover {
+  color: var(--pave-lime);
 }
 
 .cardLink {
   display: inline-block;
   margin-top: 0.75rem;
-  color: #0f4c81;
+  color: var(--pave-lime-dark);
   font-weight: 650;
   text-decoration: none;
 }
 
 .cardLink:hover {
+  color: var(--pave-lime);
   text-decoration: underline;
 }

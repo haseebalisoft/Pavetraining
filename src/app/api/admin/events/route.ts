@@ -1,6 +1,7 @@
 import { withAdminApi } from "@/lib/api/adminApi";
 import {
   createAdminEvent,
+  getEventsSchemaWarnings,
   listAdminEvents,
 } from "@/lib/services/adminCrudService";
 
@@ -10,7 +11,13 @@ export async function GET(request: Request) {
   const companyName = new URL(request.url).searchParams.get("companyName");
   return withAdminApi(
     "GET /api/admin/events",
-    async () => ({ records: await listAdminEvents(companyName) }),
+    async () => {
+      const [records, warnings] = await Promise.all([
+        listAdminEvents(companyName),
+        getEventsSchemaWarnings(),
+      ]);
+      return { records, warnings };
+    },
     { errorMessage: "Failed to load events" },
     request,
   );

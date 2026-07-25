@@ -172,8 +172,15 @@ function mapDocument(
 function mapEvent(
   id: string,
   fields: SharePointFields,
+  companyName: string,
 ): CustomerEventRecord | null {
   if (!asBoolean(fields[eventFields.customerVisible])) {
+    return null;
+  }
+
+  // EventCompany only — never fall back to a legacy Company field.
+  const company = asLookupOrString(fields[eventFields.eventCompany]);
+  if (!matchesCompany(company, companyName)) {
     return null;
   }
 
@@ -190,7 +197,7 @@ function mapEvent(
     trainingAddress: asNullableString(fields[eventFields.trainingAddress]),
     location: asNullableString(fields[eventFields.location]),
     description: asNullableString(fields[eventFields.description]),
-    company: asLookupOrString(fields[eventFields.eventCompany]),
+    company,
   };
 }
 
@@ -215,7 +222,8 @@ function mapOffer(
   return {
     id,
     title,
-    description: asNullableString(fields[offerFields.description]),
+    category: asNullableString(fields[offerFields.category]),
+    description: asNullableString(fields[offerFields.shortDescription]),
     startDate: asNullableString(fields[offerFields.startDate]),
     endDate: asNullableString(fields[offerFields.endDate]),
     status: status ?? "Active",
@@ -318,7 +326,7 @@ export async function getCustomerEventRecords(
   });
 
   return items
-    .map((item) => mapEvent(item.id, item.fields))
+    .map((item) => mapEvent(item.id, item.fields, companyName))
     .filter((row): row is CustomerEventRecord => row !== null)
     .sort((a, b) => {
       const aTime = a.eventDate ? new Date(a.eventDate).getTime() : 0;
@@ -328,15 +336,11 @@ export async function getCustomerEventRecords(
 }
 
 export async function getCustomerOfferRecords(
-  companyId: string,
+  _companyId?: string,
 ): Promise<CustomerOfferRecord[]> {
-  const companyName = await resolveCompanyName(companyId);
+  // Offers / Promotions is site-wide (no Company column). Show visible + active only.
   const items = await getListItemsByKey("offersPromotions", {
-    filter: companyAndVisibleFilter(
-      "offersPromotions",
-      "company",
-      companyName,
-    ),
+    filter: `fields/${offerFields.customerVisible} eq true`,
     top: 5000,
   });
 

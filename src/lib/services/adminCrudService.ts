@@ -11,6 +11,7 @@ import {
   createListItemByKey,
   getListItemByKey,
   getListItemsByKey,
+  listHasColumn,
   toSharePointFields,
   updateListItemFieldsByKey,
   type SharePointFields,
@@ -1070,16 +1071,62 @@ export async function updateAdminDocument(
 
 const eventFields = getSharePointFields("events");
 
+export const EVENT_COMPANY_MISSING_WARNING =
+  "Events list needs EventCompany lookup to Company List.";
+
 export interface AdminEventRecord {
   id: string;
   title: string;
+  /** Display name from EventCompany lookup only (never legacy Company). */
   company: string | null;
+  companyId: string | null;
   customerVisible: boolean;
   trainingAddress: string | null;
   location: string | null;
   eventDate: string | null;
   endDate: string | null;
   description: string | null;
+  doNotSync: boolean;
+  syncStatus: string | null;
+  syncDirection: string | null;
+  lastSyncedAt: string | null;
+  lastSyncSource: string | null;
+  syncError: string | null;
+  outlookEventId: string | null;
+}
+
+function asDateTimeInput(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return null;
+  const text = String(value).trim();
+  if (!text) return null;
+
+  // datetime-local: 2026-07-25T10:00
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text)) {
+    const parsed = new Date(text);
+    return Number.isNaN(parsed.getTime()) ? text : parsed.toISOString();
+  }
+
+  // date-only: keep as date midnight UTC-ish for SharePoint
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    return `${text}T09:00:00.000Z`;
+  }
+
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? text : parsed.toISOString();
+}
+
+function resolveEventCompanyId(item: SharePointListItem): string | null {
+  return (
+    asString(item.fields[eventFields.eventCompanyLookupId]) ??
+    (typeof item.fields[eventFields.eventCompany] === "object"
+      ? asString(
+          (item.fields[eventFields.eventCompany] as { LookupId?: unknown })
+            .LookupId,
+        )
+      : null) ??
+    null
+  );
 }
 
 function mapEvent(item: SharePointListItem): AdminEventRecord | null {
@@ -1089,13 +1136,33 @@ function mapEvent(item: SharePointListItem): AdminEventRecord | null {
     id: item.id,
     title,
     company: asLookupOrString(item.fields[eventFields.eventCompany]),
+    companyId: resolveEventCompanyId(item),
     customerVisible: asBoolean(item.fields[eventFields.customerVisible]),
     trainingAddress: asNullableString(item.fields[eventFields.trainingAddress]),
     location: asNullableString(item.fields[eventFields.location]),
     eventDate: asNullableString(item.fields[eventFields.eventDate]),
     endDate: asNullableString(item.fields[eventFields.endDate]),
     description: asNullableString(item.fields[eventFields.description]),
+    doNotSync: asBoolean(item.fields[eventFields.doNotSync]),
+    syncStatus: asNullableString(item.fields[eventFields.syncStatus]),
+    syncDirection: asNullableString(item.fields[eventFields.syncDirection]),
+    lastSyncedAt: asNullableString(item.fields[eventFields.lastSyncedAt]),
+    lastSyncSource: asNullableString(item.fields[eventFields.lastSyncSource]),
+    syncError: asNullableString(item.fields[eventFields.syncError]),
+    outlookEventId: asNullableString(item.fields[eventFields.outlookEventId]),
   };
+}
+
+export async function getEventsSchemaWarnings(): Promise<string[]> {
+  try {
+    const hasEventCompany = await listHasColumn("events", "EventCompany");
+    if (hasEventCompany) {
+      return [];
+    }
+    return [EVENT_COMPANY_MISSING_WARNING];
+  } catch {
+    return [EVENT_COMPANY_MISSING_WARNING];
+  }
 }
 
 export async function listAdminEvents(companyName?: string | null) {
@@ -1105,24 +1172,72 @@ export async function listAdminEvents(companyName?: string | null) {
     .filter((row): row is AdminEventRecord => {
       if (!row) return false;
       return matchesCompany(row.company, companyName);
+    })
+    .sort((a, b) => {
+      const aTime = a.eventDate ? new Date(a.eventDate).getTime() : 0;
+      const bTime = b.eventDate ? new Date(b.eventDate).getTime() : 0;
+      return bTime - aTime;
     });
+}
+
+function buildEventCompanyPayload(input: Record<string, unknown>): {
+  fields: SharePointFields;
+  companyName: string | null;
+} {
+  const companyId =
+    optionalText(input.companyId) ?? optionalText(input.eventCompanyId);
+  const companyName =
+    optionalText(input.company) ??
+    optionalText(input.companyName) ??
+    optionalText(input.eventCompany);
+
+  const fields: SharePointFields = {};
+  if (companyId) {
+    fields[eventFields.eventCompanyLookupId] = Number.isNaN(Number(companyId))
+      ? companyId
+      : Number(companyId);
+  } else if (companyName) {
+    fields[eventFields.eventCompany] = companyName;
+  }
+
+  return { fields, companyName };
 }
 
 export async function createAdminEvent(input: Record<string, unknown>) {
   const title = requireText(input.title, "Event title");
-  const company = requireText(input.company, "Company");
-  const payload = toSharePointFields("events", {
-    title,
-    eventCompany: company,
-    customerVisible: optionalBool(input.customerVisible) ?? true,
-    trainingAddress: optionalText(input.trainingAddress),
-    location: optionalText(input.location),
-    eventDate: asDateInput(input.eventDate),
-    endDate: asDateInput(input.endDate),
-    description: optionalText(input.description),
-  });
+  const { fields: companyFields, companyName } =
+    buildEventCompanyPayload(input);
+  if (!companyFields[eventFields.eventCompanyLookupId] && !companyName) {
+    throw new ValidationError("Company is required.");
+  }
+
+  const doNotSync = optionalBool(input.doNotSync) ?? false;
+  const payload: SharePointFields = {
+    ...toSharePointFields("events", {
+      title,
+      customerVisible: optionalBool(input.customerVisible) ?? true,
+      trainingAddress: optionalText(input.trainingAddress),
+      location: optionalText(input.location),
+      eventDate: asDateTimeInput(input.eventDate),
+      endDate: asDateTimeInput(input.endDate),
+      description: optionalText(input.description),
+      doNotSync,
+      syncStatus: doNotSync ? "Skipped" : "Pending",
+      syncDirection: "SharePointToOutlook",
+      lastSyncSource: "SharePoint",
+      syncError: null,
+    }),
+    ...companyFields,
+  };
+
   const item = await createListItemByKey("events", payload);
-  const mapped = mapEvent(item);
+  const { syncEventSharePointToOutlook } = await import(
+    "@/lib/services/eventOutlookSyncService"
+  );
+  await syncEventSharePointToOutlook(item.id);
+
+  const refreshed = await getListItemByKey("events", item.id);
+  const mapped = mapEvent(refreshed ?? item);
   if (!mapped) throw new Error("Created event could not be mapped.");
   return mapped;
 }
@@ -1133,10 +1248,9 @@ export async function updateAdminEvent(
 ) {
   const existing = await getListItemByKey("events", id);
   if (!existing) throw new NotFoundError("Event not found.");
-  const payload = toSharePointFields("events", {
+
+  const payload: SharePointFields = toSharePointFields("events", {
     title: optionalText(input.title) ?? undefined,
-    eventCompany:
-      input.company === undefined ? undefined : optionalText(input.company),
     customerVisible: optionalBool(input.customerVisible),
     trainingAddress:
       input.trainingAddress === undefined
@@ -1147,16 +1261,62 @@ export async function updateAdminEvent(
     eventDate:
       input.eventDate === undefined
         ? undefined
-        : asDateInput(input.eventDate),
+        : asDateTimeInput(input.eventDate),
     endDate:
-      input.endDate === undefined ? undefined : asDateInput(input.endDate),
+      input.endDate === undefined ? undefined : asDateTimeInput(input.endDate),
     description:
       input.description === undefined
         ? undefined
         : optionalText(input.description),
+    doNotSync: optionalBool(input.doNotSync),
   });
+
+  const companyTouched =
+    input.companyId !== undefined ||
+    input.company !== undefined ||
+    input.companyName !== undefined ||
+    input.eventCompany !== undefined ||
+    input.eventCompanyId !== undefined;
+
+  if (companyTouched) {
+    const { fields: companyFields, companyName } =
+      buildEventCompanyPayload(input);
+    if (!companyFields[eventFields.eventCompanyLookupId] && !companyName) {
+      throw new ValidationError("Company is required.");
+    }
+    Object.assign(payload, companyFields);
+  }
+
+  // Portal edits are SharePoint-sourced; prepare one-way Outlook sync metadata.
+  if (optionalBool(input.doNotSync) === true) {
+    payload[eventFields.syncStatus] = "Skipped";
+    payload[eventFields.syncDirection] = "SharePointToOutlook";
+    payload[eventFields.lastSyncSource] = "SharePoint";
+  } else if (
+    input.doNotSync === false ||
+    input.title !== undefined ||
+    input.eventDate !== undefined ||
+    input.endDate !== undefined ||
+    input.location !== undefined ||
+    input.trainingAddress !== undefined ||
+    input.description !== undefined ||
+    companyTouched
+  ) {
+    payload[eventFields.syncStatus] = "Pending";
+    payload[eventFields.syncDirection] = "SharePointToOutlook";
+    payload[eventFields.lastSyncSource] = "SharePoint";
+    payload[eventFields.syncError] = null;
+  }
+
   const item = await updateListItemFieldsByKey("events", id, payload);
-  const mapped = mapEvent(item);
+
+  const { syncEventSharePointToOutlook } = await import(
+    "@/lib/services/eventOutlookSyncService"
+  );
+  await syncEventSharePointToOutlook(id);
+
+  const refreshed = await getListItemByKey("events", id);
+  const mapped = mapEvent(refreshed ?? item);
   if (!mapped) throw new Error("Updated event could not be mapped.");
   return mapped;
 }
@@ -1168,7 +1328,7 @@ const offerFields = getSharePointFields("offersPromotions");
 export interface AdminOfferRecord {
   id: string;
   title: string;
-  company: string | null;
+  category: string | null;
   customerVisible: boolean;
   startDate: string | null;
   endDate: string | null;
@@ -1182,35 +1342,34 @@ function mapOffer(item: SharePointListItem): AdminOfferRecord | null {
   return {
     id: item.id,
     title,
-    company: asLookupOrString(item.fields[offerFields.company]),
+    category: asNullableString(item.fields[offerFields.category]),
     customerVisible: asBoolean(item.fields[offerFields.customerVisible]),
     startDate: asNullableString(item.fields[offerFields.startDate]),
     endDate: asNullableString(item.fields[offerFields.endDate]),
-    description: asNullableString(item.fields[offerFields.description]),
+    description: asNullableString(item.fields[offerFields.shortDescription]),
     status: asNullableString(item.fields[offerFields.status]),
   };
 }
 
-export async function listAdminOffers(companyName?: string | null) {
+export async function listAdminOffers() {
   const items = await getListItemsByKey("offersPromotions", { top: 5000 });
   return items
     .map(mapOffer)
-    .filter((row): row is AdminOfferRecord => {
-      if (!row) return false;
-      return matchesCompany(row.company, companyName);
-    });
+    .filter((row): row is AdminOfferRecord => row !== null)
+    .sort((a, b) => a.title.localeCompare(b.title));
 }
 
 export async function createAdminOffer(input: Record<string, unknown>) {
   const title = requireText(input.title, "Offer title");
-  const company = requireText(input.company, "Company");
   const payload = toSharePointFields("offersPromotions", {
     title,
-    company,
+    category: optionalText(input.category),
     customerVisible: optionalBool(input.customerVisible) ?? true,
     startDate: asDateInput(input.startDate),
     endDate: asDateInput(input.endDate),
-    description: optionalText(input.description),
+    shortDescription:
+      optionalText(input.description) ??
+      optionalText(input.shortDescription),
     status: optionalText(input.status) ?? "Active",
   });
   const item = await createListItemByKey("offersPromotions", payload);
@@ -1227,8 +1386,8 @@ export async function updateAdminOffer(
   if (!existing) throw new NotFoundError("Offer not found.");
   const payload = toSharePointFields("offersPromotions", {
     title: optionalText(input.title) ?? undefined,
-    company:
-      input.company === undefined ? undefined : optionalText(input.company),
+    category:
+      input.category === undefined ? undefined : optionalText(input.category),
     customerVisible: optionalBool(input.customerVisible),
     startDate:
       input.startDate === undefined
@@ -1236,10 +1395,11 @@ export async function updateAdminOffer(
         : asDateInput(input.startDate),
     endDate:
       input.endDate === undefined ? undefined : asDateInput(input.endDate),
-    description:
-      input.description === undefined
+    shortDescription:
+      input.description === undefined && input.shortDescription === undefined
         ? undefined
-        : optionalText(input.description),
+        : (optionalText(input.description) ??
+          optionalText(input.shortDescription)),
     status: optionalText(input.status) ?? undefined,
   });
   const item = await updateListItemFieldsByKey(

@@ -1,5 +1,6 @@
 import { AdminEventsClient } from "@/components/admin/pages/AdminEventsClient";
 import {
+  getEventsSchemaWarnings,
   listAdminCompanies,
   listAdminEvents,
 } from "@/lib/services/adminCrudService";
@@ -7,9 +8,16 @@ import {
 export const dynamic = "force-dynamic";
 
 export default async function AdminEventsPage() {
-  const [companies, records] = await Promise.all([
+  const [companies, records, warnings] = await Promise.all([
     listAdminCompanies(),
     listAdminEvents(),
+    getEventsSchemaWarnings(),
   ]);
-  return <AdminEventsClient companies={companies} initialRows={records} />;
+  return (
+    <AdminEventsClient
+      companies={companies}
+      initialRows={records}
+      warnings={warnings}
+    />
+  );
 }

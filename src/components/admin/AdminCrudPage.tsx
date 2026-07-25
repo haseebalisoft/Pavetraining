@@ -17,6 +17,7 @@ export type AdminFieldType =
   | "text"
   | "email"
   | "date"
+  | "datetime"
   | "textarea"
   | "select"
   | "boolean"
@@ -27,6 +28,7 @@ export interface AdminFieldConfig {
   label: string;
   type: AdminFieldType;
   required?: boolean;
+  readOnly?: boolean;
   options?: Array<{ value: string; label: string }>;
   placeholder?: string;
   /** Optional section heading shown above this field group in the drawer. */
@@ -61,6 +63,8 @@ interface AdminCrudPageProps<T extends { id: string }> {
   drawerWide?: boolean;
   editLabel?: string;
   toolbarExtra?: ReactNode;
+  /** Schema / data-quality warnings shown above the toolbar. */
+  warnings?: string[];
   extraActions?: (
     row: T,
     helpers: { reload: () => Promise<void> },
@@ -75,6 +79,14 @@ function toFormValue(value: unknown, type: AdminFieldType): string | boolean {
   if (value === null || value === undefined) return "";
   if (type === "date") {
     return String(value).slice(0, 10);
+  }
+  if (type === "datetime") {
+    const date = new Date(String(value));
+    if (Number.isNaN(date.getTime())) {
+      return String(value).slice(0, 16);
+    }
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
   }
   return String(value);
 }
@@ -129,6 +141,7 @@ export function AdminCrudPage<T extends { id: string }>({
   drawerWide = false,
   editLabel = "Edit",
   toolbarExtra,
+  warnings = [],
   extraActions,
   breadcrumbs,
 }: AdminCrudPageProps<T>) {
@@ -338,6 +351,14 @@ export function AdminCrudPage<T extends { id: string }>({
         ) : null}
       </header>
 
+      {warnings.length > 0 ? (
+        <div className={styles.schemaWarnings} role="alert">
+          {warnings.map((warning) => (
+            <p key={warning}>{warning}</p>
+          ))}
+        </div>
+      ) : null}
+
       <div className={styles.crudToolbar}>
         <label className={styles.field}>
           <span className={styles.fieldLabel}>Search</span>
@@ -454,6 +475,7 @@ export function AdminCrudPage<T extends { id: string }>({
                   <input
                     type="checkbox"
                     checked={Boolean(form[field.name])}
+                    disabled={field.readOnly}
                     onChange={(event) =>
                       setForm((current) => ({
                         ...current,
@@ -473,6 +495,8 @@ export function AdminCrudPage<T extends { id: string }>({
                     rows={4}
                     value={String(form[field.name] ?? "")}
                     placeholder={field.placeholder}
+                    readOnly={field.readOnly}
+                    disabled={field.readOnly}
                     onChange={(event) =>
                       setForm((current) => ({
                         ...current,
@@ -500,6 +524,7 @@ export function AdminCrudPage<T extends { id: string }>({
                   <select
                     className={styles.select}
                     value={String(form[field.name] ?? "")}
+                    disabled={field.readOnly}
                     onChange={(event) =>
                       setForm((current) => ({
                         ...current,
@@ -525,12 +550,16 @@ export function AdminCrudPage<T extends { id: string }>({
                     type={
                       field.type === "date"
                         ? "date"
-                        : field.type === "email"
-                          ? "email"
-                          : "text"
+                        : field.type === "datetime"
+                          ? "datetime-local"
+                          : field.type === "email"
+                            ? "email"
+                            : "text"
                     }
                     value={String(form[field.name] ?? "")}
                     placeholder={field.placeholder}
+                    readOnly={field.readOnly}
+                    disabled={field.readOnly}
                     onChange={(event) =>
                       setForm((current) => ({
                         ...current,

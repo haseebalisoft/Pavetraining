@@ -1,29 +1,71 @@
 :root {
-  /* PAVE brand tokens */
-  --brand-green: #8cc63f;
-  --brand-green-strong: #7ab536;
-  --brand-charcoal: #4a4a4a;
-  --brand-navy: #102a3a;
-  --brand-navy-deep: #0c1f2b;
-  --background: #f6f9fb;
-  --surface: #ffffff;
-  --border: #dde5ea;
-  --text: #172331;
-  --text-muted: #64748b;
-  --success: #8cc63f;
+  /* ── PAVE Training brand tokens ───────────────────────── */
+  --pave-charcoal: #4a4a4a;
+  --pave-charcoal-light: #6b6b6b;
+  --pave-charcoal-muted: #8a8a8a;
+  --pave-charcoal-deep: #3a3a3a;
+
+  --pave-lime: #8dc63f;
+  --pave-lime-hover: #7ab536;
+  --pave-lime-tint: #f1f8e7;
+  --pave-lime-dark: #5c8228;
+
+  --pave-bg: #f7f7f7;
+  --pave-surface: #ffffff;
+  --pave-border: #e2e2e2;
+  --pave-border-strong: #c8c8c8;
+
+  --pave-font-family: var(--font-manrope), "Segoe UI", system-ui, sans-serif;
+
+  /* Type scale */
+  --pave-font-size-title: clamp(1.4rem, 2.2vw, 1.85rem);
+  --pave-font-weight-title: 700;
+  --pave-line-height-title: 1.25;
+
+  --pave-font-size-heading: 1.15rem;
+  --pave-font-weight-heading: 700;
+  --pave-line-height-heading: 1.3;
+
+  --pave-font-size-card-title: 1rem;
+  --pave-font-weight-card-title: 700;
+  --pave-line-height-card-title: 1.35;
+
+  --pave-font-size-body: 0.94rem;
+  --pave-font-weight-body: 400;
+  --pave-line-height-body: 1.5;
+
+  --pave-font-size-caption: 0.75rem;
+  --pave-font-weight-caption: 700;
+  --pave-line-height-caption: 1.4;
+
+  /* ── Legacy aliases → pave tokens (admin + shared UI) ─── */
+  --brand-green: var(--pave-lime);
+  --brand-green-strong: var(--pave-lime-hover);
+  --brand-charcoal: var(--pave-charcoal);
+  --brand-navy: var(--pave-charcoal);
+  --brand-navy-deep: var(--pave-charcoal-deep);
+
+  --background: var(--pave-bg);
+  --surface: var(--pave-surface);
+  --border: var(--pave-border);
+  --text: var(--pave-charcoal);
+  --text-muted: var(--pave-charcoal-muted);
+
+  /* Semantic (kept separate from brand palette) */
+  --success: var(--pave-lime);
   --warning: #f59e0b;
   --danger: #dc2626;
-  --info: #2563eb;
+  --info: var(--pave-charcoal-light);
 
   --radius-sm: 0.5rem;
   --radius-md: 0.75rem;
   --radius-lg: 1rem;
-  --shadow-sm: 0 1px 2px rgba(16, 42, 58, 0.06);
-  --shadow-md: 0 8px 24px rgba(16, 42, 58, 0.08);
-  --shadow-lg: 0 18px 40px rgba(16, 42, 58, 0.12);
+  --shadow-sm: 0 1px 2px rgba(74, 74, 74, 0.06);
+  --shadow-md: 0 8px 24px rgba(74, 74, 74, 0.08);
+  --shadow-lg: 0 18px 40px rgba(74, 74, 74, 0.12);
 
-  --font-display: var(--font-manrope), "Segoe UI", system-ui, sans-serif;
-  --font-body: var(--font-manrope), "Segoe UI", system-ui, sans-serif;
+  --font-display: var(--pave-font-family);
+  --font-body: var(--pave-font-family);
 
   --foreground: var(--text);
 }
@@ -39,6 +81,8 @@ body {
   color: var(--text);
   background: var(--background);
   font-family: var(--font-body);
+  font-size: var(--pave-font-size-body);
+  line-height: var(--pave-line-height-body);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -59,6 +103,6 @@ textarea {
 }
 
 :focus-visible {
-  outline: 2px solid var(--brand-green);
+  outline: 2px solid var(--pave-lime);
   outline-offset: 2px;
 }

@@ -334,6 +334,43 @@ export async function updateListItemFieldsByKey(
   return refreshed;
 }
 
+/**
+ * Returns internal column names for a SharePoint list (Graph columns API).
+ * Used for schema health checks (e.g. EventCompany present on Events).
+ */
+export async function getListColumnNames(
+  listKey: SharePointListKey,
+): Promise<string[]> {
+  const siteRoot = getSharePointSiteApiRoot();
+  const listId = getSharePointListId(listKey);
+
+  return cachedSharePointRead(
+    ["sp-list-columns", listKey, listId],
+    [sharePointListTag(listKey)],
+    async () => {
+      const client = getGraphClient();
+      const response = (await client
+        .api(`${siteRoot}/lists/${listId}/columns`)
+        .top(200)
+        .get()) as { value?: Array<{ name?: string }> };
+
+      return (response.value ?? [])
+        .map((column) => column.name?.trim())
+        .filter((name): name is string => Boolean(name));
+    },
+    300,
+  );
+}
+
+export async function listHasColumn(
+  listKey: SharePointListKey,
+  columnName: string,
+): Promise<boolean> {
+  const columns = await getListColumnNames(listKey);
+  const target = columnName.trim().toLowerCase();
+  return columns.some((name) => name.toLowerCase() === target);
+}
+
 /** Maps schema field keys to SharePoint internal names for write payloads. */
 export function toSharePointFields(
   listKey: SharePointListKey,

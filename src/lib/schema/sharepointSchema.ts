@@ -202,7 +202,10 @@ const customerDocumentsFields = {
 const eventsFields = {
   id: "ID",
   title: "Title",
+  /** Lookup to Company List — do not use a legacy `Company` field. */
   eventCompany: "EventCompany",
+  /** Graph companion for EventCompany lookup writes. */
+  eventCompanyLookupId: "EventCompanyLookupId",
   customerVisible: "Customer_x0020_Visible",
   trainingAddress: "TrainingAddress",
   eventDate: "EventDate",
@@ -210,18 +213,25 @@ const eventsFields = {
   description: "Description",
   location: "Location",
   outlookEventId: "OutlookEventId",
+  outlookCalendarId: "OutlookCalendarId",
+  outlookICalUid: "OutlookICalUid",
   syncStatus: "SyncStatus",
+  syncDirection: "SyncDirection",
   lastSyncedAt: "LastSyncedAt",
+  lastSyncSource: "LastSyncSource",
+  syncError: "SyncError",
+  doNotSync: "DoNotSync",
 } as const;
 
 const offersPromotionsFields = {
   id: "ID",
   title: "Title",
-  company: "Company",
+  category: "Category",
   customerVisible: "CustomerVisible",
   startDate: "StartDate",
   endDate: "EndDate",
-  description: "Description",
+  /** Live SharePoint field is ShortDescription (not Description). */
+  shortDescription: "ShortDescription",
   status: "Status",
 } as const;
 
@@ -255,13 +265,15 @@ const trainingCourseCategoriesFields = {
 const trainingManagerLogsFields = {
   id: "ID",
   title: "Title",
-  userEmail: "UserEmail",
-  action: "Action",
-  entityName: "EntityName",
-  itemId: "ItemId",
+  /** Encoded internal name on live list. */
+  userEmail: "User_x0020_Email",
+  listName: "ListName",
+  itemsId: "ItemsId",
+  areaViewed: "Area_x0020_Viewed",
   timestamp: "Timestamp",
-  success: "Success",
-  errorMessage: "ErrorMessage",
+  notes: "Notes",
+  company: "Company",
+  role: "Role",
 } as const;
 
 export const SHAREPOINT_LISTS = {
@@ -499,16 +511,23 @@ export const SHAREPOINT_LISTS = {
     labels: {
       id: "ID",
       title: "Title",
-      eventCompany: "Event company",
+      eventCompany: "Company",
+      eventCompanyLookupId: "Company lookup ID",
       customerVisible: "Customer visible",
       trainingAddress: "Training address",
-      eventDate: "Event date",
-      endDate: "End date",
+      eventDate: "Start date / time",
+      endDate: "End date / time",
       description: "Description",
       location: "Location",
       outlookEventId: "Outlook event ID",
+      outlookCalendarId: "Outlook calendar ID",
+      outlookICalUid: "Outlook iCal UID",
       syncStatus: "Sync status",
+      syncDirection: "Sync direction",
       lastSyncedAt: "Last synced at",
+      lastSyncSource: "Last sync source",
+      syncError: "Sync error",
+      doNotSync: "Do not sync",
     },
   } satisfies SharePointListDefinition<typeof eventsFields>,
 
@@ -521,11 +540,11 @@ export const SHAREPOINT_LISTS = {
     labels: {
       id: "ID",
       title: "Title",
-      company: "Company",
+      category: "Category",
       customerVisible: "Customer visible",
       startDate: "Start date",
       endDate: "End date",
-      description: "Description",
+      shortDescription: "Short description",
       status: "Status",
     },
   } satisfies SharePointListDefinition<typeof offersPromotionsFields>,
@@ -580,12 +599,13 @@ export const SHAREPOINT_LISTS = {
       id: "ID",
       title: "Title",
       userEmail: "User email",
-      action: "Action",
-      entityName: "Entity / list name",
-      itemId: "Item ID",
+      listName: "List name",
+      itemsId: "Items ID",
+      areaViewed: "Area viewed",
       timestamp: "Timestamp",
-      success: "Success",
-      errorMessage: "Error message",
+      notes: "Notes",
+      company: "Company",
+      role: "Role",
     },
   } satisfies SharePointListDefinition<typeof trainingManagerLogsFields>,
 } as const;

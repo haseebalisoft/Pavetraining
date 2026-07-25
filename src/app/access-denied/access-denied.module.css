@@ -4,15 +4,16 @@
   place-items: center;
   padding: 1.5rem;
   background:
-    radial-gradient(circle at top left, rgba(140, 198, 63, 0.16), transparent 42%),
-    linear-gradient(165deg, #f6f9fb 0%, #eef3f6 100%);
+    radial-gradient(circle at top left, rgba(141, 198, 63, 0.14), transparent 42%),
+    var(--pave-bg);
+  font-family: var(--pave-font-family);
 }
 
 .panel {
   width: min(100%, 32rem);
   padding: 2.25rem 2rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: var(--pave-surface);
+  border: 1px solid var(--pave-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   text-align: center;
@@ -26,16 +27,18 @@
 
 .title {
   margin: 0 0 0.75rem;
-  font-size: 1.4rem;
-  font-weight: 750;
+  font-size: var(--pave-font-size-heading);
+  font-weight: var(--pave-font-weight-heading);
+  line-height: var(--pave-line-height-heading);
   letter-spacing: -0.02em;
-  color: var(--text);
+  color: var(--pave-charcoal);
 }
 
 .copy {
   margin: 0 0 1.5rem;
-  color: var(--text-muted);
-  line-height: 1.55;
+  color: var(--pave-charcoal-muted);
+  font-size: var(--pave-font-size-body);
+  line-height: var(--pave-line-height-body);
 }
 
 .actions {
@@ -63,21 +66,22 @@
 
 .primary {
   border: 0;
-  background: var(--brand-navy);
+  background: var(--pave-charcoal);
   color: #fff;
 }
 
 .primary:hover {
-  background: var(--brand-navy-deep);
+  background: var(--pave-charcoal-deep);
+  box-shadow: inset 0 0 0 2px var(--pave-lime);
 }
 
 .secondary {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  color: var(--text);
+  background: var(--pave-surface);
+  border: 1px solid var(--pave-border);
+  color: var(--pave-charcoal);
 }
 
 .secondary:hover {
-  border-color: #c5d0d8;
-  background: #f8fbfc;
+  border-color: var(--pave-lime);
+  background: var(--pave-lime-tint);
 }

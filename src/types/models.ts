@@ -167,6 +167,7 @@ export interface TrainingEvent {
   id: string;
   title: string;
   eventCompany: string | null;
+  eventCompanyId: string | null;
   customerVisible: boolean;
   trainingAddress: string | null;
   eventDate: string | null;
@@ -174,14 +175,20 @@ export interface TrainingEvent {
   description: string | null;
   location: string | null;
   outlookEventId: string | null;
+  outlookCalendarId: string | null;
+  outlookICalUid: string | null;
   syncStatus: string | null;
+  syncDirection: string | null;
   lastSyncedAt: string | null;
+  lastSyncSource: string | null;
+  syncError: string | null;
+  doNotSync: boolean;
 }
 
 export interface OfferPromotion {
   id: string;
   title: string;
-  company: string | null;
+  category: string | null;
   customerVisible: boolean;
   startDate: string | null;
   endDate: string | null;
@@ -394,6 +401,7 @@ export interface CustomerEventRecord {
 export interface CustomerOfferRecord {
   id: string;
   title: string;
+  category: string | null;
   description: string | null;
   startDate: string | null;
   endDate: string | null;

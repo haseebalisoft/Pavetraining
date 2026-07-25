@@ -27,6 +27,15 @@ interface AdminSidebarProps {
   signOutAction: () => Promise<void>;
 }
 
+function accountInitials(email: string): string {
+  const local = email.split("@")[0]?.trim() || email.trim();
+  const parts = local.split(/[.\-_+\s]+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return `${parts[0]![0] ?? ""}${parts[1]![0] ?? ""}`.toUpperCase();
+  }
+  return local.slice(0, 2).toUpperCase() || "?";
+}
+
 export function AdminSidebar({ email, signOutAction }: AdminSidebarProps) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
@@ -41,8 +50,8 @@ export function AdminSidebar({ email, signOutAction }: AdminSidebarProps) {
         <div className={styles.brandBlock}>
           <div className={styles.brandLogoPanel}>
             <BrandLogo variant="compact" priority />
+            <p className={styles.brandTagline}>Paving the way in industry</p>
           </div>
-          <p className={styles.brandMeta}>Admin operations</p>
         </div>
         <button
           type="button"
@@ -54,6 +63,8 @@ export function AdminSidebar({ email, signOutAction }: AdminSidebarProps) {
           {open ? "Close" : "Menu"}
         </button>
       </div>
+
+      <p className={styles.navSectionLabel}>Admin operations</p>
 
       <nav
         id="admin-nav"
@@ -79,7 +90,14 @@ export function AdminSidebar({ email, signOutAction }: AdminSidebarProps) {
       </nav>
 
       <div className={styles.sidebarFooter}>
-        <p className={styles.sidebarEmail}>{email}</p>
+        <div className={styles.accountRow}>
+          <span className={styles.accountAvatar} aria-hidden="true">
+            {accountInitials(email)}
+          </span>
+          <p className={styles.sidebarEmail} title={email}>
+            {email}
+          </p>
+        </div>
         <form action={signOutAction}>
           <button className={styles.signOutButton} type="submit">
             Sign out

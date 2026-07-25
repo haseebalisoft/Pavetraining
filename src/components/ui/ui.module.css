@@ -5,21 +5,22 @@
   min-height: 1.5rem;
   padding: 0.18rem 0.6rem;
   border-radius: 999px;
-  font-size: 0.72rem;
-  font-weight: 750;
+  font-size: var(--pave-font-size-caption);
+  font-weight: var(--pave-font-weight-caption);
+  line-height: var(--pave-line-height-caption);
   letter-spacing: 0.03em;
   text-transform: uppercase;
   white-space: nowrap;
 }
 
 .badgeNeutral {
-  color: #475569;
-  background: rgba(100, 116, 139, 0.14);
+  color: var(--pave-charcoal-light);
+  background: rgba(74, 74, 74, 0.1);
 }
 
 .badgeOk {
-  color: #3f6d14;
-  background: rgba(140, 198, 63, 0.18);
+  color: var(--pave-lime-dark);
+  background: rgba(141, 198, 63, 0.18);
 }
 
 .badgeWarn {
@@ -33,13 +34,13 @@
 }
 
 .badgeInfo {
-  color: #1d4ed8;
-  background: rgba(37, 99, 235, 0.12);
+  color: var(--pave-charcoal);
+  background: rgba(74, 74, 74, 0.1);
 }
 
 .badgeMissing {
-  color: #64748b;
-  background: rgba(148, 163, 184, 0.2);
+  color: var(--pave-charcoal-muted);
+  background: rgba(138, 138, 138, 0.2);
 }
 
 .breadcrumbs {
@@ -49,27 +50,27 @@
   gap: 0.15rem;
   margin: 0 0 0.65rem;
   font-size: 0.82rem;
-  color: var(--text-muted);
+  color: var(--pave-charcoal-muted);
 }
 
 .crumb a {
-  color: var(--brand-navy);
+  color: var(--pave-charcoal);
   text-decoration: none;
   font-weight: 700;
 }
 
 .crumb a:hover {
-  color: var(--brand-green-strong);
+  color: var(--pave-lime-dark);
   text-decoration: underline;
 }
 
 .crumbSep {
   margin: 0 0.3rem;
-  color: #9aa7b4;
+  color: var(--pave-charcoal-muted);
 }
 
 .crumbCurrent {
-  color: var(--text);
+  color: var(--pave-charcoal);
   font-weight: 700;
 }
 
@@ -78,26 +79,28 @@
 .comingNext {
   padding: 2.85rem 1.5rem;
   text-align: center;
-  border: 1px dashed var(--border);
+  border: 1px dashed var(--pave-border);
   border-radius: var(--radius-lg);
-  background: var(--surface);
+  background: var(--pave-surface);
   box-shadow: var(--shadow-sm);
 }
 
 .emptyState h2,
 .comingNext h1 {
   margin: 0 0 0.45rem;
-  font-size: 1.25rem;
-  font-weight: 750;
-  color: var(--text);
+  font-size: var(--pave-font-size-heading);
+  font-weight: var(--pave-font-weight-heading);
+  line-height: var(--pave-line-height-heading);
+  color: var(--pave-charcoal);
 }
 
 .emptyState p,
 .loadingState p,
 .comingNext p {
   margin: 0;
-  color: var(--text-muted);
-  line-height: 1.5;
+  color: var(--pave-charcoal-muted);
+  font-size: var(--pave-font-size-body);
+  line-height: var(--pave-line-height-body);
   max-width: 34rem;
   margin-inline: auto;
 }
@@ -111,8 +114,8 @@
 .spinner {
   width: 1.55rem;
   height: 1.55rem;
-  border: 2px solid rgba(140, 198, 63, 0.2);
-  border-top-color: var(--brand-green);
+  border: 2px solid rgba(141, 198, 63, 0.2);
+  border-top-color: var(--pave-lime);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
 }
@@ -122,8 +125,9 @@
   margin: 0 0 0.65rem !important;
   padding: 0.2rem 0.55rem;
   border-radius: 999px;
-  font-size: 0.72rem;
-  font-weight: 750;
+  font-size: var(--pave-font-size-caption);
+  font-weight: var(--pave-font-weight-caption);
+  line-height: var(--pave-line-height-caption);
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: #92400e;

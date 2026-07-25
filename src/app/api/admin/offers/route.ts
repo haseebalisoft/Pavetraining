@@ -7,10 +7,9 @@ import {
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  const companyName = new URL(request.url).searchParams.get("companyName");
   return withAdminApi(
     "GET /api/admin/offers",
-    async () => ({ records: await listAdminOffers(companyName) }),
+    async () => ({ records: await listAdminOffers() }),
     { errorMessage: "Failed to load offers" },
     request,
   );
