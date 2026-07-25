@@ -1,0 +1,309 @@
+.shell {
+  min-height: 100vh;
+  padding: 2rem clamp(1.25rem, 4vw, 3rem) 3rem;
+  background:
+    radial-gradient(ellipse 80% 50% at 100% 0%, rgba(15, 76, 129, 0.14), transparent 55%),
+    radial-gradient(ellipse 60% 40% at 0% 100%, rgba(30, 90, 140, 0.08), transparent 50%),
+    linear-gradient(165deg, #f5f8fb 0%, #e8eef4 100%);
+  color: #182433;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  margin-bottom: 1.75rem;
+}
+
+.brand {
+  margin: 0 0 0.3rem;
+  font-family: var(--font-body);
+  font-size: 1.55rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #14324f;
+}
+
+.eyebrow {
+  margin: 0 0 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #5a7085;
+}
+
+.title {
+  margin: 0;
+  font-size: clamp(1.35rem, 2.2vw, 1.75rem);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: #122636;
+}
+
+.subtitle {
+  margin: 0.45rem 0 0;
+  max-width: 38rem;
+  color: #4d5f70;
+  line-height: 1.5;
+  font-size: 0.98rem;
+}
+
+.navRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
+}
+
+.ghostLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(20, 40, 60, 0.16);
+  background: rgba(255, 255, 255, 0.55);
+  padding: 0.55rem 0.95rem;
+  color: #243447;
+  font-weight: 600;
+  font-size: 0.9rem;
+  text-decoration: none;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease;
+}
+
+.ghostLink:hover {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(15, 76, 129, 0.35);
+}
+
+.companyMeta {
+  margin: 0 0 1.35rem;
+  font-size: 0.9rem;
+  color: #5a7085;
+}
+
+.companyMeta strong {
+  color: #1a334a;
+  font-weight: 650;
+}
+
+.tabs {
+  display: inline-flex;
+  gap: 0.35rem;
+  padding: 0.3rem;
+  margin-bottom: 1.1rem;
+  background: rgba(255, 255, 255, 0.65);
+  border: 1px solid rgba(20, 50, 80, 0.1);
+}
+
+.tab {
+  border: 0;
+  background: transparent;
+  padding: 0.55rem 1rem;
+  font: inherit;
+  font-weight: 650;
+  font-size: 0.9rem;
+  color: #526576;
+  cursor: pointer;
+}
+
+.tabActive {
+  background: #14324f;
+  color: #fff;
+}
+
+.toolbar {
+  display: grid;
+  grid-template-columns: minmax(14rem, 1fr);
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.fieldLabel {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #607487;
+}
+
+.input {
+  width: 100%;
+  border: 1px solid rgba(20, 40, 60, 0.16);
+  background: rgba(255, 255, 255, 0.85);
+  padding: 0.65rem 0.8rem;
+  color: #182433;
+  font: inherit;
+  font-size: 0.94rem;
+}
+
+.input:focus {
+  outline: 2px solid rgba(15, 76, 129, 0.28);
+  outline-offset: 1px;
+  border-color: rgba(15, 76, 129, 0.45);
+}
+
+.resultCount {
+  margin: 0 0 0.75rem;
+  font-size: 0.86rem;
+  color: #5a7085;
+}
+
+.tableWrap {
+  overflow: auto;
+  border: 1px solid rgba(20, 50, 80, 0.1);
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 12px 30px rgba(20, 50, 80, 0.05);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 52rem;
+}
+
+.table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  text-align: left;
+  padding: 0.75rem 0.9rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #4d6275;
+  background: linear-gradient(180deg, #f3f7fb, #ebf1f7);
+  border-bottom: 1px solid rgba(20, 50, 80, 0.12);
+  white-space: nowrap;
+}
+
+.table td {
+  padding: 0.78rem 0.9rem;
+  border-bottom: 1px solid rgba(20, 50, 80, 0.07);
+  font-size: 0.92rem;
+  vertical-align: middle;
+  color: #243447;
+}
+
+.table tbody tr:hover {
+  background: rgba(15, 76, 129, 0.04);
+}
+
+.completedRow {
+  background: rgba(30, 132, 73, 0.1);
+}
+
+.completedRow:hover {
+  background: rgba(30, 132, 73, 0.16);
+}
+
+.muted {
+  color: #7a8b9b;
+}
+
+.actionLink {
+  color: #0f4c81;
+  font-weight: 650;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.actionLink:hover {
+  text-decoration: underline;
+}
+
+.actionDisabled {
+  color: #9aa7b4;
+  font-size: 0.88rem;
+}
+
+.empty {
+  padding: 2.75rem 1.5rem;
+  text-align: center;
+  border: 1px dashed rgba(20, 50, 80, 0.18);
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.empty h2 {
+  margin: 0 0 0.4rem;
+  font-family: var(--font-body);
+  font-size: 1.2rem;
+  color: #14324f;
+}
+
+.empty p {
+  margin: 0;
+  color: #5a7085;
+  line-height: 1.5;
+}
+
+.cardGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  gap: 1rem;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 1.25rem 1.2rem;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.92), rgba(248, 251, 253, 0.82));
+  border: 1px solid rgba(20, 50, 80, 0.1);
+  box-shadow: 0 10px 28px rgba(20, 50, 80, 0.05);
+}
+
+.card h2 {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #14324f;
+}
+
+.cardMeta {
+  margin: 0;
+  font-size: 0.86rem;
+  color: #5a7085;
+  line-height: 1.45;
+}
+
+.cardBody {
+  margin: 0;
+  color: #425668;
+  line-height: 1.5;
+  font-size: 0.94rem;
+  flex: 1;
+}
+
+.statusPill {
+  display: inline-flex;
+  align-self: flex-start;
+  padding: 0.18rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #14633a;
+  background: rgba(28, 140, 80, 0.12);
+}
+
+.notice {
+  margin: 0 0 1rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid rgba(15, 76, 129, 0.18);
+  background: rgba(15, 76, 129, 0.06);
+  color: #29485f;
+  font-size: 0.9rem;
+}

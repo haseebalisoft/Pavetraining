@@ -1,0 +1,18 @@
+.logo {
+  display: block;
+  height: auto;
+  object-fit: contain;
+}
+
+.full {
+  width: min(100%, 13.75rem);
+}
+
+.compact {
+  width: min(100%, 8.75rem);
+}
+
+.mark {
+  width: 2.5rem;
+  height: 2.5rem;
+}

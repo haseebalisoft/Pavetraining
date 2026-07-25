@@ -1,0 +1,351 @@
+import "server-only";
+
+import { getSharePointFields } from "@/lib/schema/sharepointSchema";
+import { getCompanyById } from "@/lib/services/companyService";
+import {
+  asBoolean,
+  asLookupOrString,
+  asNullableString,
+  asString,
+  buildSchemaFieldEqualsFilter,
+  getListItemByKey,
+  getListItemFileContent,
+  getListItemsByKey,
+  type SharePointFields,
+} from "@/lib/services/sharePointListService";
+import type {
+  CustomerDocumentRecord,
+  CustomerEventRecord,
+  CustomerNvqRecord,
+  CustomerNvqStatus,
+  CustomerOfferRecord,
+} from "@/types/models";
+
+const nvqFields = getSharePointFields("nvqRegister");
+const documentFields = getSharePointFields("customerDocuments");
+const eventFields = getSharePointFields("events");
+const offerFields = getSharePointFields("offersPromotions");
+
+async function resolveCompanyName(companyId: string): Promise<string> {
+  const company = await getCompanyById(companyId);
+  if (!company?.companyName) {
+    throw new Error(`Unable to resolve company name for id ${companyId}.`);
+  }
+  return company.companyName;
+}
+
+function companyAndVisibleFilter(
+  listKey: "nvqRegister" | "customerDocuments" | "events" | "offersPromotions",
+  companyFieldKey: string,
+  companyName: string,
+): string {
+  const companyFilter = buildSchemaFieldEqualsFilter(
+    listKey,
+    companyFieldKey,
+    companyName,
+  );
+  const fields = getSharePointFields(listKey) as Record<string, string>;
+  const visibleField = fields.customerVisible;
+  return `${companyFilter} and fields/${visibleField} eq true`;
+}
+
+/** Customer document list filter: company + visible + files only (FSObjType = 0). */
+function customerDocumentsFilter(companyName: string): string {
+  const base = companyAndVisibleFilter(
+    "customerDocuments",
+    "company",
+    companyName,
+  );
+  return `${base} and fields/${documentFields.fsObjType} eq 0`;
+}
+
+function matchesCompany(
+  value: string | null | undefined,
+  companyName: string,
+): boolean {
+  return (value ?? "").trim().toLowerCase() === companyName.trim().toLowerCase();
+}
+
+/** SharePoint FSObjType: 0 = file, 1 = folder. */
+function isSharePointFile(fields: SharePointFields): boolean {
+  const fs = fields[documentFields.fsObjType];
+  if (fs === 1 || fs === "1") {
+    return false;
+  }
+  if (fs === 0 || fs === "0") {
+    return true;
+  }
+  // Fallback when FSObjType is missing: treat leaf refs with an extension as files.
+  const leaf = asString(fields[documentFields.fileLeafRef]);
+  if (!leaf) {
+    return false;
+  }
+  return leaf.includes(".");
+}
+
+function isActiveOfferStatus(status: string | null): boolean {
+  if (!status?.trim()) {
+    return true;
+  }
+  const normalized = status.trim().toLowerCase();
+  return (
+    normalized === "active" ||
+    normalized === "open" ||
+    normalized === "live" ||
+    normalized === "published"
+  );
+}
+
+function nvqStatus(completedDate: string | null): CustomerNvqStatus {
+  return completedDate?.trim() ? "Completed" : "Active";
+}
+
+function mapNvq(id: string, fields: SharePointFields): CustomerNvqRecord | null {
+  if (!asBoolean(fields[nvqFields.customerVisible])) {
+    return null;
+  }
+
+  const candidateName = asString(fields[nvqFields.candidateName]);
+  if (!candidateName) {
+    return null;
+  }
+
+  const completedDate = asNullableString(fields[nvqFields.completedDate]);
+
+  return {
+    id,
+    candidateName,
+    nvqTitle: asNullableString(fields[nvqFields.nvqTitle]),
+    boltOn: asNullableString(fields[nvqFields.boltonNvq]),
+    dateRegistered: asNullableString(fields[nvqFields.dateRegistered]),
+    inductionDate: asNullableString(fields[nvqFields.dateInductionBooked]),
+    stageOfNvq: asNullableString(fields[nvqFields.stageOfNvq]),
+    notes: asNullableString(fields[nvqFields.customerUpdateNotes]),
+    completedDate,
+    status: nvqStatus(completedDate),
+  };
+}
+
+function mapDocument(
+  id: string,
+  fields: SharePointFields,
+  uploadedDate: string | null,
+  canDownload: boolean,
+): CustomerDocumentRecord | null {
+  if (!isSharePointFile(fields)) {
+    return null;
+  }
+
+  if (!asBoolean(fields[documentFields.customerVisible])) {
+    return null;
+  }
+
+  const name =
+    asString(fields[documentFields.title]) ??
+    asString(fields[documentFields.fileLeafRef]);
+  if (!name) {
+    return null;
+  }
+
+  const hasFile = Boolean(
+    asString(fields[documentFields.fileRef]) ||
+      asString(fields[documentFields.fileLeafRef]),
+  );
+  if (!hasFile) {
+    return null;
+  }
+
+  return {
+    id,
+    name,
+    documentType: asNullableString(fields[documentFields.documentType]),
+    candidate: asLookupOrString(fields[documentFields.candidate]),
+    uploadedDate,
+    canDownload: canDownload,
+    viewPath: `/api/customer/documents/${id}/view`,
+    downloadPath: canDownload
+      ? `/api/customer/documents/${id}/download`
+      : null,
+  };
+}
+
+function mapEvent(
+  id: string,
+  fields: SharePointFields,
+): CustomerEventRecord | null {
+  if (!asBoolean(fields[eventFields.customerVisible])) {
+    return null;
+  }
+
+  const title = asString(fields[eventFields.title]);
+  if (!title) {
+    return null;
+  }
+
+  return {
+    id,
+    title,
+    eventDate: asNullableString(fields[eventFields.eventDate]),
+    endDate: asNullableString(fields[eventFields.endDate]),
+    trainingAddress: asNullableString(fields[eventFields.trainingAddress]),
+    location: asNullableString(fields[eventFields.location]),
+    description: asNullableString(fields[eventFields.description]),
+    company: asLookupOrString(fields[eventFields.eventCompany]),
+  };
+}
+
+function mapOffer(
+  id: string,
+  fields: SharePointFields,
+): CustomerOfferRecord | null {
+  if (!asBoolean(fields[offerFields.customerVisible])) {
+    return null;
+  }
+
+  const status = asNullableString(fields[offerFields.status]);
+  if (!isActiveOfferStatus(status)) {
+    return null;
+  }
+
+  const title = asString(fields[offerFields.title]);
+  if (!title) {
+    return null;
+  }
+
+  return {
+    id,
+    title,
+    description: asNullableString(fields[offerFields.description]),
+    startDate: asNullableString(fields[offerFields.startDate]),
+    endDate: asNullableString(fields[offerFields.endDate]),
+    status: status ?? "Active",
+  };
+}
+
+export async function getCustomerNvqRecords(
+  companyId: string,
+): Promise<CustomerNvqRecord[]> {
+  const companyName = await resolveCompanyName(companyId);
+  const items = await getListItemsByKey("nvqRegister", {
+    filter: companyAndVisibleFilter("nvqRegister", "companyName", companyName),
+    top: 5000,
+  });
+
+  return items
+    .map((item) => mapNvq(item.id, item.fields))
+    .filter((row): row is CustomerNvqRecord => row !== null);
+}
+
+export async function getCustomerDocumentRecords(
+  companyId: string,
+  canDownload: boolean,
+): Promise<CustomerDocumentRecord[]> {
+  const companyName = await resolveCompanyName(companyId);
+  const items = await getListItemsByKey("customerDocuments", {
+    filter: customerDocumentsFilter(companyName),
+    top: 5000,
+  });
+
+  return items
+    .map((item) => {
+      const company = asLookupOrString(item.fields[documentFields.company]);
+      if (!matchesCompany(company, companyName)) {
+        return null;
+      }
+
+      const modified =
+        item.lastModifiedDateTime ??
+        asNullableString(item.fields[documentFields.modified]) ??
+        item.createdDateTime ??
+        asNullableString(item.fields.Created) ??
+        asNullableString(item.fields.CreatedDateTime);
+
+      return mapDocument(item.id, item.fields, modified, canDownload);
+    })
+    .filter((row): row is CustomerDocumentRecord => row !== null);
+}
+
+export async function getCustomerDocumentForAccess(
+  companyId: string,
+  documentId: string,
+): Promise<{
+  id: string;
+  name: string;
+  companyMatches: boolean;
+  customerVisible: boolean;
+  isFile: boolean;
+} | null> {
+  const companyName = await resolveCompanyName(companyId);
+  const item = await getListItemByKey("customerDocuments", documentId);
+  if (!item) {
+    return null;
+  }
+
+  const company = asLookupOrString(item.fields[documentFields.company]);
+  const name =
+    asString(item.fields[documentFields.title]) ??
+    asString(item.fields[documentFields.fileLeafRef]) ??
+    "document";
+
+  return {
+    id: item.id,
+    name,
+    companyMatches: matchesCompany(company, companyName),
+    customerVisible: asBoolean(item.fields[documentFields.customerVisible]),
+    isFile: isSharePointFile(item.fields),
+  };
+}
+
+/** @deprecated Prefer getCustomerDocumentForAccess — kept for call-site clarity. */
+export async function getCustomerDocumentForDownload(
+  companyId: string,
+  documentId: string,
+) {
+  return getCustomerDocumentForAccess(companyId, documentId);
+}
+
+export async function downloadCustomerDocumentFile(documentId: string) {
+  return getListItemFileContent("customerDocuments", documentId);
+}
+
+export async function getCustomerEventRecords(
+  companyId: string,
+): Promise<CustomerEventRecord[]> {
+  const companyName = await resolveCompanyName(companyId);
+  const items = await getListItemsByKey("events", {
+    filter: companyAndVisibleFilter("events", "eventCompany", companyName),
+    top: 5000,
+  });
+
+  return items
+    .map((item) => mapEvent(item.id, item.fields))
+    .filter((row): row is CustomerEventRecord => row !== null)
+    .sort((a, b) => {
+      const aTime = a.eventDate ? new Date(a.eventDate).getTime() : 0;
+      const bTime = b.eventDate ? new Date(b.eventDate).getTime() : 0;
+      return aTime - bTime;
+    });
+}
+
+export async function getCustomerOfferRecords(
+  companyId: string,
+): Promise<CustomerOfferRecord[]> {
+  const companyName = await resolveCompanyName(companyId);
+  const items = await getListItemsByKey("offersPromotions", {
+    filter: companyAndVisibleFilter(
+      "offersPromotions",
+      "company",
+      companyName,
+    ),
+    top: 5000,
+  });
+
+  return items
+    .map((item) => mapOffer(item.id, item.fields))
+    .filter((row): row is CustomerOfferRecord => row !== null)
+    .sort((a, b) => {
+      const aTime = a.startDate ? new Date(a.startDate).getTime() : 0;
+      const bTime = b.startDate ? new Date(b.startDate).getTime() : 0;
+      return bTime - aTime;
+    });
+}

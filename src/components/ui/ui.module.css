@@ -1,0 +1,137 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.5rem;
+  padding: 0.18rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.badgeNeutral {
+  color: #475569;
+  background: rgba(100, 116, 139, 0.14);
+}
+
+.badgeOk {
+  color: #3f6d14;
+  background: rgba(140, 198, 63, 0.18);
+}
+
+.badgeWarn {
+  color: #92400e;
+  background: rgba(245, 158, 11, 0.16);
+}
+
+.badgeDanger {
+  color: #991b1b;
+  background: rgba(220, 38, 38, 0.12);
+}
+
+.badgeInfo {
+  color: #1d4ed8;
+  background: rgba(37, 99, 235, 0.12);
+}
+
+.badgeMissing {
+  color: #64748b;
+  background: rgba(148, 163, 184, 0.2);
+}
+
+.breadcrumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.15rem;
+  margin: 0 0 0.65rem;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.crumb a {
+  color: var(--brand-navy);
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.crumb a:hover {
+  color: var(--brand-green-strong);
+  text-decoration: underline;
+}
+
+.crumbSep {
+  margin: 0 0.3rem;
+  color: #9aa7b4;
+}
+
+.crumbCurrent {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.emptyState,
+.loadingState,
+.comingNext {
+  padding: 2.85rem 1.5rem;
+  text-align: center;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.emptyState h2,
+.comingNext h1 {
+  margin: 0 0 0.45rem;
+  font-size: 1.25rem;
+  font-weight: 750;
+  color: var(--text);
+}
+
+.emptyState p,
+.loadingState p,
+.comingNext p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.5;
+  max-width: 34rem;
+  margin-inline: auto;
+}
+
+.loadingState {
+  display: grid;
+  justify-items: center;
+  gap: 0.75rem;
+}
+
+.spinner {
+  width: 1.55rem;
+  height: 1.55rem;
+  border: 2px solid rgba(140, 198, 63, 0.2);
+  border-top-color: var(--brand-green);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+.comingBadge {
+  display: inline-block;
+  margin: 0 0 0.65rem !important;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #92400e;
+  background: rgba(245, 158, 11, 0.16);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
