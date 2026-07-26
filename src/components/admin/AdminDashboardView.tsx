@@ -2,6 +2,8 @@ import Link from "next/link";
 
 import { AdminCompanySelector } from "@/components/admin/AdminCompanySelector";
 import { Breadcrumbs } from "@/components/ui/Breadcrumbs";
+import { StatusBadge } from "@/components/ui/StatusBadge";
+import { formatDisplayDate } from "@/lib/training/expiryFilters";
 import type {
   AdminDashboardPayload,
   Company,
@@ -12,33 +14,33 @@ import styles from "./admin.module.css";
 const QUICK_ACTIONS = [
   {
     href: "/admin/companies?action=add",
-    title: "Add company",
+    title: "Add Company",
     description: "Create a new company record in SharePoint.",
   },
   {
     href: "/admin/workforce?action=add",
-    title: "Add candidate",
+    title: "Add Candidate",
     description: "Register a workforce candidate.",
   },
   {
-    href: "/admin/documents?action=add",
-    title: "Upload document",
-    description: "Add a customer-visible document.",
+    href: "/admin/documents",
+    title: "Upload Document",
+    description: "Open documents to manage uploads and visibility.",
   },
   {
     href: "/admin/events?action=add",
-    title: "Create event",
-    description: "Schedule a training event.",
+    title: "Create Booking",
+    description: "Schedule a training event / booking.",
+  },
+  {
+    href: "/admin/offers",
+    title: "Manage offers",
+    description: "Offers and promotions for customers.",
   },
   {
     href: "/admin/permissions",
     title: "Manage permissions",
     description: "Control portal access and download rights.",
-  },
-  {
-    href: "/admin/training-matrix?filter=review",
-    title: "Review training matrix",
-    description: "Open Records to Review.",
   },
 ] as const;
 
@@ -53,57 +55,46 @@ export function AdminDashboardView({
   companies,
   dashboard,
 }: AdminDashboardViewProps) {
-  const { stats, warnings, selectedCompanyId, selectedCompanyName } = dashboard;
+  const {
+    stats,
+    warnings,
+    selectedCompanyId,
+    selectedCompanyName,
+    upcomingExpiries,
+    recentDocuments,
+    upcomingBookings,
+    recentActivity,
+  } = dashboard;
 
   const cards: Array<{
     label: string;
     value: number;
     tone?: "warn" | "ok";
   }> = [
-    { label: "Total companies", value: stats.totalCompanies },
     { label: "Active companies", value: stats.activeCompanies, tone: "ok" },
-    { label: "Total candidates", value: stats.totalCandidates },
-    { label: "Expired training", value: stats.expiredTraining, tone: "warn" },
+    { label: "Active candidates", value: stats.activeCandidates, tone: "ok" },
     {
       label: "Expiring within 3 months",
       value: stats.expiringWithin3Months,
       tone: "warn",
     },
     {
-      label: "Records to Review",
-      value: stats.recordsToReview,
+      label: "Expiring within 6 months",
+      value: stats.expiringWithin6Months,
       tone: "warn",
     },
-    { label: "Active NVQs", value: stats.activeNvqs },
-    { label: "Completed NVQs", value: stats.completedNvqs, tone: "ok" },
+    { label: "Upcoming bookings", value: stats.upcomingEvents },
     {
-      label: "Documents pending visibility",
-      value: stats.documentsPendingVisibility,
-      tone: "warn",
+      label: "Documents uploaded recently",
+      value: stats.documentsUploadedRecently,
     },
-    { label: "Upcoming events", value: stats.upcomingEvents },
+    { label: "NVQs in progress", value: stats.activeNvqs },
+    {
+      label: "Access invitations pending",
+      value: stats.accessInvitationsPending,
+      tone: stats.accessInvitationsPending > 0 ? "warn" : undefined,
+    },
   ];
-
-  const attention = [
-    {
-      href: "/admin/training-matrix?filter=expired",
-      title: "Expired training",
-      value: stats.expiredTraining,
-      detail: "Matrix rows past next expiry",
-    },
-    {
-      href: "/admin/training-matrix?filter=expiring",
-      title: "Expiring within 3 months",
-      value: stats.expiringWithin3Months,
-      detail: "Renewals due in the next 90 days",
-    },
-    {
-      href: "/admin/training-matrix?filter=review",
-      title: "Records to Review",
-      value: stats.recordsToReview,
-      detail: "Matrix rows flagged for attention",
-    },
-  ].filter((item) => item.value > 0);
 
   return (
     <div>
@@ -135,19 +126,6 @@ export function AdminDashboardView({
         </p>
       ) : null}
 
-      {attention.length > 0 ? (
-        <section className={styles.attentionGrid} aria-label="Expiry warnings">
-          {attention.map((item) => (
-            <Link key={item.href} href={item.href} className={styles.attentionCard}>
-              <strong>
-                {item.title} · {item.value}
-              </strong>
-              <span>{item.detail}</span>
-            </Link>
-          ))}
-        </section>
-      ) : null}
-
       <section className={styles.statsGrid} aria-label="Dashboard statistics">
         {cards.map((card) => (
           <article
@@ -165,6 +143,118 @@ export function AdminDashboardView({
           </article>
         ))}
       </section>
+
+      <div className={styles.sectionGrid}>
+        <section className={styles.panel} aria-label="Upcoming training expiries">
+          <div className={styles.panelHeaderRow}>
+            <h2 className={styles.panelTitle}>Upcoming training expiries</h2>
+            <Link className={styles.panelLink} href="/admin/training-matrix">
+              Open matrix
+            </Link>
+          </div>
+          {upcomingExpiries.length === 0 ? (
+            <p className={styles.emptyNote}>No urgent or upcoming expiries.</p>
+          ) : (
+            <ul className={styles.dashList}>
+              {upcomingExpiries.map((row) => (
+                <li key={row.id} className={styles.dashListItem}>
+                  <div>
+                    <strong>{row.candidateName}</strong>
+                    <span className={styles.dashMeta}>
+                      {row.companyName ?? "—"} ·{" "}
+                      {formatDisplayDate(row.nextExpiryDate)}
+                    </span>
+                  </div>
+                  <StatusBadge label={row.statusLabel} tone={row.statusTone} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <section className={styles.panel} aria-label="Recent document uploads">
+          <div className={styles.panelHeaderRow}>
+            <h2 className={styles.panelTitle}>Recent document uploads</h2>
+            <Link className={styles.panelLink} href="/admin/documents">
+              Open documents
+            </Link>
+          </div>
+          {recentDocuments.length === 0 ? (
+            <p className={styles.emptyNote}>No recent documents found.</p>
+          ) : (
+            <ul className={styles.dashList}>
+              {recentDocuments.map((row) => (
+                <li key={row.id} className={styles.dashListItem}>
+                  <div>
+                    <strong>{row.name}</strong>
+                    <span className={styles.dashMeta}>
+                      {row.company ?? "—"}
+                      {row.candidate ? ` · ${row.candidate}` : ""} ·{" "}
+                      {formatDisplayDate(row.modifiedDate)}
+                    </span>
+                  </div>
+                  <StatusBadge
+                    label={row.customerVisible ? "Visible" : "Hidden"}
+                    tone={row.customerVisible ? "ok" : "warn"}
+                  />
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <section className={styles.panel} aria-label="Upcoming company events">
+          <div className={styles.panelHeaderRow}>
+            <h2 className={styles.panelTitle}>Upcoming company events</h2>
+            <Link className={styles.panelLink} href="/admin/events">
+              Open bookings
+            </Link>
+          </div>
+          {upcomingBookings.length === 0 ? (
+            <p className={styles.emptyNote}>No upcoming bookings.</p>
+          ) : (
+            <ul className={styles.dashList}>
+              {upcomingBookings.map((row) => (
+                <li key={row.id} className={styles.dashListItem}>
+                  <div>
+                    <strong>{row.title}</strong>
+                    <span className={styles.dashMeta}>
+                      {row.company ?? "—"} · {formatDisplayDate(row.eventDate)}
+                      {row.location ? ` · ${row.location}` : ""}
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <section className={styles.panel} aria-label="Recent portal activity">
+          <div className={styles.panelHeaderRow}>
+            <h2 className={styles.panelTitle}>Recent portal activity</h2>
+            <Link className={styles.panelLink} href="/admin/logs">
+              Open audit log
+            </Link>
+          </div>
+          {recentActivity.length === 0 ? (
+            <p className={styles.emptyNote}>No activity feed yet.</p>
+          ) : (
+            <ul className={styles.dashList}>
+              {recentActivity.map((row) => (
+                <li key={row.id} className={styles.dashListItem}>
+                  <div>
+                    <strong>{row.title}</strong>
+                    <span className={styles.dashMeta}>
+                      {row.userEmail ?? "System"} ·{" "}
+                      {formatDisplayDate(row.timestamp)}
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
 
       <div className={styles.sectionGrid}>
         <section className={styles.panel} aria-label="Quick actions">

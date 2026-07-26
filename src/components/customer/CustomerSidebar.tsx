@@ -8,8 +8,8 @@ import { BrandLogo } from "@/components/brand/BrandLogo";
 import styles from "./customer.module.css";
 
 const NAV_ITEMS = [
-  { href: "/customer/training-matrix", label: "Training Matrix" },
-  { href: "/customer", label: "Dashboard", exact: true },
+  { href: "/customer", label: "Training Matrix", exact: true },
+  { href: "/customer/dashboard", label: "Dashboard" },
   { href: "/customer/candidates", label: "Candidates / Workforce" },
   { href: "/customer/training-records", label: "Training Records" },
   { href: "/customer/nvq-progress", label: "NVQ Progress" },
@@ -42,6 +42,15 @@ export function CustomerSidebar({
   useEffect(() => {
     setOpen(false);
   }, [pathname]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open]);
 
   return (
     <aside className={`${styles.sidebar} ${open ? styles.sidebarOpen : ""}`}>

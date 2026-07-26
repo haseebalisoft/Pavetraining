@@ -81,6 +81,9 @@ export interface WorkforceCandidate {
   eusrNumber: string | null;
   nporsNumbers: string | null;
   inHouseCertificationNumber: string | null;
+  cscsExpiry: string | null;
+  swqrExpiry: string | null;
+  eusrExpiry: string | null;
 }
 
 export interface TrainingMatrixRow {
@@ -299,17 +302,55 @@ export interface AdminContext {
   accessScope: AccessScope;
 }
 
+export interface AdminDashboardExpiryRow {
+  id: string;
+  candidateName: string;
+  companyName: string | null;
+  nextExpiryDate: string | null;
+  statusLabel: string;
+  statusTone: "danger" | "warn" | "ok" | "missing";
+}
+
+export interface AdminDashboardDocumentRow {
+  id: string;
+  name: string;
+  company: string | null;
+  candidate: string | null;
+  modifiedDate: string | null;
+  customerVisible: boolean;
+}
+
+export interface AdminDashboardEventRow {
+  id: string;
+  title: string;
+  company: string | null;
+  eventDate: string | null;
+  location: string | null;
+}
+
+export interface AdminDashboardActivityRow {
+  id: string;
+  title: string;
+  userEmail: string | null;
+  timestamp: string | null;
+  detail: string | null;
+}
+
 export interface AdminDashboardStats {
   totalCompanies: number;
   activeCompanies: number;
   totalCandidates: number;
+  activeCandidates: number;
   expiredTraining: number;
   expiringWithin3Months: number;
+  expiringWithin6Months: number;
   recordsToReview: number;
   activeNvqs: number;
   completedNvqs: number;
   documentsPendingVisibility: number;
+  documentsUploadedRecently: number;
   upcomingEvents: number;
+  accessInvitationsPending: number;
 }
 
 export type AdminWarningIssue =
@@ -330,6 +371,10 @@ export interface AdminDashboardPayload {
   selectedCompanyName: string | null;
   stats: AdminDashboardStats;
   warnings: AdminDataWarning[];
+  upcomingExpiries: AdminDashboardExpiryRow[];
+  recentDocuments: AdminDashboardDocumentRow[];
+  upcomingBookings: AdminDashboardEventRow[];
+  recentActivity: AdminDashboardActivityRow[];
 }
 
 export interface DashboardStats {
@@ -337,6 +382,8 @@ export interface DashboardStats {
   trainingMatrixCount: number;
   needsReviewCount: number;
   expiringSoonCount: number;
+  /** Matrix rows with next expiry in 91–270 days (Upcoming). */
+  upcomingExpiryCount: number;
   expiredCount: number;
   documentsCount: number;
   upcomingEventsCount: number;
@@ -351,11 +398,24 @@ export interface DashboardStats {
 /** Customer-visible training matrix summary (no admin notes). */
 export interface CustomerMatrixRecord {
   id: string;
+  /** Workforce list item id when resolved; used for profile links. */
+  candidateId: string | null;
   candidateName: string;
+  dateOfBirth: string | null;
   department: string | null;
+  trainingManager: string | null;
+  supervisor: string | null;
   overallStatus: string | null;
   needsReview: boolean;
   nextExpiryDate: string | null;
+  /** Active NPORS category codes / labels for the candidate. */
+  nporsCategories: string | null;
+  /** Earliest NPORS-related expiry (matrix N* columns and/or register). */
+  nporsExpiry: string | null;
+  cscsExpiry: string | null;
+  swqrExpiry: string | null;
+  eusrExpiry: string | null;
+  inHouseExpiry: string | null;
   n001Expiry: string | null;
   n003Expiry: string | null;
   n004Expiry: string | null;

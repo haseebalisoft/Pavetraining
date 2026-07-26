@@ -5,6 +5,7 @@ import {
   type AdminColumn,
   type AdminFieldConfig,
 } from "@/components/admin/AdminCrudPage";
+import { ExpiryDateBadge } from "@/components/ui/ExpiryDateBadge";
 import type { AdminTrainingRecord } from "@/lib/services/adminCrudService";
 import type { Company } from "@/types/models";
 
@@ -115,7 +116,11 @@ function columnsFor(kind: RegisterKind): AdminColumn<AdminTrainingRecord>[] {
       header: "Customer visible",
       render: (row) => (row.customerVisible ? "Yes" : "No"),
     },
-    { key: "expiry", header: "Expiry", render: (row) => row.expiry ?? "—" },
+    {
+      key: "expiry",
+      header: "Expiry",
+      render: (row) => <ExpiryDateBadge date={row.expiry} />,
+    },
   );
   return base;
 }

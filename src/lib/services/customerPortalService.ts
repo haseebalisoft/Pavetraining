@@ -21,6 +21,7 @@ import {
   getListItemsByKey,
   type SharePointFields,
 } from "@/lib/services/sharePointListService";
+import { stripSharePointHtml } from "@/lib/text/stripSharePointHtml";
 import type {
   CustomerContext,
   CustomerDocumentRecord,
@@ -184,15 +185,34 @@ function mapDocument(
 function mapEvent(
   id: string,
   fields: SharePointFields,
+  companyId: string,
   companyName: string,
 ): CustomerEventRecord | null {
-  if (!asBoolean(fields[eventFields.customerVisible])) {
+  const visible =
+    asBoolean(fields[eventFields.customerVisible]) ||
+    asBoolean(fields.CustomerVisible);
+  if (!visible) {
     return null;
   }
 
-  // EventCompany only — never fall back to a legacy Company field.
-  const company = asLookupOrString(fields[eventFields.eventCompany]);
-  if (!matchesCompany(company, companyName)) {
+  const eventCompanyId =
+    asString(fields[eventFields.eventCompanyLookupId]) ??
+    asString(fields.EventCompanyId) ??
+    (typeof fields[eventFields.eventCompany] === "object"
+      ? asString(
+          (fields[eventFields.eventCompany] as { LookupId?: unknown }).LookupId,
+        )
+      : null);
+
+  // Prefer lookup ID match — Graph often has no LookupValue text.
+  const idMatches =
+    Boolean(eventCompanyId) &&
+    String(eventCompanyId).trim() === String(companyId).trim();
+  const nameMatches = matchesCompany(
+    asLookupOrString(fields[eventFields.eventCompany]),
+    companyName,
+  );
+  if (!idMatches && !nameMatches) {
     return null;
   }
 
@@ -206,10 +226,14 @@ function mapEvent(
     title,
     eventDate: asNullableString(fields[eventFields.eventDate]),
     endDate: asNullableString(fields[eventFields.endDate]),
-    trainingAddress: asNullableString(fields[eventFields.trainingAddress]),
+    trainingAddress: stripSharePointHtml(
+      asNullableString(fields[eventFields.trainingAddress]),
+    ),
     location: asNullableString(fields[eventFields.location]),
-    description: asNullableString(fields[eventFields.description]),
-    company,
+    description: stripSharePointHtml(
+      asNullableString(fields[eventFields.description]),
+    ),
+    company: companyName,
   };
 }
 
@@ -423,13 +447,24 @@ export async function getCustomerEventRecords(
   companyId: string,
 ): Promise<CustomerEventRecord[]> {
   const companyName = await resolveCompanyName(companyId);
-  const items = await getListItemsByKey("events", {
-    filter: companyAndVisibleFilter("events", "eventCompany", companyName),
-    top: 5000,
-  });
+  const id = Number(companyId);
+
+  // IMPORTANT: Do not AND Customer_x0020_Visible into the Graph OData filter.
+  // Live tenant returns 0 rows for that combined filter even when both fields match
+  // (EventCompanyLookupId eq 27 works alone; Visible filter is unreliable with the encoded name).
+  // Filter company via lookup ID when possible, then enforce visibility in mapEvent.
+  let items;
+  if (Number.isFinite(id)) {
+    items = await getListItemsByKey("events", {
+      filter: `fields/${eventFields.eventCompanyLookupId} eq ${id}`,
+      top: 5000,
+    }).catch(async () => getListItemsByKey("events", { top: 5000 }));
+  } else {
+    items = await getListItemsByKey("events", { top: 5000 });
+  }
 
   return items
-    .map((item) => mapEvent(item.id, item.fields, companyName))
+    .map((item) => mapEvent(item.id, item.fields, companyId, companyName))
     .filter((row): row is CustomerEventRecord => row !== null)
     .sort((a, b) => {
       const aTime = a.eventDate ? new Date(a.eventDate).getTime() : 0;

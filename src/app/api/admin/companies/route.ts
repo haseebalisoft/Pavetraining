@@ -21,7 +21,13 @@ export async function POST(request: Request) {
     async (_context, req) => {
       const body = (await req.json()) as Record<string, unknown>;
       const company = await createAdminCompany(body);
-      return { company };
+      return {
+        company,
+        warning:
+          "folderWarning" in company
+            ? (company as { folderWarning?: string }).folderWarning
+            : undefined,
+      };
     },
     { errorMessage: "Failed to create company" },
     request,

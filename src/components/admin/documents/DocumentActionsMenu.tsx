@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 
-import type { AdminDocumentRecord } from "@/lib/services/adminCrudService";
+import type { AdminDocumentRecord } from "@/types/adminDocuments";
 
 import styles from "./documentsBrowse.module.css";
 

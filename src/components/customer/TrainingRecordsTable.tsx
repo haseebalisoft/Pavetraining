@@ -4,13 +4,12 @@ import Link from "next/link";
 import { useMemo, useState, type ReactNode } from "react";
 
 import { CustomerPageHeader } from "@/components/customer/CustomerPageHeader";
+import { ExpiryDateBadge } from "@/components/ui/ExpiryDateBadge";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import {
   formatDisplayDate,
-  getExpiryTone,
   matchesExpiryFilter,
   type ExpiryFilter,
-  type ExpiryTone,
 } from "@/lib/training/expiryFilters";
 import type { CustomerOutcome } from "@/types/models";
 
@@ -39,28 +38,15 @@ interface TrainingRecordsTableProps<T extends { id: string }> {
 
 const EXPIRY_OPTIONS: { value: ExpiryFilter; label: string }[] = [
   { value: "all", label: "All expiries" },
+  { value: "within-3m", label: "Expiring within 3 months" },
+  { value: "within-6m", label: "Expiring within 6 months" },
+  { value: "within-9m", label: "Expiring within 9 months" },
   { value: "expired", label: "Expired" },
-  { value: "expiring-3m", label: "Expiring in 3 months" },
-  { value: "expiring-6m", label: "Expiring in 6 months" },
-  { value: "expiring-9m", label: "Expiring in 9 months" },
-  { value: "missing", label: "Missing expiry" },
+  { value: "urgent", label: "Urgent (0–90 days)" },
+  { value: "upcoming", label: "Upcoming (91–270 days)" },
+  { value: "valid", label: "Valid (271+ days)" },
+  { value: "missing", label: "Records to Review" },
 ];
-
-function toneClass(tone: ExpiryTone): string {
-  switch (tone) {
-    case "missing":
-      return styles.toneMissing;
-    case "expired":
-    case "critical":
-      return styles.toneExpired;
-    case "warning":
-      return styles.toneWarning;
-    case "ok":
-      return styles.toneOk;
-    default:
-      return styles.toneMissing;
-  }
-}
 
 function displayCell(value: string | null | undefined): ReactNode {
   if (!value?.trim()) {
@@ -70,13 +56,7 @@ function displayCell(value: string | null | undefined): ReactNode {
 }
 
 export function formatExpiryCell(expiry: string | null): ReactNode {
-  const tone = getExpiryTone(expiry);
-  return (
-    <span className={styles.expiry}>
-      <span className={`${styles.expiryDot} ${toneClass(tone)}`} aria-hidden />
-      {formatDisplayDate(expiry)}
-    </span>
-  );
+  return <ExpiryDateBadge date={expiry} />;
 }
 
 export function formatOutcomeCell(outcome: CustomerOutcome | null): ReactNode {

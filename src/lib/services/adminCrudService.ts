@@ -21,8 +21,20 @@ import {
   normalizePermissionRoleType,
   toSharePointRoleType,
 } from "@/lib/services/permissionService";
-import { mapCompanyFields } from "@/lib/services/companyService";
+import { mapCompanyFields, getCompanyById } from "@/lib/services/companyService";
+import { stripSharePointHtml } from "@/lib/text/stripSharePointHtml";
 import type { Company, RoleType } from "@/types/models";
+import type {
+  AdminDocumentRecord,
+  DocumentMetadataStatus,
+} from "@/types/adminDocuments";
+
+export type {
+  AdminDocumentRecord,
+  DocumentMetadataStatus,
+  CustomerDocumentType,
+} from "@/types/adminDocuments";
+export { CUSTOMER_DOCUMENT_TYPES } from "@/types/adminDocuments";
 
 export { mapCompanyFields as mapAdminCompany } from "@/lib/services/companyService";
 
@@ -163,7 +175,19 @@ export async function createAdminCompany(input: Record<string, unknown>) {
   const item = await createListItemByKey("company", payload);
   const mapped = mapCompanyFields(item.id, item.fields);
   if (!mapped) throw new Error("Created company could not be mapped.");
-  return mapped;
+
+  const { ensureCompanyDocumentFolders } = await import(
+    "@/lib/services/customerDocumentsFolderService"
+  );
+  const folderResult = await ensureCompanyDocumentFolders({
+    companyName: mapped.companyName,
+    companyNumber: mapped.companyNumber,
+  });
+
+  return {
+    ...mapped,
+    folderWarning: folderResult.ok ? undefined : folderResult.warning,
+  };
 }
 
 export async function updateAdminCompany(
@@ -238,10 +262,11 @@ export async function listAdminWorkforce(companyName?: string | null) {
 export async function createAdminWorkforce(input: Record<string, unknown>) {
   const candidateName = requireText(input.candidateName, "Candidate name");
   const companyName = requireText(input.companyName, "Company");
+  const workforceNumber = optionalText(input.workforceNumber);
   const payload = toSharePointFields("workforce", {
     candidateName,
     companyName,
-    workforceNumber: optionalText(input.workforceNumber),
+    workforceNumber,
     dateOfBirth: asDateInput(input.dateOfBirth),
     department: optionalText(input.department),
     status: optionalText(input.status) ?? "Active",
@@ -251,7 +276,27 @@ export async function createAdminWorkforce(input: Record<string, unknown>) {
   const item = await createListItemByKey("workforce", payload);
   const mapped = mapWorkforce(item);
   if (!mapped) throw new Error("Created candidate could not be mapped.");
-  return mapped;
+
+  const companies = await listAdminCompanies();
+  const company = companies.find(
+    (row) =>
+      row.companyName.trim().toLowerCase() === companyName.trim().toLowerCase(),
+  );
+
+  const { ensureCandidateDocumentFolders } = await import(
+    "@/lib/services/customerDocumentsFolderService"
+  );
+  const folderResult = await ensureCandidateDocumentFolders({
+    companyName,
+    companyNumber: company?.companyNumber ?? null,
+    candidateName,
+    workforceNumber,
+  });
+
+  return {
+    ...mapped,
+    folderWarning: folderResult.ok ? undefined : folderResult.warning,
+  };
 }
 
 export async function updateAdminWorkforce(
@@ -888,41 +933,44 @@ export async function updateAdminNvq(
 
 const documentFields = getSharePointFields("customerDocuments");
 
-export type DocumentMetadataStatus =
-  | "Complete"
-  | "Missing Company"
-  | "Missing Document Type"
-  | "Hidden from Customer";
-
-export interface AdminDocumentRecord {
-  id: string;
-  name: string;
-  company: string | null;
-  candidate: string | null;
-  documentType: string | null;
-  customerVisible: boolean;
-  notificationSent: boolean;
-  modifiedDate: string | null;
-  modifiedBy: string | null;
-  metadataStatus: DocumentMetadataStatus;
-  isFolder: boolean;
-  /** @deprecated Prefer modifiedDate — kept for older UI bindings. */
-  uploadedDate: string | null;
-  previewPath: string | null;
-  downloadPath: string | null;
-}
-
 export interface AdminDocumentListFilters {
   companyName?: string | null;
   candidate?: string | null;
   documentType?: string | null;
   /** true = visible only, false = hidden only, null/undefined = all */
   customerVisible?: boolean | null;
+  /** Inclusive lower bound on modified date (ISO date or datetime). */
+  modifiedFrom?: string | null;
+  /** Inclusive upper bound on modified date (ISO date or datetime). */
+  modifiedTo?: string | null;
 }
 
 function isSharePointFolder(fields: SharePointFields): boolean {
   const fs = fields[documentFields.fsObjType];
   return fs === 1 || fs === "1";
+}
+
+function decodePathSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment.replace(/\+/g, " "));
+  } catch {
+    return segment;
+  }
+}
+
+/** Parts under the Customer Documents library from a FileRef / FileDirRef. */
+export function customerDocumentsPathParts(
+  pathValue: string | null | undefined,
+): string[] {
+  if (!pathValue?.trim()) return [];
+  const parts = pathValue
+    .split("/")
+    .map((part) => decodePathSegment(part))
+    .filter(Boolean);
+  const libraryIdx = parts.findIndex(
+    (part) => part.toLowerCase() === "customer documents",
+  );
+  return libraryIdx >= 0 ? parts.slice(libraryIdx + 1) : parts;
 }
 
 function resolveDocumentMetadataStatus(input: {
@@ -942,21 +990,30 @@ function resolveDocumentMetadataStatus(input: {
   return "Complete";
 }
 
-function mapDocument(item: SharePointListItem): AdminDocumentRecord | null {
+export function mapDocument(item: SharePointListItem): AdminDocumentRecord | null {
   const isFolder = isSharePointFolder(item.fields);
   const name =
-    asString(item.fields[documentFields.title]) ??
-    asString(item.fields[documentFields.fileLeafRef]);
+    asString(item.fields[documentFields.fileLeafRef]) ??
+    asString(item.fields[documentFields.title]);
   if (!name) return null;
+
+  const fileRef = asNullableString(item.fields[documentFields.fileRef]);
+  const fileDirRef = asNullableString(item.fields[documentFields.fileDirRef]);
+  const pathParts = customerDocumentsPathParts(fileRef ?? fileDirRef);
+  const parentPath = pathParts.length > 0 ? pathParts.slice(0, -1) : [];
 
   const hasFile =
     !isFolder &&
     Boolean(
-      asString(item.fields[documentFields.fileRef]) ||
-        asString(item.fields[documentFields.fileLeafRef]),
+      fileRef || asString(item.fields[documentFields.fileLeafRef]),
     );
 
   const company = asLookupOrString(item.fields[documentFields.company]);
+  const companyId =
+    asString(item.fields[documentFields.companyLookupId]) ?? null;
+  const candidate = asLookupOrString(item.fields[documentFields.candidate]);
+  const candidateId =
+    asString(item.fields[documentFields.candidateLookupId]) ?? null;
   const documentType = asNullableString(
     item.fields[documentFields.documentType],
   );
@@ -973,12 +1030,16 @@ function mapDocument(item: SharePointListItem): AdminDocumentRecord | null {
     id: item.id,
     name,
     company,
-    candidate: asLookupOrString(item.fields[documentFields.candidate]),
+    companyId,
+    candidate,
+    candidateId,
     documentType,
     customerVisible,
+    canDownload: hasFile,
     notificationSent: asBoolean(
       item.fields[documentFields.notificationSent],
     ),
+    notifyCustomer: asBoolean(item.fields[documentFields.notifyCustomer]),
     modifiedDate,
     modifiedBy: asLookupOrString(item.fields[documentFields.editor]),
     metadataStatus: resolveDocumentMetadataStatus({
@@ -987,6 +1048,8 @@ function mapDocument(item: SharePointListItem): AdminDocumentRecord | null {
       customerVisible,
     }),
     isFolder,
+    fileRef,
+    parentPath,
     uploadedDate: modifiedDate,
     previewPath: hasFile
       ? `/api/admin/documents/${item.id}/download?disposition=inline`
@@ -1019,21 +1082,89 @@ export async function listAdminDocuments(
     .map(mapDocument)
     .filter((row): row is AdminDocumentRecord => {
       if (!row) return false;
-      if (!matchesCompany(row.company, normalized.companyName)) return false;
-      if (!matchesOptionalText(row.candidate, normalized.candidate)) {
-        return false;
+      // Keep folders for SharePoint-style library browse; filter files by metadata.
+      if (!row.isFolder) {
+        if (!matchesCompany(row.company, normalized.companyName)) return false;
+        if (!matchesOptionalText(row.candidate, normalized.candidate)) {
+          return false;
+        }
+        if (!matchesOptionalText(row.documentType, normalized.documentType)) {
+          return false;
+        }
+        if (
+          typeof normalized.customerVisible === "boolean" &&
+          row.customerVisible !== normalized.customerVisible
+        ) {
+          return false;
+        }
       }
-      if (!matchesOptionalText(row.documentType, normalized.documentType)) {
-        return false;
-      }
-      if (
-        typeof normalized.customerVisible === "boolean" &&
-        row.customerVisible !== normalized.customerVisible
-      ) {
-        return false;
+      if (normalized.modifiedFrom || normalized.modifiedTo) {
+        const modifiedMs = row.modifiedDate
+          ? new Date(row.modifiedDate).getTime()
+          : NaN;
+        if (Number.isNaN(modifiedMs)) {
+          if (!row.isFolder) return false;
+        } else {
+          if (normalized.modifiedFrom) {
+            const from = new Date(normalized.modifiedFrom).getTime();
+            if (!Number.isNaN(from) && modifiedMs < from) return false;
+          }
+          if (normalized.modifiedTo) {
+            const to = new Date(normalized.modifiedTo);
+            if (!Number.isNaN(to.getTime())) {
+              to.setHours(23, 59, 59, 999);
+              if (modifiedMs > to.getTime()) return false;
+            }
+          }
+        }
       }
       return true;
     });
+}
+
+function buildDocumentWritePayload(
+  input: Record<string, unknown>,
+): SharePointFields {
+  const payload: SharePointFields = {
+    ...toSharePointFields("customerDocuments", {
+      title: optionalText(input.name) ?? optionalText(input.title) ?? undefined,
+      documentType:
+        input.documentType === undefined
+          ? undefined
+          : optionalText(input.documentType),
+      customerVisible: optionalBool(input.customerVisible),
+      notificationSent: optionalBool(input.notificationSent),
+      notifyCustomer: optionalBool(input.notifyCustomer),
+    }),
+  };
+
+  if (input.companyId !== undefined) {
+    const companyId = optionalText(input.companyId);
+    payload[documentFields.companyLookupId] = companyId
+      ? Number(companyId)
+      : null;
+  } else if (input.company !== undefined) {
+    const companyName = optionalText(input.company);
+    if (companyName) {
+      payload[documentFields.company] = companyName;
+    }
+  }
+
+  if (input.candidateId !== undefined) {
+    const candidateId = optionalText(input.candidateId);
+    payload[documentFields.candidateLookupId] = candidateId
+      ? Number(candidateId)
+      : null;
+  } else if (input.candidate !== undefined) {
+    const candidateName = optionalText(input.candidate);
+    if (candidateName) {
+      payload[documentFields.candidate] = candidateName;
+    } else {
+      payload[documentFields.candidateLookupId] = null;
+    }
+  }
+
+  return payload;
 }
 
 export async function updateAdminDocument(
@@ -1042,21 +1173,7 @@ export async function updateAdminDocument(
 ) {
   const existing = await getListItemByKey("customerDocuments", id);
   if (!existing) throw new NotFoundError("Document not found.");
-  const payload = toSharePointFields("customerDocuments", {
-    title: optionalText(input.name) ?? optionalText(input.title) ?? undefined,
-    company:
-      input.company === undefined ? undefined : optionalText(input.company),
-    candidate:
-      input.candidate === undefined
-        ? undefined
-        : optionalText(input.candidate),
-    documentType:
-      input.documentType === undefined
-        ? undefined
-        : optionalText(input.documentType),
-    customerVisible: optionalBool(input.customerVisible),
-    notificationSent: optionalBool(input.notificationSent),
-  });
+  const payload = buildDocumentWritePayload(input);
   const item = await updateListItemFieldsByKey(
     "customerDocuments",
     id,
@@ -1065,6 +1182,147 @@ export async function updateAdminDocument(
   const mapped = mapDocument(item);
   if (!mapped) throw new Error("Updated document could not be mapped.");
   return mapped;
+}
+
+export async function bulkUpdateAdminDocuments(
+  ids: string[],
+  input: Record<string, unknown>,
+): Promise<{ updated: AdminDocumentRecord[]; failed: string[] }> {
+  const uniqueIds = Array.from(
+    new Set(ids.map((id) => String(id).trim()).filter(Boolean)),
+  );
+  if (uniqueIds.length === 0) {
+    throw new ValidationError("Select at least one document.");
+  }
+
+  const updated: AdminDocumentRecord[] = [];
+  const failed: string[] = [];
+
+  for (const id of uniqueIds) {
+    try {
+      updated.push(await updateAdminDocument(id, input));
+    } catch {
+      failed.push(id);
+    }
+  }
+
+  return { updated, failed };
+}
+
+function resolveDocumentMetadataStatusFromFields(input: {
+  company: string | null;
+  documentType: string | null;
+  customerVisible: boolean;
+}): DocumentMetadataStatus {
+  if (!input.company?.trim()) return "Missing Company";
+  if (!input.documentType?.trim()) return "Missing Document Type";
+  if (!input.customerVisible) return "Hidden from Customer";
+  return "Complete";
+}
+
+/**
+ * Browse one folder level in Customer Documents (drive children).
+ * pathSegments follow:
+ * Company Number - Company Name / Company Documents|Candidates /
+ * Candidate Number - Name / Certificates|Card Scans|…
+ *
+ * When opening a company or candidate folder, ensures the expected
+ * subfolders exist (does not recreate the library or move files).
+ */
+export async function listAdminDocumentsAtPath(
+  pathSegments: string[],
+): Promise<AdminDocumentRecord[]> {
+  const {
+    browseCustomerDocumentsFolder,
+    ensureCompanyDocumentFolders,
+    ensureCandidateDocumentFolders,
+  } = await import("@/lib/services/customerDocumentsFolderService");
+
+  const parentPath = pathSegments
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  if (parentPath.length === 1) {
+    const company = parseNumberNameFolder(parentPath[0]);
+    await ensureCompanyDocumentFolders({
+      companyNumber: company.number,
+      companyName: company.name,
+    });
+  } else if (
+    parentPath.length === 3 &&
+    parentPath[1].toLowerCase() === "candidates"
+  ) {
+    const company = parseNumberNameFolder(parentPath[0]);
+    const candidate = parseNumberNameFolder(parentPath[2]);
+    await ensureCandidateDocumentFolders({
+      companyNumber: company.number,
+      companyName: company.name,
+      workforceNumber: candidate.number,
+      candidateName: candidate.name,
+    });
+  }
+
+  const children = await browseCustomerDocumentsFolder(parentPath);
+
+  return children.map((child): AdminDocumentRecord => {
+    const fields = child.fields;
+    const company = asLookupOrString(fields[documentFields.company]);
+    const companyId =
+      asString(fields[documentFields.companyLookupId]) ?? null;
+    const candidate = asLookupOrString(fields[documentFields.candidate]);
+    const candidateId =
+      asString(fields[documentFields.candidateLookupId]) ?? null;
+    const documentType = asNullableString(fields[documentFields.documentType]);
+    const customerVisible = asBoolean(fields[documentFields.customerVisible]);
+    const listId = child.listItemId ?? child.driveItemId;
+    const hasFile = !child.isFolder;
+
+    return {
+      id: listId,
+      name: child.name,
+      company,
+      companyId,
+      candidate,
+      candidateId,
+      documentType,
+      customerVisible,
+      canDownload: hasFile,
+      notificationSent: asBoolean(fields[documentFields.notificationSent]),
+      notifyCustomer: asBoolean(fields[documentFields.notifyCustomer]),
+      modifiedDate: child.lastModifiedDateTime,
+      modifiedBy: asLookupOrString(fields[documentFields.editor]),
+      metadataStatus: resolveDocumentMetadataStatusFromFields({
+        company,
+        documentType,
+        customerVisible,
+      }),
+      isFolder: child.isFolder,
+      fileRef: child.webUrl,
+      parentPath,
+      uploadedDate: child.lastModifiedDateTime,
+      previewPath: hasFile
+        ? `/api/admin/documents/${listId}/download?disposition=inline`
+        : null,
+      downloadPath: hasFile
+        ? `/api/admin/documents/${listId}/download`
+        : null,
+    };
+  });
+}
+
+function parseNumberNameFolder(segment: string): {
+  number: string | null;
+  name: string;
+} {
+  const trimmed = segment.trim();
+  const match = trimmed.match(/^(.+?)\s+-\s+(.+)$/);
+  if (!match) {
+    return { number: null, name: trimmed };
+  }
+  return {
+    number: match[1].trim() || null,
+    name: match[2].trim() || trimmed,
+  };
 }
 
 /* ───────────────── Events ───────────────── */
@@ -1119,6 +1377,7 @@ function asDateTimeInput(value: unknown): string | null | undefined {
 function resolveEventCompanyId(item: SharePointListItem): string | null {
   return (
     asString(item.fields[eventFields.eventCompanyLookupId]) ??
+    asString(item.fields.EventCompanyId) ??
     (typeof item.fields[eventFields.eventCompany] === "object"
       ? asString(
           (item.fields[eventFields.eventCompany] as { LookupId?: unknown })
@@ -1132,17 +1391,30 @@ function resolveEventCompanyId(item: SharePointListItem): string | null {
 function mapEvent(item: SharePointListItem): AdminEventRecord | null {
   const title = asString(item.fields[eventFields.title]);
   if (!title) return null;
+
+  // Prefer LookupValue; Graph often only returns EventCompanyLookupId.
+  const companyFromLookup = asLookupOrString(
+    item.fields[eventFields.eventCompany],
+  );
+  const companyId = resolveEventCompanyId(item);
+
   return {
     id: item.id,
     title,
-    company: asLookupOrString(item.fields[eventFields.eventCompany]),
-    companyId: resolveEventCompanyId(item),
-    customerVisible: asBoolean(item.fields[eventFields.customerVisible]),
-    trainingAddress: asNullableString(item.fields[eventFields.trainingAddress]),
+    company: companyFromLookup,
+    companyId,
+    customerVisible:
+      asBoolean(item.fields[eventFields.customerVisible]) ||
+      asBoolean(item.fields.CustomerVisible),
+    trainingAddress: stripSharePointHtml(
+      asNullableString(item.fields[eventFields.trainingAddress]),
+    ),
     location: asNullableString(item.fields[eventFields.location]),
     eventDate: asNullableString(item.fields[eventFields.eventDate]),
     endDate: asNullableString(item.fields[eventFields.endDate]),
-    description: asNullableString(item.fields[eventFields.description]),
+    description: stripSharePointHtml(
+      asNullableString(item.fields[eventFields.description]),
+    ),
     doNotSync: asBoolean(item.fields[eventFields.doNotSync]),
     syncStatus: asNullableString(item.fields[eventFields.syncStatus]),
     syncDirection: asNullableString(item.fields[eventFields.syncDirection]),
@@ -1151,6 +1423,46 @@ function mapEvent(item: SharePointListItem): AdminEventRecord | null {
     syncError: asNullableString(item.fields[eventFields.syncError]),
     outlookEventId: asNullableString(item.fields[eventFields.outlookEventId]),
   };
+}
+
+async function attachEventCompanyNames(
+  rows: AdminEventRecord[],
+): Promise<AdminEventRecord[]> {
+  const missingIds = Array.from(
+    new Set(
+      rows
+        .filter((row) => !row.company?.trim() && row.companyId)
+        .map((row) => row.companyId as string),
+    ),
+  );
+  if (missingIds.length === 0) {
+    return rows;
+  }
+
+  const companies = await listAdminCompanies();
+  const byId = new Map(
+    companies.map((company) => [company.id, company.companyName]),
+  );
+
+  // Fill any gaps with direct lookups (cache-friendly).
+  await Promise.all(
+    missingIds
+      .filter((id) => !byId.has(id))
+      .map(async (id) => {
+        const company = await getCompanyById(id);
+        if (company?.companyName) {
+          byId.set(id, company.companyName);
+        }
+      }),
+  );
+
+  return rows.map((row) => {
+    if (row.company?.trim() || !row.companyId) return row;
+    return {
+      ...row,
+      company: byId.get(row.companyId) ?? null,
+    };
+  });
 }
 
 export async function getEventsSchemaWarnings(): Promise<string[]> {
@@ -1167,12 +1479,13 @@ export async function getEventsSchemaWarnings(): Promise<string[]> {
 
 export async function listAdminEvents(companyName?: string | null) {
   const items = await getListItemsByKey("events", { top: 5000 });
-  return items
+  const mapped = items
     .map(mapEvent)
-    .filter((row): row is AdminEventRecord => {
-      if (!row) return false;
-      return matchesCompany(row.company, companyName);
-    })
+    .filter((row): row is AdminEventRecord => row !== null);
+  const withNames = await attachEventCompanyNames(mapped);
+
+  return withNames
+    .filter((row) => matchesCompany(row.company, companyName))
     .sort((a, b) => {
       const aTime = a.eventDate ? new Date(a.eventDate).getTime() : 0;
       const bTime = b.eventDate ? new Date(b.eventDate).getTime() : 0;
@@ -1183,6 +1496,7 @@ export async function listAdminEvents(companyName?: string | null) {
 function buildEventCompanyPayload(input: Record<string, unknown>): {
   fields: SharePointFields;
   companyName: string | null;
+  companyId: string | null;
 } {
   const companyId =
     optionalText(input.companyId) ?? optionalText(input.eventCompanyId);
@@ -1193,26 +1507,62 @@ function buildEventCompanyPayload(input: Record<string, unknown>): {
 
   const fields: SharePointFields = {};
   if (companyId) {
+    // Graph lookup write — never send display name as EventCompany text.
     fields[eventFields.eventCompanyLookupId] = Number.isNaN(Number(companyId))
       ? companyId
       : Number(companyId);
-  } else if (companyName) {
-    fields[eventFields.eventCompany] = companyName;
   }
 
-  return { fields, companyName };
+  return { fields, companyName, companyId };
+}
+
+/** SharePoint DoNotSync is Text ("Yes"/"No"), not Boolean. */
+function toDoNotSyncText(value: boolean | undefined): "Yes" | "No" | undefined {
+  if (value === undefined) return undefined;
+  return value ? "Yes" : "No";
+}
+
+function omitNullishFields(fields: SharePointFields): SharePointFields {
+  const next: SharePointFields = {};
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === null || value === undefined) continue;
+    next[key] = value;
+  }
+  return next;
+}
+
+function rethrowEventWriteError(error: unknown): never {
+  const message =
+    error && typeof error === "object" && "message" in error
+      ? String((error as { message?: unknown }).message ?? "")
+      : String(error ?? "");
+  const body =
+    error && typeof error === "object" && "body" in error
+      ? String((error as { body?: unknown }).body ?? "")
+      : "";
+  const combined = `${message}\n${body}`;
+
+  if (/unique constraints/i.test(combined)) {
+    throw new ValidationError(
+      'SharePoint "Event Company" has Enforce unique values enabled, so only one event can use each company. In SharePoint Events list settings, open the Event Company column, turn off Enforce unique values, then try again.',
+    );
+  }
+
+  throw error;
 }
 
 export async function createAdminEvent(input: Record<string, unknown>) {
   const title = requireText(input.title, "Event title");
-  const { fields: companyFields, companyName } =
+  const { fields: companyFields, companyName, companyId } =
     buildEventCompanyPayload(input);
-  if (!companyFields[eventFields.eventCompanyLookupId] && !companyName) {
-    throw new ValidationError("Company is required.");
+  if (!companyFields[eventFields.eventCompanyLookupId]) {
+    throw new ValidationError(
+      "Company is required. Select a company from the list.",
+    );
   }
 
   const doNotSync = optionalBool(input.doNotSync) ?? false;
-  const payload: SharePointFields = {
+  const payload = omitNullishFields({
     ...toSharePointFields("events", {
       title,
       customerVisible: optionalBool(input.customerVisible) ?? true,
@@ -1221,16 +1571,22 @@ export async function createAdminEvent(input: Record<string, unknown>) {
       eventDate: asDateTimeInput(input.eventDate),
       endDate: asDateTimeInput(input.endDate),
       description: optionalText(input.description),
-      doNotSync,
+      // Text column — boolean true/false causes Graph generalException.
+      doNotSync: toDoNotSyncText(doNotSync),
       syncStatus: doNotSync ? "Skipped" : "Pending",
       syncDirection: "SharePointToOutlook",
       lastSyncSource: "SharePoint",
-      syncError: null,
     }),
     ...companyFields,
-  };
+  });
 
-  const item = await createListItemByKey("events", payload);
+  let item;
+  try {
+    item = await createListItemByKey("events", payload);
+  } catch (error) {
+    rethrowEventWriteError(error);
+  }
+
   const { syncEventSharePointToOutlook } = await import(
     "@/lib/services/eventOutlookSyncService"
   );
@@ -1239,7 +1595,15 @@ export async function createAdminEvent(input: Record<string, unknown>) {
   const refreshed = await getListItemByKey("events", item.id);
   const mapped = mapEvent(refreshed ?? item);
   if (!mapped) throw new Error("Created event could not be mapped.");
-  return mapped;
+
+  const [withName] = await attachEventCompanyNames([
+    {
+      ...mapped,
+      company: mapped.company ?? companyName,
+      companyId: mapped.companyId ?? companyId,
+    },
+  ]);
+  return withName;
 }
 
 export async function updateAdminEvent(
@@ -1249,27 +1613,32 @@ export async function updateAdminEvent(
   const existing = await getListItemByKey("events", id);
   if (!existing) throw new NotFoundError("Event not found.");
 
-  const payload: SharePointFields = toSharePointFields("events", {
-    title: optionalText(input.title) ?? undefined,
-    customerVisible: optionalBool(input.customerVisible),
-    trainingAddress:
-      input.trainingAddress === undefined
-        ? undefined
-        : optionalText(input.trainingAddress),
-    location:
-      input.location === undefined ? undefined : optionalText(input.location),
-    eventDate:
-      input.eventDate === undefined
-        ? undefined
-        : asDateTimeInput(input.eventDate),
-    endDate:
-      input.endDate === undefined ? undefined : asDateTimeInput(input.endDate),
-    description:
-      input.description === undefined
-        ? undefined
-        : optionalText(input.description),
-    doNotSync: optionalBool(input.doNotSync),
-  });
+  const doNotSync =
+    input.doNotSync === undefined ? undefined : optionalBool(input.doNotSync);
+
+  const payload = omitNullishFields(
+    toSharePointFields("events", {
+      title: optionalText(input.title) ?? undefined,
+      customerVisible: optionalBool(input.customerVisible),
+      trainingAddress:
+        input.trainingAddress === undefined
+          ? undefined
+          : optionalText(input.trainingAddress),
+      location:
+        input.location === undefined ? undefined : optionalText(input.location),
+      eventDate:
+        input.eventDate === undefined
+          ? undefined
+          : asDateTimeInput(input.eventDate),
+      endDate:
+        input.endDate === undefined ? undefined : asDateTimeInput(input.endDate),
+      description:
+        input.description === undefined
+          ? undefined
+          : optionalText(input.description),
+      doNotSync: toDoNotSyncText(doNotSync),
+    }),
+  );
 
   const companyTouched =
     input.companyId !== undefined ||
@@ -1279,21 +1648,22 @@ export async function updateAdminEvent(
     input.eventCompanyId !== undefined;
 
   if (companyTouched) {
-    const { fields: companyFields, companyName } =
-      buildEventCompanyPayload(input);
-    if (!companyFields[eventFields.eventCompanyLookupId] && !companyName) {
-      throw new ValidationError("Company is required.");
+    const { fields: companyFields } = buildEventCompanyPayload(input);
+    if (!companyFields[eventFields.eventCompanyLookupId]) {
+      throw new ValidationError(
+        "Company is required. Select a company from the list.",
+      );
     }
     Object.assign(payload, companyFields);
   }
 
   // Portal edits are SharePoint-sourced; prepare one-way Outlook sync metadata.
-  if (optionalBool(input.doNotSync) === true) {
+  if (doNotSync === true) {
     payload[eventFields.syncStatus] = "Skipped";
     payload[eventFields.syncDirection] = "SharePointToOutlook";
     payload[eventFields.lastSyncSource] = "SharePoint";
   } else if (
-    input.doNotSync === false ||
+    doNotSync === false ||
     input.title !== undefined ||
     input.eventDate !== undefined ||
     input.endDate !== undefined ||
@@ -1305,10 +1675,14 @@ export async function updateAdminEvent(
     payload[eventFields.syncStatus] = "Pending";
     payload[eventFields.syncDirection] = "SharePointToOutlook";
     payload[eventFields.lastSyncSource] = "SharePoint";
-    payload[eventFields.syncError] = null;
   }
 
-  const item = await updateListItemFieldsByKey("events", id, payload);
+  let item;
+  try {
+    item = await updateListItemFieldsByKey("events", id, payload);
+  } catch (error) {
+    rethrowEventWriteError(error);
+  }
 
   const { syncEventSharePointToOutlook } = await import(
     "@/lib/services/eventOutlookSyncService"
@@ -1318,7 +1692,8 @@ export async function updateAdminEvent(
   const refreshed = await getListItemByKey("events", id);
   const mapped = mapEvent(refreshed ?? item);
   if (!mapped) throw new Error("Updated event could not be mapped.");
-  return mapped;
+  const [withName] = await attachEventCompanyNames([mapped]);
+  return withName;
 }
 
 /* ───────────────── Offers ───────────────── */

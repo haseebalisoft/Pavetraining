@@ -4,6 +4,7 @@ import { cache } from "react";
 
 import { getSharePointFields } from "@/lib/schema/sharepointSchema";
 import {
+  asLookupOrString,
   asNullableString,
   asString,
   buildSchemaFieldEqualsFilter,
@@ -15,12 +16,33 @@ import type { WorkforceCandidate } from "@/types/models";
 
 const workforceFields = getSharePointFields("workforce");
 
+function asDepartment(value: unknown): string | null {
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((entry) => {
+        if (typeof entry === "string") return entry.trim();
+        if (entry && typeof entry === "object") {
+          const record = entry as { LookupValue?: unknown; Label?: unknown };
+          return (
+            asString(record.LookupValue) ?? asString(record.Label) ?? ""
+          ).trim();
+        }
+        return "";
+      })
+      .filter(Boolean);
+    return parts.length ? parts.join(", ") : null;
+  }
+  return asLookupOrString(value) ?? asNullableString(value);
+}
+
 function mapWorkforceItem(
   id: string,
   fields: SharePointFields,
 ): WorkforceCandidate | null {
   const candidateName = asString(fields[workforceFields.candidateName]);
-  const companyName = asString(fields[workforceFields.companyName]);
+  const companyName =
+    asLookupOrString(fields[workforceFields.companyName]) ??
+    asString(fields[workforceFields.companyName]);
 
   if (!candidateName || !companyName) {
     return null;
@@ -32,10 +54,14 @@ function mapWorkforceItem(
     companyName,
     workforceNumber: asNullableString(fields[workforceFields.workforceNumber]),
     dateOfBirth: asNullableString(fields[workforceFields.dateOfBirth]),
-    department: asNullableString(fields[workforceFields.department]),
+    department: asDepartment(fields[workforceFields.department]),
     status: asNullableString(fields[workforceFields.status]),
-    trainingManager: asNullableString(fields[workforceFields.trainingManager]),
-    supervisor: asNullableString(fields[workforceFields.supervisor]),
+    trainingManager:
+      asLookupOrString(fields[workforceFields.trainingManager]) ??
+      asNullableString(fields[workforceFields.trainingManager]),
+    supervisor:
+      asLookupOrString(fields[workforceFields.supervisor]) ??
+      asNullableString(fields[workforceFields.supervisor]),
     email: asNullableString(fields[workforceFields.email])?.toLowerCase() ?? null,
     cscsNumber: asNullableString(fields[workforceFields.cscsNumber]),
     swqrNumber: asNullableString(fields[workforceFields.swqrNumber]),
@@ -44,6 +70,9 @@ function mapWorkforceItem(
     inHouseCertificationNumber: asNullableString(
       fields[workforceFields.inHouseCertificationNumber],
     ),
+    cscsExpiry: asNullableString(fields[workforceFields.cscsExpiry]),
+    swqrExpiry: asNullableString(fields[workforceFields.swqrExpiry]),
+    eusrExpiry: asNullableString(fields[workforceFields.eusrExpiry]),
   };
 }
 

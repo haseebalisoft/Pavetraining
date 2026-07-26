@@ -75,6 +75,10 @@ const workforceFields = {
   eusrNumber: "EUSRNumber",
   nporsNumbers: "NPORSNumbers",
   inHouseCertificationNumber: "InHouseCertificationNumber",
+  /** Existing Workforce columns — mapped for display only; SharePoint schema unchanged. */
+  cscsExpiry: "CscsExpiry",
+  swqrExpiry: "SwqrExpiry",
+  eusrExpiry: "EusrExpiry",
 } as const;
 
 const trainingMatrixFields = {
@@ -190,7 +194,7 @@ const customerDocumentsFields = {
   id: "ID",
   title: "Title",
   company: "Company",
-  /** Graph expand companion for lookup field `Candidate`. */
+  /** Graph expand companion for lookup field `Company`. */
   companyLookupId: "CompanyLookupId",
   candidate: "Candidate",
   /** Graph expand companion for lookup field `Candidate`. */
@@ -198,8 +202,10 @@ const customerDocumentsFields = {
   documentType: "DocumentType",
   customerVisible: "CustomerVisible",
   notificationSent: "NotificationSent",
+  notifyCustomer: "NotifyCustomer",
   fileRef: "FileRef",
   fileLeafRef: "FileLeafRef",
+  fileDirRef: "FileDirRef",
   fsObjType: "FSObjType",
   modified: "Modified",
   editor: "Editor",
@@ -339,6 +345,9 @@ export const SHAREPOINT_LISTS = {
       eusrNumber: "EUSR number",
       nporsNumbers: "NPORS numbers",
       inHouseCertificationNumber: "In-house certification number",
+      cscsExpiry: "CSCS expiry",
+      swqrExpiry: "SWQR expiry",
+      eusrExpiry: "EUSR expiry",
     },
   } satisfies SharePointListDefinition<typeof workforceFields>,
 
@@ -509,8 +518,10 @@ export const SHAREPOINT_LISTS = {
       documentType: "Document type",
       customerVisible: "Customer visible",
       notificationSent: "Notification sent",
+      notifyCustomer: "Notify customer",
       fileRef: "File path",
       fileLeafRef: "File name",
+      fileDirRef: "Folder path",
       fsObjType: "Object type",
       modified: "Modified date",
       editor: "Modified by",

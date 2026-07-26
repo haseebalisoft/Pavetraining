@@ -1,0 +1,13 @@
+.wrap {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.date {
+  font-size: var(--pave-font-size-caption);
+  font-weight: 600;
+  color: var(--pave-charcoal);
+  white-space: nowrap;
+}

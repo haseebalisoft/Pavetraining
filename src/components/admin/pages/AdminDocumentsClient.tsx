@@ -4,200 +4,240 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 
 import { AdminDrawer } from "@/components/admin/AdminDrawer";
-import {
-  DocumentsBrowseView,
-  type BrowsePath,
-  companyKeyFromRecord,
-  typeKeyFromRecord,
-} from "@/components/admin/documents/DocumentsBrowseView";
+import { DocumentsTableView } from "@/components/admin/documents/DocumentsTableView";
 import styles from "@/components/admin/admin.module.css";
+import docStyles from "@/components/admin/documents/documentsBrowse.module.css";
 import { useAdminToast } from "@/components/admin/AdminToast";
 import { Breadcrumbs } from "@/components/ui/Breadcrumbs";
 import { LoadingState } from "@/components/ui/States";
 import { readPublicApiError } from "@/lib/errors/publicMessages";
-import type { AdminDocumentRecord } from "@/lib/services/adminCrudService";
+import {
+  CUSTOMER_DOCUMENT_TYPES,
+} from "@/types/adminDocuments";
+import type { AdminDocumentRecord } from "@/types/adminDocuments";
 import type { Company } from "@/types/models";
 
-type FormState = Record<string, string | boolean>;
+type WorkforceOption = {
+  id: string;
+  candidateName: string;
+  companyName: string;
+  workforceNumber: string | null;
+};
 
-const fields = [
-  { name: "name", label: "File name", type: "text" as const, required: true },
-  { name: "company", label: "Company", type: "company" as const },
-  { name: "candidate", label: "Candidate", type: "text" as const },
-  { name: "documentType", label: "Document type", type: "text" as const },
-  {
-    name: "customerVisible",
-    label: "Customer visible",
-    type: "boolean" as const,
-  },
-  {
-    name: "notificationSent",
-    label: "Notification sent",
-    type: "boolean" as const,
-  },
-];
+type FormState = {
+  companyId: string;
+  candidateId: string;
+  documentType: string;
+  customerVisible: boolean;
+  notificationSent: boolean;
+  notifyCustomer: boolean;
+};
 
 function buildForm(row: AdminDocumentRecord): FormState {
   return {
-    name: row.name ?? "",
-    company: row.company ?? "",
-    candidate: row.candidate ?? "",
+    companyId: row.companyId ?? "",
+    candidateId: row.candidateId ?? "",
     documentType: row.documentType ?? "",
     customerVisible: Boolean(row.customerVisible),
     notificationSent: Boolean(row.notificationSent),
+    notifyCustomer: Boolean(row.notifyCustomer),
   };
 }
 
-function validate(form: FormState): string | null {
-  for (const field of fields) {
-    if (!("required" in field && field.required)) continue;
-    const value = form[field.name];
-    if (value === "" || value === null || value === undefined) {
-      return `${field.label} is required.`;
-    }
-  }
-  return null;
-}
-
 /**
- * FLAG: AdminDocumentsClient keeps list/reload/edit-drawer logic here because
- * AdminCrudPage couples table markup with that lifecycle. Folder browse UI is
- * extracted to DocumentsBrowseView + sibling presentational components.
+ * Admin Customer Documents — SharePoint folder tree browse:
+ * Company → Company Documents | Candidates → Candidate → type folders.
  */
 export function AdminDocumentsClient({
   companies,
   initialRows,
+  initialPath = [],
+  initialWorkforce,
 }: {
   companies: Company[];
   initialRows: AdminDocumentRecord[];
+  initialPath?: string[];
+  initialWorkforce: WorkforceOption[];
 }) {
   const { pushToast } = useAdminToast();
   const [rows, setRows] = useState(initialRows);
+  const [workforce, setWorkforce] = useState(initialWorkforce);
   const [loading, setLoading] = useState(false);
+  const [folderPath, setFolderPath] = useState<string[]>(initialPath);
   const [search, setSearch] = useState("");
-  const [documentTypeFilter, setDocumentTypeFilter] = useState("");
-  const [candidateFilter, setCandidateFilter] = useState("");
-  const [visibilityFilter, setVisibilityFilter] = useState("");
-  const [path, setPath] = useState<BrowsePath>({ level: "companies" });
-  const [direction, setDirection] = useState(1);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [busyId, setBusyId] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState<AdminDocumentRecord | null>(null);
-  const [form, setForm] = useState<FormState>({});
+  const [form, setForm] = useState<FormState>({
+    companyId: "",
+    candidateId: "",
+    documentType: "",
+    customerVisible: true,
+    notificationSent: false,
+    notifyCustomer: false,
+  });
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkForm, setBulkForm] = useState<FormState>({
+    companyId: "",
+    candidateId: "",
+    documentType: "",
+    customerVisible: true,
+    notificationSent: false,
+    notifyCustomer: false,
+  });
+  const [bulkSaving, setBulkSaving] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploadCompanyId, setUploadCompanyId] = useState("");
+  const [uploadCandidateId, setUploadCandidateId] = useState("");
+  const [uploadDocumentType, setUploadDocumentType] = useState<string>(
+    "Certificate",
+  );
+  const [uploadCustomerVisible, setUploadCustomerVisible] = useState(true);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
 
-  const documentTypes = useMemo(() => {
-    const values = new Set<string>();
-    for (const row of rows) {
-      if (row.documentType?.trim()) values.add(row.documentType.trim());
-    }
-    return Array.from(values).sort((a, b) => a.localeCompare(b));
-  }, [rows]);
-
-  const candidates = useMemo(() => {
-    const values = new Set<string>();
-    for (const row of rows) {
-      if (row.candidate?.trim()) values.add(row.candidate.trim());
-    }
-    return Array.from(values).sort((a, b) => a.localeCompare(b));
-  }, [rows]);
+  const loadFolder = useCallback(
+    async (path: string[]) => {
+      setLoading(true);
+      try {
+        const params = new URLSearchParams({
+          path: JSON.stringify(path),
+        });
+        const [docsResponse, workforceResponse] = await Promise.all([
+          fetch(`/api/admin/documents/browse?${params}`, {
+            cache: "no-store",
+          }),
+          fetch("/api/admin/workforce", { cache: "no-store" }),
+        ]);
+        if (!docsResponse.ok) {
+          throw new Error(await readPublicApiError(docsResponse));
+        }
+        const docsPayload = (await docsResponse.json()) as {
+          records?: AdminDocumentRecord[];
+        };
+        setRows(docsPayload.records ?? []);
+        setFolderPath(path);
+        setSelectedIds(new Set());
+        if (workforceResponse.ok) {
+          const workforcePayload = (await workforceResponse.json()) as {
+            records?: WorkforceOption[];
+          };
+          setWorkforce(workforcePayload.records ?? []);
+        }
+      } catch (error) {
+        pushToast(
+          error instanceof Error ? error.message : "Failed to open folder",
+          "error",
+        );
+      } finally {
+        setLoading(false);
+      }
+    },
+    [pushToast],
+  );
 
   const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const response = await fetch("/api/admin/documents", { cache: "no-store" });
-      if (!response.ok) {
-        throw new Error(await readPublicApiError(response));
-      }
-      const payload = (await response.json()) as {
-        records?: AdminDocumentRecord[];
-      };
-      setRows(payload.records ?? []);
-    } catch (error) {
-      pushToast(
-        error instanceof Error ? error.message : "Failed to load documents",
-        "error",
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [pushToast]);
+    await loadFolder(folderPath);
+  }, [folderPath, loadFolder]);
 
-  const filteredRows = useMemo(() => {
+  const currentRows = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return rows.filter((row) => {
-      if (
-        documentTypeFilter &&
-        (row.documentType ?? "").trim().toLowerCase() !==
-          documentTypeFilter.trim().toLowerCase()
-      ) {
-        return false;
-      }
-      if (
-        candidateFilter &&
-        (row.candidate ?? "").trim().toLowerCase() !==
-          candidateFilter.trim().toLowerCase()
-      ) {
-        return false;
-      }
-      if (visibilityFilter === "yes" && !row.customerVisible) return false;
-      if (visibilityFilter === "no" && row.customerVisible) return false;
-      if (!query) return true;
-      const haystack = [
-        row.name,
-        row.documentType,
-        row.company,
-        row.candidate,
-        row.metadataStatus,
-        row.modifiedBy,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(query);
-    });
-  }, [
-    rows,
-    search,
-    documentTypeFilter,
-    candidateFilter,
-    visibilityFilter,
-  ]);
+    return rows
+      .filter((row) => {
+        if (!query) return true;
+        return [
+          row.name,
+          row.company,
+          row.candidate,
+          row.documentType,
+          row.id,
+          row.modifiedBy,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+          .includes(query);
+      })
+      .sort((a, b) => {
+        if (a.isFolder !== b.isFolder) return a.isFolder ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+  }, [rows, search]);
 
-  // Keep breadcrumb path valid when filters shrink the visible set.
+  const folderHint = useMemo(() => {
+    if (folderPath.length === 0) {
+      return "Root: company folders (Company Number - Company Name).";
+    }
+    if (folderPath.length === 1) {
+      return "Company folder: open Company Documents or Candidates.";
+    }
+    if (folderPath.length === 2 && /candidates/i.test(folderPath[1] ?? "")) {
+      return "Candidates: open a Candidate Number - Candidate Name folder.";
+    }
+    if (
+      folderPath.length === 3 &&
+      /candidates/i.test(folderPath[1] ?? "")
+    ) {
+      return "Candidate folder: Certificates, Card Scans, NVQ Documents, Other Documents.";
+    }
+    return "Browse files in this folder. Assign Company / Candidate metadata on files.";
+  }, [folderPath]);
+
+  const companyById = useMemo(() => {
+    const map = new Map<string, Company>();
+    for (const company of companies) map.set(company.id, company);
+    return map;
+  }, [companies]);
+
+  const candidatesForCompany = useCallback(
+    (companyId: string) => {
+      const company = companyById.get(companyId);
+      if (!company) return [] as WorkforceOption[];
+      const name = company.companyName.trim().toLowerCase();
+      return workforce
+        .filter((row) => row.companyName.trim().toLowerCase() === name)
+        .sort((a, b) => a.candidateName.localeCompare(b.candidateName));
+    },
+    [companyById, workforce],
+  );
+
+  const editCandidates = useMemo(
+    () => candidatesForCompany(form.companyId),
+    [candidatesForCompany, form.companyId],
+  );
+  const bulkCandidates = useMemo(
+    () => candidatesForCompany(bulkForm.companyId),
+    [candidatesForCompany, bulkForm.companyId],
+  );
+  const uploadCandidates = useMemo(
+    () => candidatesForCompany(uploadCompanyId),
+    [candidatesForCompany, uploadCompanyId],
+  );
+
   useEffect(() => {
-    if (path.level === "companies") return;
+    if (
+      form.candidateId &&
+      !editCandidates.some((row) => row.id === form.candidateId)
+    ) {
+      setForm((current) => ({ ...current, candidateId: "" }));
+    }
+  }, [editCandidates, form.candidateId]);
 
-    const companyStillExists = filteredRows.some(
-      (row) => companyKeyFromRecord(row) === path.companyKey,
-    );
-    if (!companyStillExists) {
-      setDirection(-1);
-      setPath({ level: "companies" });
+  function openFolder(row: AdminDocumentRecord) {
+    if (!row.isFolder) return;
+    void loadFolder([...folderPath, row.name]);
+  }
+
+  function navigateToCrumb(index: number) {
+    if (index < 0) {
+      void loadFolder([]);
       return;
     }
-
-    if (path.level === "files") {
-      const typeStillExists = filteredRows.some(
-        (row) =>
-          companyKeyFromRecord(row) === path.companyKey &&
-          typeKeyFromRecord(row) === path.typeKey,
-      );
-      if (!typeStillExists) {
-        setDirection(-1);
-        setPath({
-          level: "types",
-          companyKey: path.companyKey,
-          companyLabel: path.companyLabel,
-        });
-      }
-    }
-  }, [filteredRows, path]);
-
-  function navigate(next: BrowsePath, nextDirection: -1 | 1) {
-    setDirection(nextDirection);
-    setPath(next);
+    void loadFolder(folderPath.slice(0, index + 1));
   }
 
   function openEdit(row: AdminDocumentRecord) {
@@ -223,8 +263,8 @@ export function AdminDocumentsClient({
       }
       pushToast(
         customerVisible
-          ? "Document marked customer visible."
-          : "Document hidden from customer.",
+          ? "Customer Visible set to Yes."
+          : "Customer Visible set to No.",
         "success",
       );
       await load();
@@ -238,26 +278,27 @@ export function AdminDocumentsClient({
     }
   }
 
-  async function persist() {
+  async function persistEdit() {
     if (!editing) return;
-    const error = validate(form);
-    if (error) {
-      setFormError(error);
-      return;
-    }
-
     setSaving(true);
     setFormError(null);
     try {
       const response = await fetch(`/api/admin/documents/${editing.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
+        body: JSON.stringify({
+          companyId: form.companyId || null,
+          candidateId: form.candidateId || null,
+          documentType: form.documentType || null,
+          customerVisible: form.customerVisible,
+          notificationSent: form.notificationSent,
+          notifyCustomer: form.notifyCustomer,
+        }),
       });
       if (!response.ok) {
         throw new Error(await readPublicApiError(response));
       }
-      pushToast("Record updated.");
+      pushToast("Document metadata saved.");
       setDrawerOpen(false);
       await load();
     } catch (error) {
@@ -269,47 +310,120 @@ export function AdminDocumentsClient({
     }
   }
 
-  return (
-    <div>
-      <header className={styles.pageHeader}>
-        <div>
-          <Breadcrumbs
-            items={[
-              { label: "Admin", href: "/admin" },
-              { label: "Documents" },
-            ]}
-          />
-          <p className={styles.eyebrow}>Admin</p>
-          <h1 className={styles.title}>Documents</h1>
-          <p className={styles.subtitle}>
-            Browse by company and document type. Edit metadata, visibility, and
-            company links without changing the underlying SharePoint library.
-          </p>
-        </div>
-      </header>
+  async function persistBulk() {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) {
+      pushToast("Select one or more files first.", "error");
+      return;
+    }
+    setBulkSaving(true);
+    try {
+      const response = await fetch("/api/admin/documents/bulk", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ids,
+          companyId: bulkForm.companyId || null,
+          candidateId: bulkForm.candidateId || null,
+          documentType: bulkForm.documentType || null,
+          customerVisible: bulkForm.customerVisible,
+          notificationSent: bulkForm.notificationSent,
+          notifyCustomer: bulkForm.notifyCustomer,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await readPublicApiError(response));
+      }
+      const payload = (await response.json()) as {
+        updated?: unknown[];
+        failed?: string[];
+      };
+      const failed = payload.failed?.length ?? 0;
+      pushToast(
+        failed
+          ? `Updated ${payload.updated?.length ?? 0}; ${failed} failed.`
+          : `Updated ${payload.updated?.length ?? ids.length} document(s).`,
+        failed ? "error" : "success",
+      );
+      setBulkOpen(false);
+      await load();
+    } catch (error) {
+      pushToast(
+        error instanceof Error ? error.message : "Bulk update failed.",
+        "error",
+      );
+    } finally {
+      setBulkSaving(false);
+    }
+  }
 
-      <div className={styles.crudToolbar}>
+  async function persistUpload() {
+    if (!uploadCompanyId) {
+      setUploadError("Company is required.");
+      return;
+    }
+    if (!uploadFile) {
+      setUploadError("Choose a file to upload.");
+      return;
+    }
+    if (uploadDocumentType !== "Other" && !uploadCandidateId) {
+      // Company-level "Other" without candidate still allowed; Certificate etc need candidate when in candidate folders
+    }
+
+    setUploading(true);
+    setUploadError(null);
+    try {
+      const body = new FormData();
+      body.set("file", uploadFile);
+      body.set("companyId", uploadCompanyId);
+      body.set("documentType", uploadDocumentType);
+      body.set("customerVisible", uploadCustomerVisible ? "true" : "false");
+      if (uploadCandidateId) body.set("candidateId", uploadCandidateId);
+
+      const response = await fetch("/api/admin/documents/upload", {
+        method: "POST",
+        body,
+      });
+      if (!response.ok) {
+        throw new Error(await readPublicApiError(response));
+      }
+      pushToast("Document uploaded.");
+      setUploadOpen(false);
+      await load();
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Upload failed.";
+      setUploadError(message);
+      pushToast(message, "error");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function renderAssignFields(
+    state: FormState,
+    setState: (next: FormState) => void,
+    candidates: WorkforceOption[],
+  ) {
+    return (
+      <div className={styles.formGrid}>
         <label className={styles.field}>
-          <span className={styles.fieldLabel}>Search</span>
-          <input
-            className={styles.input}
-            type="search"
-            value={search}
-            placeholder="Search documents…"
-            onChange={(event) => setSearch(event.target.value)}
-          />
-        </label>
-        <label className={styles.field}>
-          <span className={styles.fieldLabel}>Document type</span>
+          <span className={styles.fieldLabel}>Company</span>
           <select
             className={styles.select}
-            value={documentTypeFilter}
-            onChange={(event) => setDocumentTypeFilter(event.target.value)}
+            value={state.companyId}
+            onChange={(event) =>
+              setState({
+                ...state,
+                companyId: event.target.value,
+                candidateId: "",
+              })
+            }
           >
-            <option value="">All types</option>
-            {documentTypes.map((value) => (
-              <option key={value} value={value}>
-                {value}
+            <option value="">Select company…</option>
+            {companies.map((company) => (
+              <option key={company.id} value={company.id}>
+                {company.companyName}
               </option>
             ))}
           </select>
@@ -318,28 +432,173 @@ export function AdminDocumentsClient({
           <span className={styles.fieldLabel}>Candidate</span>
           <select
             className={styles.select}
-            value={candidateFilter}
-            onChange={(event) => setCandidateFilter(event.target.value)}
+            value={state.candidateId}
+            disabled={!state.companyId}
+            onChange={(event) =>
+              setState({ ...state, candidateId: event.target.value })
+            }
           >
-            <option value="">All candidates</option>
-            {candidates.map((value) => (
+            <option value="">No candidate (company-level)</option>
+            {candidates.map((row) => (
+              <option key={row.id} value={row.id}>
+                {row.candidateName}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className={styles.field}>
+          <span className={styles.fieldLabel}>Document Type</span>
+          <select
+            className={styles.select}
+            value={state.documentType}
+            onChange={(event) =>
+              setState({ ...state, documentType: event.target.value })
+            }
+          >
+            <option value="">Select type…</option>
+            {CUSTOMER_DOCUMENT_TYPES.map((value) => (
               <option key={value} value={value}>
                 {value}
               </option>
             ))}
           </select>
         </label>
-        <label className={styles.field}>
-          <span className={styles.fieldLabel}>Visibility</span>
-          <select
-            className={styles.select}
-            value={visibilityFilter}
-            onChange={(event) => setVisibilityFilter(event.target.value)}
+        <label className={styles.checkboxRow}>
+          <input
+            type="checkbox"
+            checked={state.customerVisible}
+            onChange={(event) =>
+              setState({ ...state, customerVisible: event.target.checked })
+            }
+          />
+          Customer Visible
+        </label>
+        <label className={styles.checkboxRow}>
+          <input
+            type="checkbox"
+            checked={state.notificationSent}
+            onChange={(event) =>
+              setState({ ...state, notificationSent: event.target.checked })
+            }
+          />
+          Notification Sent
+        </label>
+        <label className={styles.checkboxRow}>
+          <input
+            type="checkbox"
+            checked={state.notifyCustomer}
+            onChange={(event) =>
+              setState({ ...state, notifyCustomer: event.target.checked })
+            }
+          />
+          Notify Customer
+        </label>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <header className={styles.pageHeader}>
+        <div>
+          <Breadcrumbs
+            items={[
+              { label: "Admin", href: "/admin" },
+              { label: "Customer Documents" },
+            ]}
+          />
+          <p className={styles.eyebrow}>Admin</p>
+          <h1 className={styles.title}>Customer Documents</h1>
+          <p className={styles.subtitle}>
+            Same SharePoint folder tree: Company Number - Company Name → Company
+            Documents / Candidates → Candidate Number - Name → Certificates,
+            Card Scans, NVQ Documents, Other Documents.
+          </p>
+          <p className={styles.helpText}>{folderHint}</p>
+        </div>
+        <div className={styles.headerActions}>
+          <motion.button
+            type="button"
+            className={styles.secondaryButton}
+            disabled={selectedIds.size === 0}
+            whileTap={{ scale: 0.97, transition: { duration: 0.15 } }}
+            onClick={() => {
+              setBulkForm({
+                companyId: "",
+                candidateId: "",
+                documentType: "",
+                customerVisible: true,
+                notificationSent: false,
+                notifyCustomer: false,
+              });
+              setBulkOpen(true);
+            }}
           >
-            <option value="">All</option>
-            <option value="yes">Customer visible</option>
-            <option value="no">Hidden from customer</option>
-          </select>
+            Assign selected ({selectedIds.size})
+          </motion.button>
+          <motion.button
+            type="button"
+            className={styles.primaryButton}
+            whileTap={{ scale: 0.97, transition: { duration: 0.15 } }}
+            onClick={() => {
+              setUploadOpen(true);
+              setUploadError(null);
+              setUploadFile(null);
+              setUploadCompanyId(companies[0]?.id ?? "");
+              setUploadCandidateId("");
+              setUploadDocumentType("Certificate");
+              setUploadCustomerVisible(true);
+            }}
+          >
+            Create or upload
+          </motion.button>
+        </div>
+      </header>
+
+      <nav className={docStyles.browseCrumbs} aria-label="Folder location">
+        <button
+          type="button"
+          className={
+            folderPath.length === 0
+              ? docStyles.crumbCurrent
+              : docStyles.crumbButton
+          }
+          disabled={folderPath.length === 0}
+          onClick={() => navigateToCrumb(-1)}
+        >
+          Customer Documents
+        </button>
+        {folderPath.map((segment, index) => (
+          <span key={`${segment}-${index}`} className={docStyles.crumbSeg}>
+            <span className={docStyles.crumbSep} aria-hidden="true">
+              /
+            </span>
+            <button
+              type="button"
+              className={
+                index === folderPath.length - 1
+                  ? docStyles.crumbCurrent
+                  : docStyles.crumbButton
+              }
+              disabled={index === folderPath.length - 1}
+              onClick={() => navigateToCrumb(index)}
+            >
+              {segment}
+            </button>
+          </span>
+        ))}
+      </nav>
+
+      <div className={styles.crudToolbar}>
+        <label className={styles.field}>
+          <span className={styles.fieldLabel}>Search</span>
+          <input
+            className={styles.input}
+            type="search"
+            value={search}
+            placeholder="Filter this folder…"
+            onChange={(event) => setSearch(event.target.value)}
+          />
         </label>
         <motion.button
           type="button"
@@ -351,15 +610,38 @@ export function AdminDocumentsClient({
         </motion.button>
       </div>
 
+      <p className={styles.resultMeta}>
+        {currentRows.length} item{currentRows.length === 1 ? "" : "s"}
+        {selectedIds.size > 0 ? ` · ${selectedIds.size} selected` : ""}
+      </p>
+
       {loading ? (
-        <LoadingState label="Refreshing documents…" />
+        <LoadingState label="Refreshing Customer Documents…" />
       ) : (
-        <DocumentsBrowseView
-          rows={filteredRows}
-          path={path}
-          direction={direction}
+        <DocumentsTableView
+          rows={currentRows}
+          selectedIds={selectedIds}
           busyId={busyId}
-          onNavigate={navigate}
+          onToggleSelect={(id) => {
+            setSelectedIds((current) => {
+              const next = new Set(current);
+              if (next.has(id)) next.delete(id);
+              else next.add(id);
+              return next;
+            });
+          }}
+          onToggleSelectAll={(selectAll) => {
+            if (!selectAll) {
+              setSelectedIds(new Set());
+              return;
+            }
+            setSelectedIds(
+              new Set(
+                currentRows.filter((row) => !row.isFolder).map((row) => row.id),
+              ),
+            );
+          }}
+          onOpenFolder={openFolder}
           onEditMetadata={openEdit}
           onSetVisibility={setVisibility}
         />
@@ -367,7 +649,7 @@ export function AdminDocumentsClient({
 
       <AdminDrawer
         open={drawerOpen}
-        title="Edit Documents"
+        title="Edit document fields"
         onClose={() => setDrawerOpen(false)}
         footer={
           <>
@@ -383,76 +665,149 @@ export function AdminDocumentsClient({
               className={styles.primaryButton}
               disabled={saving}
               whileTap={{ scale: 0.97, transition: { duration: 0.15 } }}
-              onClick={() => void persist()}
+              onClick={() => void persistEdit()}
             >
               {saving ? "Saving…" : "Save"}
             </motion.button>
           </>
         }
       >
+        {editing ? (
+          <p className={styles.helpText}>
+            {editing.name} · ID {editing.id}
+          </p>
+        ) : null}
         {formError ? <p className={styles.formError}>{formError}</p> : null}
+        {renderAssignFields(form, setForm, editCandidates)}
+      </AdminDrawer>
+
+      <AdminDrawer
+        open={bulkOpen}
+        title={`Assign ${selectedIds.size} document(s)`}
+        onClose={() => setBulkOpen(false)}
+        footer={
+          <>
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              onClick={() => setBulkOpen(false)}
+            >
+              Cancel
+            </button>
+            <motion.button
+              type="button"
+              className={styles.primaryButton}
+              disabled={bulkSaving}
+              whileTap={{ scale: 0.97, transition: { duration: 0.15 } }}
+              onClick={() => void persistBulk()}
+            >
+              {bulkSaving ? "Saving…" : "Save"}
+            </motion.button>
+          </>
+        }
+      >
+        <p className={styles.helpText}>
+          Set Company, Candidate, Document Type, and Customer Visible on all
+          selected files (same SharePoint fields).
+        </p>
+        {renderAssignFields(bulkForm, setBulkForm, bulkCandidates)}
+      </AdminDrawer>
+
+      <AdminDrawer
+        open={uploadOpen}
+        title="Create or upload"
+        onClose={() => setUploadOpen(false)}
+        footer={
+          <>
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              onClick={() => setUploadOpen(false)}
+            >
+              Cancel
+            </button>
+            <motion.button
+              type="button"
+              className={styles.primaryButton}
+              disabled={uploading}
+              whileTap={{ scale: 0.97, transition: { duration: 0.15 } }}
+              onClick={() => void persistUpload()}
+            >
+              {uploading ? "Uploading…" : "Upload"}
+            </motion.button>
+          </>
+        }
+      >
+        {uploadError ? <p className={styles.formError}>{uploadError}</p> : null}
         <div className={styles.formGrid}>
-          {fields.map((field) => {
-            if (field.type === "boolean") {
-              return (
-                <label key={field.name} className={styles.checkboxRow}>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(form[field.name])}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        [field.name]: event.target.checked,
-                      }))
-                    }
-                  />
-                  {field.label}
-                </label>
-              );
-            }
-
-            if (field.type === "company") {
-              return (
-                <label key={field.name} className={styles.field}>
-                  <span className={styles.fieldLabel}>{field.label}</span>
-                  <select
-                    className={styles.select}
-                    value={String(form[field.name] ?? "")}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        [field.name]: event.target.value,
-                      }))
-                    }
-                  >
-                    <option value="">Select…</option>
-                    {companies.map((company) => (
-                      <option key={company.id} value={company.companyName}>
-                        {company.companyName}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              );
-            }
-
-            return (
-              <label key={field.name} className={styles.field}>
-                <span className={styles.fieldLabel}>{field.label}</span>
-                <input
-                  className={styles.input}
-                  type="text"
-                  value={String(form[field.name] ?? "")}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      [field.name]: event.target.value,
-                    }))
-                  }
-                />
-              </label>
-            );
-          })}
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Company</span>
+            <select
+              className={styles.select}
+              value={uploadCompanyId}
+              onChange={(event) => {
+                setUploadCompanyId(event.target.value);
+                setUploadCandidateId("");
+              }}
+            >
+              <option value="">Select company…</option>
+              {companies.map((company) => (
+                <option key={company.id} value={company.id}>
+                  {company.companyName}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Candidate</span>
+            <select
+              className={styles.select}
+              value={uploadCandidateId}
+              disabled={!uploadCompanyId}
+              onChange={(event) => setUploadCandidateId(event.target.value)}
+            >
+              <option value="">Company-level document</option>
+              {uploadCandidates.map((row) => (
+                <option key={row.id} value={row.id}>
+                  {row.candidateName}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Document Type</span>
+            <select
+              className={styles.select}
+              value={uploadDocumentType}
+              onChange={(event) => setUploadDocumentType(event.target.value)}
+            >
+              {CUSTOMER_DOCUMENT_TYPES.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>File</span>
+            <input
+              className={styles.input}
+              type="file"
+              onChange={(event) =>
+                setUploadFile(event.target.files?.[0] ?? null)
+              }
+            />
+          </label>
+          <label className={styles.checkboxRow}>
+            <input
+              type="checkbox"
+              checked={uploadCustomerVisible}
+              onChange={(event) =>
+                setUploadCustomerVisible(event.target.checked)
+              }
+            />
+            Customer Visible
+          </label>
         </div>
       </AdminDrawer>
     </div>

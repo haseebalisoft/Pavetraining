@@ -2,6 +2,11 @@
  * Shared premium UI primitives for PAVE portals.
  */
 
+import {
+  getExpiryStatus,
+  type ExpiryStatusCode,
+} from "@/lib/training/expiryFilters";
+
 export type StatusTone =
   | "neutral"
   | "ok"
@@ -10,16 +15,22 @@ export type StatusTone =
   | "info"
   | "missing";
 
+export function toneForExpiryStatus(status: ExpiryStatusCode): StatusTone {
+  switch (status) {
+    case "missing":
+      return "missing";
+    case "expired":
+    case "urgent":
+      return "danger";
+    case "upcoming":
+      return "warn";
+    case "valid":
+      return "ok";
+  }
+}
+
 export function toneForExpiry(expiry: string | null | undefined): StatusTone {
-  if (!expiry?.trim()) return "missing";
-  const days = Math.ceil(
-    (new Date(expiry).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) /
-      86_400_000,
-  );
-  if (Number.isNaN(days) || days < 0) return "danger";
-  if (days <= 90) return "danger";
-  if (days <= 180) return "warn";
-  return "ok";
+  return toneForExpiryStatus(getExpiryStatus(expiry).status);
 }
 
 export function toneForOutcome(

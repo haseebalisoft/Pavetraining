@@ -2,24 +2,62 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { BrandLogo } from "@/components/brand/BrandLogo";
 import styles from "./admin.module.css";
 
-const NAV_ITEMS = [
-  { href: "/admin", label: "Dashboard", exact: true },
-  { href: "/admin/companies", label: "Companies" },
-  { href: "/admin/workforce", label: "Workforce" },
-  { href: "/admin/training-matrix", label: "Training Matrix" },
-  { href: "/admin/training-records", label: "Training Records" },
-  { href: "/admin/nvq", label: "NVQ" },
-  { href: "/admin/documents", label: "Documents" },
-  { href: "/admin/events", label: "Events" },
-  { href: "/admin/offers", label: "Offers" },
-  { href: "/admin/permissions", label: "Permissions" },
-  { href: "/admin/automation", label: "Automation" },
-  { href: "/admin/logs", label: "Logs" },
+type NavLink = {
+  type: "link";
+  href: string;
+  label: string;
+  exact?: boolean;
+};
+
+type NavGroup = {
+  type: "group";
+  id: string;
+  label: string;
+  children: Array<{ href: string; label: string }>;
+};
+
+type NavItem = NavLink | NavGroup;
+
+const NAV_ITEMS: NavItem[] = [
+  { type: "link", href: "/admin", label: "Dashboard", exact: true },
+  { type: "link", href: "/admin/companies", label: "Companies" },
+  { type: "link", href: "/admin/workforce", label: "Workforce / Candidates" },
+  { type: "link", href: "/admin/permissions", label: "Permissions & Access" },
+  { type: "link", href: "/admin/training-matrix", label: "Training Matrix" },
+  {
+    type: "group",
+    id: "registers",
+    label: "Registers",
+    children: [
+      { href: "/admin/training-records/npors", label: "NPORS Register" },
+      { href: "/admin/training-records/eusr", label: "EUSR Register" },
+      {
+        href: "/admin/training-records/streetworks",
+        label: "NRSWA / Streetworks",
+      },
+      {
+        href: "/admin/training-records/in-house",
+        label: "In-House Certificates",
+      },
+      { href: "/admin/nvq", label: "NVQ Register" },
+    ],
+  },
+  { type: "link", href: "/admin/documents", label: "Documents" },
+  { type: "link", href: "/admin/events", label: "Calendar / Bookings" },
+  { type: "link", href: "/admin/notifications", label: "Notifications" },
+  { type: "link", href: "/admin/bulk-upload", label: "Bulk Upload" },
+  { type: "link", href: "/admin/logs", label: "Audit / Activity Log" },
+  { type: "link", href: "/admin/settings", label: "Settings" },
+];
+
+const REGISTER_PREFIXES = [
+  "/admin/training-records",
+  "/admin/nvq",
 ] as const;
 
 interface AdminSidebarProps {
@@ -36,13 +74,45 @@ function accountInitials(email: string): string {
   return local.slice(0, 2).toUpperCase() || "?";
 }
 
+function isLinkActive(
+  pathname: string,
+  href: string,
+  exact?: boolean,
+): boolean {
+  if (exact) return pathname === href;
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+function isRegistersPath(pathname: string): boolean {
+  return REGISTER_PREFIXES.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+  );
+}
+
 export function AdminSidebar({ email, signOutAction }: AdminSidebarProps) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  const registersActive = useMemo(() => isRegistersPath(pathname), [pathname]);
+  const [registersOpen, setRegistersOpen] = useState(registersActive);
 
   useEffect(() => {
     setOpen(false);
   }, [pathname]);
+
+  useEffect(() => {
+    if (registersActive) {
+      setRegistersOpen(true);
+    }
+  }, [registersActive]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open]);
 
   return (
     <aside className={`${styles.sidebar} ${open ? styles.sidebarOpen : ""}`}>
@@ -64,7 +134,7 @@ export function AdminSidebar({ email, signOutAction }: AdminSidebarProps) {
         </button>
       </div>
 
-      <p className={styles.navSectionLabel}>Admin operations</p>
+      <p className={styles.navSectionLabel}>PAVE Admin Portal</p>
 
       <nav
         id="admin-nav"
@@ -72,19 +142,49 @@ export function AdminSidebar({ email, signOutAction }: AdminSidebarProps) {
         aria-label="Admin"
       >
         {NAV_ITEMS.map((item) => {
-          const exact = "exact" in item && item.exact;
-          const active = exact
-            ? pathname === item.href
-            : pathname === item.href || pathname.startsWith(`${item.href}/`);
+          if (item.type === "link") {
+            const active = isLinkActive(pathname, item.href, item.exact);
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`${styles.navLink} ${active ? styles.navLinkActive : ""}`}
+              >
+                {item.label}
+              </Link>
+            );
+          }
 
           return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`${styles.navLink} ${active ? styles.navLinkActive : ""}`}
-            >
-              {item.label}
-            </Link>
+            <div key={item.id} className={styles.navGroup}>
+              <button
+                type="button"
+                className={`${styles.navGroupToggle} ${registersActive ? styles.navGroupToggleActive : ""}`}
+                aria-expanded={registersOpen}
+                onClick={() => setRegistersOpen((value) => !value)}
+              >
+                <span>{item.label}</span>
+                <span className={styles.navGroupChevron} aria-hidden="true">
+                  {registersOpen ? "▾" : "▸"}
+                </span>
+              </button>
+              {registersOpen ? (
+                <div className={styles.navGroupChildren}>
+                  {item.children.map((child) => {
+                    const active = isLinkActive(pathname, child.href);
+                    return (
+                      <Link
+                        key={child.href}
+                        href={child.href}
+                        className={`${styles.navChildLink} ${active ? styles.navLinkActive : ""}`}
+                      >
+                        {child.label}
+                      </Link>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
           );
         })}
       </nav>

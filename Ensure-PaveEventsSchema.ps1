@@ -213,6 +213,21 @@ function Ensure-EventCompanyLookup {
 
     if ($field) {
         Write-Skip "Events already has EventCompany."
+        # Unique values must be OFF — otherwise only one event per company can be saved.
+        try {
+            if ($field.EnforceUniqueValues -eq $true) {
+                if ($WhatIfMode) {
+                    Write-Skip "Would disable EnforceUniqueValues on EventCompany."
+                }
+                else {
+                    Set-PnPField -List $listTitle -Identity $internalName -Values @{ EnforceUniqueValues = $false; Indexed = $true } -ErrorAction Stop
+                    Write-Ok "Disabled Enforce unique values on EventCompany (required for multiple events per company)."
+                }
+            }
+        }
+        catch {
+            Write-Err "Could not disable EnforceUniqueValues on EventCompany: $($_.Exception.Message). Do this manually in SharePoint column settings."
+        }
         return
     }
 
@@ -237,7 +252,7 @@ function Ensure-EventCompanyLookup {
 
     $companyListId = $companyList.Id.ToString("B")
 
-    $xml = "<Field Type='Lookup' DisplayName='Event Company' Name='EventCompany' StaticName='EventCompany' List='$companyListId' ShowField='$showField' />"
+    $xml = "<Field Type='Lookup' DisplayName='Event Company' Name='EventCompany' StaticName='EventCompany' List='$companyListId' ShowField='$showField' EnforceUniqueValues='FALSE' Indexed='TRUE' />"
 
     Add-PnPFieldFromXml -List "Events" -FieldXml $xml | Out-Null
     Write-Ok "Added EventCompany lookup to Events."

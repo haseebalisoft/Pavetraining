@@ -12,46 +12,320 @@ import {
   getCustomerNvqRecords,
   getCustomerOfferRecords,
 } from "@/lib/services/customerPortalService";
-import { daysUntilExpiry } from "@/lib/training/expiryFilters";
+import {
+  getCustomerEusrRecords,
+  getCustomerInHouseRecords,
+  getCustomerNporsRecords,
+  getCustomerStreetworksRecords,
+} from "@/lib/services/customerTrainingRecordsService";
+import {
+  earliestExpiryDate,
+  getExpiryStatus,
+} from "@/lib/training/expiryFilters";
 import type {
   CustomerContext,
   CustomerMatrixRecord,
   DashboardStats,
+  WorkforceCandidate,
 } from "@/types/models";
+
+const NPORS_CATEGORY_COLUMNS = [
+  { code: "N001", key: "n001Expiry" as const },
+  { code: "N003", key: "n003Expiry" as const },
+  { code: "N004", key: "n004Expiry" as const },
+  { code: "N010", key: "n010Expiry" as const },
+  { code: "N020", key: "n020Expiry" as const },
+  { code: "N021", key: "n021Expiry" as const },
+  { code: "N027", key: "n027Expiry" as const },
+  { code: "N100", key: "n100Expiry" as const },
+] as const;
+
+type MatrixSourceRow = Awaited<ReturnType<typeof listAdminMatrix>>[number];
+
+function nameKey(value: string | null | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function emptyMatrixDates(): Pick<
+  CustomerMatrixRecord,
+  | "n001Expiry"
+  | "n003Expiry"
+  | "n004Expiry"
+  | "n010Expiry"
+  | "n020Expiry"
+  | "n021Expiry"
+  | "n027Expiry"
+  | "n100Expiry"
+> {
+  return {
+    n001Expiry: null,
+    n003Expiry: null,
+    n004Expiry: null,
+    n010Expiry: null,
+    n020Expiry: null,
+    n021Expiry: null,
+    n027Expiry: null,
+    n100Expiry: null,
+  };
+}
+
+function nporsCategoriesFromMatrix(matrix: MatrixSourceRow | null): string[] {
+  if (!matrix) return [];
+  const codes: string[] = [];
+  for (const column of NPORS_CATEGORY_COLUMNS) {
+    if (matrix[column.key]?.trim()) {
+      codes.push(column.code);
+    }
+  }
+  return codes;
+}
+
+function buildEnrichedRow(input: {
+  candidate: WorkforceCandidate | null;
+  matrix: MatrixSourceRow | null;
+  nporsCategories: string[];
+  nporsExpiry: string | null;
+  swqrExpiry: string | null;
+  eusrExpiry: string | null;
+  inHouseExpiry: string | null;
+}): CustomerMatrixRecord {
+  const { candidate, matrix } = input;
+  const candidateName =
+    candidate?.candidateName ?? matrix?.candidateName ?? "Unknown";
+  const dates = matrix
+    ? {
+        n001Expiry: matrix.n001Expiry,
+        n003Expiry: matrix.n003Expiry,
+        n004Expiry: matrix.n004Expiry,
+        n010Expiry: matrix.n010Expiry,
+        n020Expiry: matrix.n020Expiry,
+        n021Expiry: matrix.n021Expiry,
+        n027Expiry: matrix.n027Expiry,
+        n100Expiry: matrix.n100Expiry,
+      }
+    : emptyMatrixDates();
+
+  const cscsExpiry = candidate?.cscsExpiry ?? null;
+  const nextExpiryDate =
+    earliestExpiryDate([
+      matrix?.nextExpiryDate,
+      input.nporsExpiry,
+      cscsExpiry,
+      input.swqrExpiry,
+      input.eusrExpiry,
+      input.inHouseExpiry,
+      ...Object.values(dates),
+    ]) ?? null;
+
+  return {
+    id: candidate?.id ?? matrix?.id ?? candidateName,
+    candidateId: candidate?.id ?? null,
+    candidateName,
+    dateOfBirth: candidate?.dateOfBirth ?? null,
+    department: candidate?.department ?? matrix?.department ?? null,
+    trainingManager: candidate?.trainingManager ?? null,
+    supervisor: candidate?.supervisor ?? null,
+    overallStatus: matrix?.overallStatus ?? null,
+    needsReview: Boolean(matrix?.needsReview),
+    nextExpiryDate,
+    nporsCategories:
+      input.nporsCategories.length > 0
+        ? input.nporsCategories.join(", ")
+        : null,
+    nporsExpiry: input.nporsExpiry,
+    cscsExpiry,
+    swqrExpiry: input.swqrExpiry,
+    eusrExpiry: input.eusrExpiry,
+    inHouseExpiry: input.inHouseExpiry,
+    ...dates,
+  };
+}
 
 /**
  * Customer-facing matrix rows for a company.
- * Omits admin-only review notes noise; keeps needsReview for the dashboard.
- * Applies Supervisor / Candidate access scope when context is provided.
+ * Combines Workforce + Training Matrix + register expiries without changing
+ * SharePoint list schemas. Applies Supervisor / Candidate access when context
+ * is provided.
  */
 export async function getCustomerMatrixRecords(
   companyName: string,
   context?: CustomerContext,
 ): Promise<CustomerMatrixRecord[]> {
-  const rows = await listAdminMatrix(companyName);
-  let mapped: CustomerMatrixRecord[] = rows.map((row) => ({
-    id: row.id,
-    candidateName: row.candidateName,
-    department: row.department,
-    overallStatus: row.overallStatus,
-    needsReview: row.needsReview,
-    nextExpiryDate: row.nextExpiryDate,
-    n001Expiry: row.n001Expiry,
-    n003Expiry: row.n003Expiry,
-    n004Expiry: row.n004Expiry,
-    n010Expiry: row.n010Expiry,
-    n020Expiry: row.n020Expiry,
-    n021Expiry: row.n021Expiry,
-    n027Expiry: row.n027Expiry,
-    n100Expiry: row.n100Expiry,
-  }));
+  const companyId = context?.companyId;
 
-  if (context) {
-    const allowedNames = await getAllowedCandidateNames(context);
-    mapped = filterRowsByCandidateAccess(mapped, allowedNames, context);
+  const [workforce, matrixRows, npors, eusr, streetworks, inHouse] =
+    await Promise.all([
+      context
+        ? getAllowedWorkforceForCustomer(context)
+        : Promise.resolve([] as WorkforceCandidate[]),
+      listAdminMatrix(companyName),
+      companyId
+        ? getCustomerNporsRecords(companyId, context)
+        : Promise.resolve([]),
+      companyId
+        ? getCustomerEusrRecords(companyId, context)
+        : Promise.resolve([]),
+      companyId
+        ? getCustomerStreetworksRecords(companyId, context)
+        : Promise.resolve([]),
+      companyId
+        ? getCustomerInHouseRecords(companyId, context)
+        : Promise.resolve([]),
+    ]);
+
+  // When called without context (legacy), still return matrix-only rows.
+  if (!context) {
+    return matrixRows.map((row) =>
+      buildEnrichedRow({
+        candidate: null,
+        matrix: row,
+        nporsCategories: nporsCategoriesFromMatrix(row),
+        nporsExpiry: earliestExpiryDate([
+          row.nextExpiryDate,
+          row.n001Expiry,
+          row.n003Expiry,
+          row.n004Expiry,
+          row.n010Expiry,
+          row.n020Expiry,
+          row.n021Expiry,
+          row.n027Expiry,
+          row.n100Expiry,
+        ]),
+        swqrExpiry: null,
+        eusrExpiry: null,
+        inHouseExpiry: null,
+      }),
+    );
   }
 
-  return mapped;
+  const matrixByName = new Map<string, MatrixSourceRow>();
+  for (const row of matrixRows) {
+    const key = nameKey(row.candidateName);
+    if (key && !matrixByName.has(key)) {
+      matrixByName.set(key, row);
+    }
+  }
+
+  const nporsCatsByName = new Map<string, Set<string>>();
+  const nporsExpiryByName = new Map<string, string[]>();
+  for (const row of npors) {
+    const key = nameKey(row.candidateName);
+    if (!key) continue;
+    if (row.nporsCategory?.trim()) {
+      const set = nporsCatsByName.get(key) ?? new Set<string>();
+      set.add(row.nporsCategory.trim());
+      nporsCatsByName.set(key, set);
+    }
+    if (row.expiry?.trim()) {
+      const list = nporsExpiryByName.get(key) ?? [];
+      list.push(row.expiry);
+      nporsExpiryByName.set(key, list);
+    }
+  }
+
+  const eusrExpiryByName = new Map<string, string[]>();
+  for (const row of eusr) {
+    const key = nameKey(row.candidateName);
+    if (!key || !row.expiry?.trim()) continue;
+    const list = eusrExpiryByName.get(key) ?? [];
+    list.push(row.expiry);
+    eusrExpiryByName.set(key, list);
+  }
+
+  const swqrExpiryByName = new Map<string, string[]>();
+  for (const row of streetworks) {
+    const key = nameKey(row.candidateName);
+    if (!key || !row.expiry?.trim()) continue;
+    const list = swqrExpiryByName.get(key) ?? [];
+    list.push(row.expiry);
+    swqrExpiryByName.set(key, list);
+  }
+
+  const inHouseExpiryByName = new Map<string, string[]>();
+  for (const row of inHouse) {
+    const key = nameKey(row.candidateName);
+    if (!key || !row.expiry?.trim()) continue;
+    const list = inHouseExpiryByName.get(key) ?? [];
+    list.push(row.expiry);
+    inHouseExpiryByName.set(key, list);
+  }
+
+  const usedMatrix = new Set<string>();
+  const rows: CustomerMatrixRecord[] = [];
+
+  for (const candidate of workforce) {
+    const key = nameKey(candidate.candidateName);
+    const matrix = matrixByName.get(key) ?? null;
+    if (matrix) usedMatrix.add(key);
+
+    const matrixCats = nporsCategoriesFromMatrix(matrix);
+    const registerCats = Array.from(nporsCatsByName.get(key) ?? []);
+    const categories = Array.from(new Set([...matrixCats, ...registerCats]));
+
+    const nporsExpiry = earliestExpiryDate([
+      ...(nporsExpiryByName.get(key) ?? []),
+      matrix?.n001Expiry,
+      matrix?.n003Expiry,
+      matrix?.n004Expiry,
+      matrix?.n010Expiry,
+      matrix?.n020Expiry,
+      matrix?.n021Expiry,
+      matrix?.n027Expiry,
+      matrix?.n100Expiry,
+    ]);
+
+    rows.push(
+      buildEnrichedRow({
+        candidate,
+        matrix,
+        nporsCategories: categories,
+        nporsExpiry,
+        swqrExpiry: earliestExpiryDate([
+          candidate.swqrExpiry,
+          ...(swqrExpiryByName.get(key) ?? []),
+        ]),
+        eusrExpiry: earliestExpiryDate([
+          candidate.eusrExpiry,
+          ...(eusrExpiryByName.get(key) ?? []),
+        ]),
+        inHouseExpiry: earliestExpiryDate(inHouseExpiryByName.get(key) ?? []),
+      }),
+    );
+  }
+
+  // Matrix-only people still in scope (rare: matrix row without workforce match).
+  for (const [key, matrix] of matrixByName) {
+    if (usedMatrix.has(key)) continue;
+    rows.push(
+      buildEnrichedRow({
+        candidate: null,
+        matrix,
+        nporsCategories: [
+          ...nporsCategoriesFromMatrix(matrix),
+          ...Array.from(nporsCatsByName.get(key) ?? []),
+        ],
+        nporsExpiry: earliestExpiryDate([
+          ...(nporsExpiryByName.get(key) ?? []),
+          matrix.n001Expiry,
+          matrix.n003Expiry,
+          matrix.n004Expiry,
+          matrix.n010Expiry,
+          matrix.n020Expiry,
+          matrix.n021Expiry,
+          matrix.n027Expiry,
+          matrix.n100Expiry,
+        ]),
+        swqrExpiry: earliestExpiryDate(swqrExpiryByName.get(key) ?? []),
+        eusrExpiry: earliestExpiryDate(eusrExpiryByName.get(key) ?? []),
+        inHouseExpiry: earliestExpiryDate(inHouseExpiryByName.get(key) ?? []),
+      }),
+    );
+  }
+
+  const allowedNames = await getAllowedCandidateNames(context);
+  return filterRowsByCandidateAccess(rows, allowedNames, context).sort((a, b) =>
+    a.candidateName.localeCompare(b.candidateName),
+  );
 }
 
 /**
@@ -73,18 +347,20 @@ export async function getCustomerDashboard(
 
   let needsReviewCount = 0;
   let expiringSoonCount = 0;
+  let upcomingExpiryCount = 0;
   let expiredCount = 0;
 
   for (const row of matrix) {
     if (row.needsReview) {
       needsReviewCount += 1;
     }
-    const days = daysUntilExpiry(row.nextExpiryDate);
-    if (days !== null && days < 0) {
+    const status = getExpiryStatus(row.nextExpiryDate).status;
+    if (status === "expired") {
       expiredCount += 1;
-    }
-    if (days !== null && days >= 0 && days <= 90) {
+    } else if (status === "urgent") {
       expiringSoonCount += 1;
+    } else if (status === "upcoming") {
+      upcomingExpiryCount += 1;
     }
   }
 
@@ -100,11 +376,11 @@ export async function getCustomerDashboard(
     trainingMatrixCount: matrix.length,
     needsReviewCount,
     expiringSoonCount,
+    upcomingExpiryCount,
     expiredCount,
     documentsCount: documents.length,
     upcomingEventsCount,
     activeOffersCount: offers.length,
-    // Detailed register counts live on Training Records pages.
     nporsCount: 0,
     eusrCount: 0,
     streetworksCount: 0,

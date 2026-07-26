@@ -8,10 +8,14 @@ import {
   type AdminFieldConfig,
 } from "@/components/admin/AdminCrudPage";
 import styles from "@/components/admin/admin.module.css";
+import { ExpiryDateBadge } from "@/components/ui/ExpiryDateBadge";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import type { AdminMatrixRecord } from "@/lib/services/adminCrudService";
-import { daysUntilExpiry } from "@/lib/training/expiryFilters";
-import { toneForExpiry } from "@/lib/ui/status";
+import {
+  getExpiryStatus,
+  matchesExpiryFilter,
+  type ExpiryFilter,
+} from "@/lib/training/expiryFilters";
 import type { Company } from "@/types/models";
 
 const columns: AdminColumn<AdminMatrixRecord>[] = [
@@ -21,15 +25,7 @@ const columns: AdminColumn<AdminMatrixRecord>[] = [
   {
     key: "next",
     header: "Next expiry",
-    render: (row) =>
-      row.nextExpiryDate ? (
-        <StatusBadge
-          label={row.nextExpiryDate.slice(0, 10)}
-          tone={toneForExpiry(row.nextExpiryDate)}
-        />
-      ) : (
-        <StatusBadge label="Missing" tone="missing" />
-      ),
+    render: (row) => <ExpiryDateBadge date={row.nextExpiryDate} />,
   },
   {
     key: "review",
@@ -72,15 +68,10 @@ function matchesFilter(
 ): boolean {
   if (!filter || filter === "all") return true;
   if (filter === "review") return row.needsReview;
-  if (filter === "expired") {
-    const days = daysUntilExpiry(row.nextExpiryDate);
-    return days !== null && days < 0;
-  }
   if (filter === "expiring") {
-    const days = daysUntilExpiry(row.nextExpiryDate);
-    return days !== null && days >= 0 && days <= 90;
+    return getExpiryStatus(row.nextExpiryDate).status === "urgent";
   }
-  return true;
+  return matchesExpiryFilter(row.nextExpiryDate, filter as ExpiryFilter);
 }
 
 export function AdminMatrixClient({

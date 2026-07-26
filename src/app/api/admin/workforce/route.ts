@@ -24,7 +24,13 @@ export async function POST(request: Request) {
     async (_context, req) => {
       const body = (await req.json()) as Record<string, unknown>;
       const record = await createAdminWorkforce(body);
-      return { record };
+      return {
+        record,
+        warning:
+          "folderWarning" in record
+            ? (record as { folderWarning?: string }).folderWarning
+            : undefined,
+      };
     },
     { errorMessage: "Failed to create candidate" },
     request,

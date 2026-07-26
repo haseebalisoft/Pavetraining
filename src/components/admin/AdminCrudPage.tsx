@@ -290,7 +290,13 @@ export function AdminCrudPage<T extends { id: string }>({
         throw new Error(await readError(response));
       }
 
+      const payload = (await response.json().catch(() => null)) as {
+        warning?: string;
+      } | null;
       pushToast(isCreate ? "Record created." : "Record updated.");
+      if (payload?.warning?.trim()) {
+        pushToast(payload.warning, "error");
+      }
       setDrawerOpen(false);
       await load();
     } catch (error) {

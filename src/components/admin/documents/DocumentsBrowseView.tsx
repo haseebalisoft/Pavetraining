@@ -6,7 +6,7 @@ import { formatDisplayDate } from "@/lib/training/expiryFilters";
 import type {
   AdminDocumentRecord,
   DocumentMetadataStatus,
-} from "@/lib/services/adminCrudService";
+} from "@/types/adminDocuments";
 
 import { DocumentActionsMenu } from "./DocumentActionsMenu";
 import { FolderGrid, type FolderItem } from "./FolderGrid";

@@ -51,44 +51,6 @@
   flex-shrink: 0;
 }
 
-@media (max-width: 960px) {
-  .shell {
-    grid-template-columns: 1fr;
-  }
-
-  .sidebar {
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  }
-
-  .menuToggle {
-    display: inline-flex;
-  }
-
-  .nav {
-    display: none;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.25rem;
-  }
-
-  .navOpen {
-    display: grid;
-  }
-
-  .sidebarFooter {
-    display: none;
-  }
-
-  .sidebarOpen .sidebarFooter {
-    display: block;
-  }
-}
-
-@media (max-width: 560px) {
-  .navOpen {
-    grid-template-columns: 1fr;
-  }
-}
-
 .brandBlock {
   padding: 0.2rem 0.35rem 0.55rem;
   min-width: 0;
@@ -179,6 +141,74 @@
 .sidebarFooter {
   padding: 0.7rem 0.55rem 0;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Mobile nav overrides MUST come after base .nav rules or display:flex wins. */
+@media (max-width: 960px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    gap: 0.75rem;
+    padding: 0.85rem 0.75rem 0.95rem;
+    border-right: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .sidebarTop {
+    align-items: center;
+  }
+
+  .menuToggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 2.4rem;
+    padding: 0.5rem 0.85rem;
+    background: rgba(255, 255, 255, 0.08);
+    font-weight: 700;
+  }
+
+  .brandMeta,
+  .accessChip,
+  .companyChip {
+    display: none;
+  }
+
+  .sidebarOpen .brandMeta,
+  .sidebarOpen .accessChip,
+  .sidebarOpen .companyChip {
+    display: block;
+  }
+
+  .nav,
+  .navOpen {
+    display: none;
+    flex-direction: column;
+    gap: 0.2rem;
+    flex: 0 1 auto;
+    margin-top: 0.35rem;
+    padding-top: 0.55rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  .sidebarOpen .nav,
+  .sidebarOpen .navOpen {
+    display: flex;
+  }
+
+  .sidebarFooter {
+    display: none;
+  }
+
+  .sidebarOpen .sidebarFooter {
+    display: block;
+  }
+
+  .main {
+    padding: 1rem 0.9rem 1.75rem;
+  }
 }
 
 .sidebarEmail {
@@ -887,5 +917,145 @@
   .eventCalendarDay em,
   .eventCalendarDayActive em {
     display: none;
+  }
+}
+
+.secondaryButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.5rem;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--pave-border);
+  border-radius: var(--radius-sm);
+  background: var(--pave-surface);
+  color: var(--cust-ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.secondaryButton:hover:not(:disabled) {
+  border-color: var(--pave-lime);
+  background: var(--pave-lime-tint);
+}
+
+.secondaryButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.expiryLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1.1rem;
+  margin: 0 0 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--pave-border);
+  border-radius: var(--radius-md);
+  background: var(--pave-surface);
+}
+
+.expiryLegendItem {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  max-width: 22rem;
+}
+
+.expiryLegendText {
+  font-size: var(--pave-font-size-caption);
+  line-height: var(--pave-line-height-caption);
+  color: var(--cust-muted);
+}
+
+.clickableRow {
+  cursor: pointer;
+}
+
+.clickableRow:focus-visible {
+  outline: 2px solid var(--pave-lime);
+  outline-offset: -2px;
+}
+
+.matrixDesktop {
+  display: block;
+}
+
+.matrixDesktop .dataTable {
+  min-width: 72rem;
+}
+
+.matrixMobileList {
+  display: none;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  gap: 0.75rem;
+}
+
+.matrixCard {
+  border: 1px solid var(--pave-border);
+  border-radius: var(--radius-md);
+  background: var(--pave-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.matrixCardLink {
+  display: block;
+  padding: 0.95rem 1rem;
+  color: inherit;
+  text-decoration: none;
+}
+
+.matrixCardLink:hover {
+  background: #f7faf2;
+}
+
+.matrixCardTitle {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--cust-ink);
+}
+
+.matrixCardMeta {
+  margin: 0.25rem 0 0.75rem;
+  color: var(--cust-muted);
+  font-size: var(--pave-font-size-caption);
+}
+
+.matrixCardGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.65rem 0.85rem;
+  margin: 0;
+}
+
+.matrixCardGrid dt {
+  margin: 0;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--cust-muted);
+}
+
+.matrixCardGrid dd {
+  margin: 0.15rem 0 0;
+}
+
+.matrixCardCats {
+  margin: 0.75rem 0 0;
+  font-size: var(--pave-font-size-caption);
+  color: var(--cust-muted);
+}
+
+@media (max-width: 900px) {
+  .matrixDesktop {
+    display: none;
+  }
+
+  .matrixMobileList {
+    display: grid;
   }
 }

@@ -15,8 +15,12 @@ import {
   type SharePointFields,
   type SharePointListItem,
 } from "@/lib/services/sharePointListService";
-import { daysUntilExpiry } from "@/lib/training/expiryFilters";
+import { getExpiryStatus } from "@/lib/training/expiryFilters";
 import type {
+  AdminDashboardActivityRow,
+  AdminDashboardDocumentRow,
+  AdminDashboardEventRow,
+  AdminDashboardExpiryRow,
   AdminDashboardPayload,
   AdminDashboardStats,
   AdminDataWarning,
@@ -32,6 +36,8 @@ const inHouseFields = getSharePointFields("inHouseCertificates");
 const nvqFields = getSharePointFields("nvqRegister");
 const documentFields = getSharePointFields("customerDocuments");
 const eventFields = getSharePointFields("events");
+const permissionFields = getSharePointFields("permissions");
+const logFields = getSharePointFields("trainingManagerLogs");
 
 function matchesCompanyFilter(
   value: string | null | undefined,
@@ -108,16 +114,12 @@ function collectTrainingWarnings(
       issues.push("CompanyName");
     }
     if (map.visibleField && !asBoolean(item.fields[map.visibleField])) {
-      // Missing or false CustomerVisible both warrant a review warning when field exists
       const raw = item.fields[map.visibleField];
       if (raw === undefined || raw === null || raw === "") {
         issues.push("CustomerVisible");
       }
     }
-    if (
-      map.addressField &&
-      !asString(item.fields[map.addressField])
-    ) {
+    if (map.addressField && !asString(item.fields[map.addressField])) {
       issues.push("TrainingAddress");
     }
 
@@ -128,6 +130,20 @@ function collectTrainingWarnings(
       issues,
     });
   }
+}
+
+function isSharePointFolder(fields: SharePointFields): boolean {
+  const fs = fields[documentFields.fsObjType];
+  return fs === 1 || fs === "1";
+}
+
+function expiryTone(
+  status: ReturnType<typeof getExpiryStatus>["status"],
+): AdminDashboardExpiryRow["statusTone"] {
+  if (status === "expired" || status === "urgent") return "danger";
+  if (status === "upcoming") return "warn";
+  if (status === "valid") return "ok";
+  return "missing";
 }
 
 /**
@@ -155,6 +171,8 @@ export async function getAdminDashboard(
     nvq,
     documents,
     events,
+    permissions,
+    logs,
   ] = await Promise.all([
     getListItemsByKey("workforce", { top: 5000 }),
     getListItemsByKey("trainingMatrix", { top: 5000 }),
@@ -165,6 +183,8 @@ export async function getAdminDashboard(
     getListItemsByKey("nvqRegister", { top: 5000 }),
     getListItemsByKey("customerDocuments", { top: 5000 }),
     getListItemsByKey("events", { top: 5000 }),
+    getListItemsByKey("permissions", { top: 5000 }).catch(() => []),
+    getListItemsByKey("trainingManagerLogs", { top: 50 }).catch(() => []),
   ]);
 
   const filteredWorkforce = workforce.filter((item) =>
@@ -173,6 +193,13 @@ export async function getAdminDashboard(
       companyName,
     ),
   );
+
+  const activeCandidates = filteredWorkforce.filter((item) => {
+    const status = (asNullableString(item.fields[workforceFields.status]) ?? "")
+      .trim()
+      .toLowerCase();
+    return !status || status === "active";
+  }).length;
 
   const filteredMatrix = matrix.filter((item) =>
     matchesCompanyFilter(
@@ -187,21 +214,55 @@ export async function getAdminDashboard(
 
   let expiredTraining = 0;
   let expiringWithin3Months = 0;
+  let expiringWithin6Months = 0;
   let recordsToReview = 0;
+  const upcomingExpiries: AdminDashboardExpiryRow[] = [];
 
   for (const item of filteredMatrix) {
     const nextExpiry = asNullableString(item.fields[matrixFields.nextExpiryDate]);
-    const days = daysUntilExpiry(nextExpiry);
-    if (days !== null && days < 0) {
+    const expiry = getExpiryStatus(nextExpiry);
+    if (expiry.status === "expired") {
       expiredTraining += 1;
     }
-    if (days !== null && days >= 0 && days <= 90) {
+    if (expiry.status === "urgent") {
       expiringWithin3Months += 1;
+    }
+    if (expiry.status === "upcoming") {
+      expiringWithin6Months += 1;
     }
     if (asBoolean(item.fields[matrixFields.needsReview])) {
       recordsToReview += 1;
     }
+    if (
+      expiry.status === "expired" ||
+      expiry.status === "urgent" ||
+      expiry.status === "upcoming"
+    ) {
+      upcomingExpiries.push({
+        id: item.id,
+        candidateName:
+          asString(item.fields[matrixFields.candidateName]) ?? "Unknown",
+        companyName: companyFromFields(
+          item.fields,
+          matrixFields.companyName,
+          matrixFields.matrixCompany,
+        ),
+        nextExpiryDate: nextExpiry,
+        statusLabel: expiry.label,
+        statusTone: expiryTone(expiry.status),
+      });
+    }
   }
+
+  upcomingExpiries.sort((a, b) => {
+    const aTime = a.nextExpiryDate
+      ? new Date(a.nextExpiryDate).getTime()
+      : Number.POSITIVE_INFINITY;
+    const bTime = b.nextExpiryDate
+      ? new Date(b.nextExpiryDate).getTime()
+      : Number.POSITIVE_INFINITY;
+    return aTime - bTime;
+  });
 
   const filteredNvq = nvq.filter((item) =>
     matchesCompanyFilter(
@@ -225,30 +286,111 @@ export async function getAdminDashboard(
     }
   }
 
-  const documentsPendingVisibility = documents.filter((item) => {
+  const now = Date.now();
+  const thirtyDaysAgo = now - 30 * 86_400_000;
+
+  const filteredDocuments = documents.filter((item) => {
+    if (isSharePointFolder(item.fields)) return false;
     const rowCompany = companyFromFields(item.fields, documentFields.company);
-    if (!matchesCompanyFilter(rowCompany, companyName)) {
-      return false;
-    }
-    return !asBoolean(item.fields[documentFields.customerVisible]);
+    return matchesCompanyFilter(rowCompany, companyName);
+  });
+
+  const documentsPendingVisibility = filteredDocuments.filter(
+    (item) => !asBoolean(item.fields[documentFields.customerVisible]),
+  ).length;
+
+  const recentDocuments: AdminDashboardDocumentRow[] = filteredDocuments
+    .map((item) => {
+      const modifiedDate =
+        item.lastModifiedDateTime ??
+        asNullableString(item.fields[documentFields.modified]) ??
+        item.createdDateTime ??
+        null;
+      return {
+        id: item.id,
+        name:
+          asString(item.fields[documentFields.title]) ??
+          asString(item.fields[documentFields.fileLeafRef]) ??
+          "Document",
+        company: companyFromFields(item.fields, documentFields.company),
+        candidate: asLookupOrString(item.fields[documentFields.candidate]),
+        modifiedDate,
+        customerVisible: asBoolean(item.fields[documentFields.customerVisible]),
+        _sort: modifiedDate ? new Date(modifiedDate).getTime() : 0,
+      };
+    })
+    .sort((a, b) => b._sort - a._sort)
+    .slice(0, 8)
+    .map(({ _sort: _ignored, ...row }) => row);
+
+  const documentsUploadedRecently = filteredDocuments.filter((item) => {
+    const modified =
+      item.lastModifiedDateTime ??
+      asNullableString(item.fields[documentFields.modified]) ??
+      item.createdDateTime;
+    if (!modified) return false;
+    const time = new Date(modified).getTime();
+    return !Number.isNaN(time) && time >= thirtyDaysAgo;
   }).length;
 
-  const now = Date.now();
-  const upcomingEvents = events.filter((item) => {
-    const rowCompany = companyFromFields(item.fields, eventFields.eventCompany);
-    if (!matchesCompanyFilter(rowCompany, companyName)) {
-      return false;
-    }
-    if (!asBoolean(item.fields[eventFields.customerVisible])) {
-      // Still count admin-visible upcoming events even if not customer visible
-    }
-    const eventDate = asNullableString(item.fields[eventFields.eventDate]);
-    if (!eventDate) {
-      return false;
-    }
-    const time = new Date(eventDate).getTime();
-    return !Number.isNaN(time) && time >= now;
+  const upcomingBookings: AdminDashboardEventRow[] = events
+    .map((item) => {
+      const eventDate = asNullableString(item.fields[eventFields.eventDate]);
+      const time = eventDate ? new Date(eventDate).getTime() : NaN;
+      return {
+        id: item.id,
+        title: asString(item.fields[eventFields.title]) ?? "Event",
+        company: companyFromFields(
+          item.fields,
+          eventFields.eventCompany,
+        ),
+        eventDate,
+        location: asNullableString(item.fields[eventFields.location]),
+        _time: time,
+      };
+    })
+    .filter((row) => {
+      if (!matchesCompanyFilter(row.company, companyName)) return false;
+      return !Number.isNaN(row._time) && row._time >= now;
+    })
+    .sort((a, b) => a._time - b._time)
+    .slice(0, 8)
+    .map(({ _time: _ignored, ...row }) => row);
+
+  const upcomingEvents = upcomingBookings.length;
+
+  const accessInvitationsPending = permissions.filter((item) => {
+    const rowCompany = companyFromFields(
+      item.fields,
+      permissionFields.company,
+    );
+    if (!matchesCompanyFilter(rowCompany, companyName)) return false;
+    const status = (asNullableString(item.fields[permissionFields.status]) ?? "")
+      .trim()
+      .toLowerCase();
+    return status === "pending" || status === "invited" || status === "inactive";
   }).length;
+
+  const recentActivity: AdminDashboardActivityRow[] = logs
+    .map((item) => ({
+      id: item.id,
+      title: asString(item.fields[logFields.title]) ?? "Activity",
+      userEmail: asNullableString(item.fields[logFields.userEmail]),
+      timestamp:
+        asNullableString(item.fields[logFields.timestamp]) ??
+        item.createdDateTime ??
+        null,
+      detail: asNullableString(item.fields[logFields.notes]),
+      _sort: (() => {
+        const stamp =
+          asNullableString(item.fields[logFields.timestamp]) ??
+          item.createdDateTime;
+        return stamp ? new Date(stamp).getTime() : 0;
+      })(),
+    }))
+    .sort((a, b) => b._sort - a._sort)
+    .slice(0, 8)
+    .map(({ _sort: _ignored, ...row }) => row);
 
   const stats: AdminDashboardStats = {
     totalCompanies: companies.length,
@@ -256,13 +398,17 @@ export async function getAdminDashboard(
       isActiveCompanyStatus(company.status),
     ).length,
     totalCandidates: filteredWorkforce.length,
+    activeCandidates,
     expiredTraining,
     expiringWithin3Months,
+    expiringWithin6Months,
     recordsToReview,
     activeNvqs,
     completedNvqs,
     documentsPendingVisibility,
+    documentsUploadedRecently,
     upcomingEvents,
+    accessInvitationsPending,
   };
 
   const warnings: AdminDataWarning[] = [];
@@ -314,5 +460,9 @@ export async function getAdminDashboard(
     selectedCompanyName: selectedCompany?.companyName ?? null,
     stats,
     warnings,
+    upcomingExpiries: upcomingExpiries.slice(0, 8),
+    recentDocuments,
+    upcomingBookings,
+    recentActivity,
   };
 }

@@ -7,6 +7,7 @@ import {
 } from "@/components/admin/AdminCrudPage";
 import type { AdminEventRecord } from "@/lib/services/adminCrudService";
 import { formatDisplayDate } from "@/lib/training/expiryFilters";
+import { stripSharePointHtml } from "@/lib/text/stripSharePointHtml";
 import type { Company } from "@/types/models";
 
 function formatDateTime(value: string | null | undefined): string {
@@ -19,6 +20,10 @@ function formatDateTime(value: string | null | undefined): string {
     minute: "2-digit",
   }).format(date);
   return `${day} ${time}`;
+}
+
+function plainText(value: string | null | undefined): string {
+  return stripSharePointHtml(value) ?? "—";
 }
 
 const columns: AdminColumn<AdminEventRecord>[] = [
@@ -42,7 +47,7 @@ const columns: AdminColumn<AdminEventRecord>[] = [
   {
     key: "trainingAddress",
     header: "Training Address",
-    render: (row) => row.trainingAddress ?? "—",
+    render: (row) => plainText(row.trainingAddress),
   },
   {
     key: "visible",

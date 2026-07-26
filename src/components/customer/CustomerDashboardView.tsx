@@ -9,7 +9,7 @@ import styles from "./customer.module.css";
 
 const SECTIONS = [
   {
-    href: "/customer/training-matrix",
+    href: "/customer",
     title: "Training Matrix",
     description: "Workforce competency overview and upcoming renewals.",
   },
@@ -95,21 +95,28 @@ export function CustomerDashboardView({
 }: CustomerDashboardViewProps) {
   const warningCards = [
     {
-      href: "/customer/training-matrix?filter=expired",
+      href: "/customer?filter=expired",
       title: "Expired training",
       value: stats.expiredCount,
       detail: "Matrix rows with an expired next date",
       show: stats.expiredCount > 0,
     },
     {
-      href: "/customer/training-matrix?filter=expiring",
-      title: "Expiring within 3 months",
+      href: "/customer?filter=urgent",
+      title: "Urgent",
       value: stats.expiringSoonCount,
       detail: "Renewals due in the next 90 days",
       show: stats.expiringSoonCount > 0,
     },
     {
-      href: "/customer/training-matrix?filter=review",
+      href: "/customer?filter=upcoming",
+      title: "Upcoming",
+      value: stats.upcomingExpiryCount,
+      detail: "Renewals due in 91–270 days",
+      show: stats.upcomingExpiryCount > 0,
+    },
+    {
+      href: "/customer?filter=review",
       title: "Records to Review",
       value: stats.needsReviewCount,
       detail: "Matrix rows flagged for attention",
@@ -194,8 +201,14 @@ export function CustomerDashboardView({
         <article
           className={`${styles.statCard} ${stats.expiringSoonCount ? styles.statWarn : ""}`}
         >
-          <p className={styles.statLabel}>Expiring (3 months)</p>
+          <p className={styles.statLabel}>Urgent (0–90 days)</p>
           <p className={styles.statValue}>{stats.expiringSoonCount}</p>
+        </article>
+        <article
+          className={`${styles.statCard} ${stats.upcomingExpiryCount ? styles.statWarn : ""}`}
+        >
+          <p className={styles.statLabel}>Upcoming (91–270 days)</p>
+          <p className={styles.statValue}>{stats.upcomingExpiryCount}</p>
         </article>
         <article
           className={`${styles.statCard} ${stats.needsReviewCount ? styles.statWarn : styles.statOk}`}
