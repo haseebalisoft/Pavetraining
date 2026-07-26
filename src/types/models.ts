@@ -244,6 +244,10 @@ export interface PermissionProfile {
   canAccessAdmin: boolean;
   /** Customer portal (TM / Supervisor / Candidate). */
   canAccessCustomer: boolean;
+  /** Defaults true when SharePoint field missing. */
+  receiveDocumentNotifications: boolean;
+  receiveExpiryNotifications: boolean;
+  customerNotificationsEnabled: boolean;
 }
 
 export interface TrainingCourseCategory {

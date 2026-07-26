@@ -1,10 +1,7 @@
-import { AdminPlaceholder } from "@/components/admin/AdminPlaceholder";
+import { AdminSettingsClient } from "@/components/admin/pages/AdminSettingsClient";
+
+export const dynamic = "force-dynamic";
 
 export default function AdminSettingsPage() {
-  return (
-    <AdminPlaceholder
-      title="Settings"
-      description="Portal settings and configuration are not connected yet. Coming next."
-    />
-  );
+  return <AdminSettingsClient />;
 }

@@ -8,10 +8,12 @@
 
 .full {
   width: min(100%, 13.75rem);
+  height: auto;
 }
 
 .compact {
   width: min(100%, 8.75rem);
+  height: auto;
 }
 
 .mark {

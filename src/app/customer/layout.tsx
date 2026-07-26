@@ -32,6 +32,17 @@ export default async function CustomerLayout({
   try {
     context = await getCustomerContext(email);
   } catch {
+    try {
+      const { logAccessDenied } = await import("@/lib/services/auditLogService");
+      await logAccessDenied({
+        userEmail: email,
+        entityType: "Customer Portal",
+        entityName: "/customer",
+        errorMessage: "Customer access denied",
+      });
+    } catch {
+      // ignore audit failures
+    }
     redirect("/access-denied");
   }
 

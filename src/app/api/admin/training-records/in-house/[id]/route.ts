@@ -1,5 +1,6 @@
 import { withAdminApi } from "@/lib/api/adminApi";
 import { updateAdminRegister } from "@/lib/services/adminCrudService";
+import { triggerMatrixSyncAfterRegister } from "@/lib/services/matrixSyncHook";
 
 export const dynamic = "force-dynamic";
 
@@ -10,14 +11,19 @@ export async function PATCH(
   const { id } = await context.params;
   return withAdminApi(
     "PATCH /api/admin/training-records/in-house/[id]",
-    async (_ctx, req) => {
+    async (adminContext, req) => {
       const body = (await req.json()) as Record<string, unknown>;
       const record = await updateAdminRegister(
         "inHouseCertificates",
         id,
         body,
       );
-      return { record };
+      const matrixSync = await triggerMatrixSyncAfterRegister(
+        "inHouseCertificates",
+        record,
+        adminContext.loggedInEmail,
+      );
+      return { record, matrixSync };
     },
     { errorMessage: "Failed to update In-House record" },
     request,

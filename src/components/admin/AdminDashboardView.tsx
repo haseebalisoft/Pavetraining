@@ -161,8 +161,9 @@ export function AdminDashboardView({
                   <div>
                     <strong>{row.candidateName}</strong>
                     <span className={styles.dashMeta}>
-                      {row.companyName ?? "—"} ·{" "}
-                      {formatDisplayDate(row.nextExpiryDate)}
+                      {[row.companyName, formatDisplayDate(row.nextExpiryDate)]
+                        .filter(Boolean)
+                        .join(" · ")}
                     </span>
                   </div>
                   <StatusBadge label={row.statusLabel} tone={row.statusTone} />
@@ -188,9 +189,13 @@ export function AdminDashboardView({
                   <div>
                     <strong>{row.name}</strong>
                     <span className={styles.dashMeta}>
-                      {row.company ?? "—"}
-                      {row.candidate ? ` · ${row.candidate}` : ""} ·{" "}
-                      {formatDisplayDate(row.modifiedDate)}
+                      {[
+                        row.company,
+                        row.candidate,
+                        formatDisplayDate(row.modifiedDate),
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
                     </span>
                   </div>
                   <StatusBadge
@@ -219,8 +224,13 @@ export function AdminDashboardView({
                   <div>
                     <strong>{row.title}</strong>
                     <span className={styles.dashMeta}>
-                      {row.company ?? "—"} · {formatDisplayDate(row.eventDate)}
-                      {row.location ? ` · ${row.location}` : ""}
+                      {[
+                        row.company,
+                        formatDisplayDate(row.eventDate),
+                        row.location,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
                     </span>
                   </div>
                 </li>
@@ -237,7 +247,9 @@ export function AdminDashboardView({
             </Link>
           </div>
           {recentActivity.length === 0 ? (
-            <p className={styles.emptyNote}>No activity feed yet.</p>
+            <p className={styles.emptyNote}>
+              No recent portal activity yet. New admin actions will appear here.
+            </p>
           ) : (
             <ul className={styles.dashList}>
               {recentActivity.map((row) => (
@@ -245,8 +257,9 @@ export function AdminDashboardView({
                   <div>
                     <strong>{row.title}</strong>
                     <span className={styles.dashMeta}>
-                      {row.userEmail ?? "System"} ·{" "}
-                      {formatDisplayDate(row.timestamp)}
+                      {[row.userEmail, formatDisplayDate(row.timestamp)]
+                        .filter(Boolean)
+                        .join(" · ")}
                     </span>
                   </div>
                 </li>

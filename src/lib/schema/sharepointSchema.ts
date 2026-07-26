@@ -105,7 +105,8 @@ const nporsRegisterFields = {
   id: "ID",
   candidateName: "CandidateName",
   companyName: "CompanyName",
-  nporsNumber: "NPORSNumber",
+  /** Live list column is On/Number; projected workforce NPORSNumbers is separate. */
+  nporsNumber: "On_x002f_Number",
   trainingDate: "TrainingDate",
   trainingAddress: "TrainingAddress",
   noviceOrEwt: "NoviceorEwt",
@@ -233,6 +234,8 @@ const eventsFields = {
   lastSyncSource: "LastSyncSource",
   syncError: "SyncError",
   doNotSync: "DoNotSync",
+  /** Hash of key fields for skip/loop prevention (Ensure-PaveEventsSchema). */
+  syncHash: "SyncHash",
 } as const;
 
 const offersPromotionsFields = {
@@ -265,6 +268,9 @@ const permissionsFields = {
   canView: "CanView",
   canDownload: "CanDownload",
   canEdit: "CanEdit",
+  receiveDocumentNotifications: "ReceiveDocumentNotifications",
+  receiveExpiryNotifications: "ReceiveExpiryNotifications",
+  customerNotificationsEnabled: "CustomerNotificationsEnabled",
 } as const;
 
 const trainingCourseCategoriesFields = {
@@ -554,6 +560,7 @@ export const SHAREPOINT_LISTS = {
       lastSyncSource: "Last sync source",
       syncError: "Sync error",
       doNotSync: "Do not sync",
+      syncHash: "Sync hash",
     },
   } satisfies SharePointListDefinition<typeof eventsFields>,
 
@@ -595,6 +602,9 @@ export const SHAREPOINT_LISTS = {
       canView: "Can view",
       canDownload: "Can download",
       canEdit: "Can edit",
+      receiveDocumentNotifications: "Receive document notifications",
+      receiveExpiryNotifications: "Receive expiry notifications",
+      customerNotificationsEnabled: "Customer notifications enabled",
     },
   } satisfies SharePointListDefinition<typeof permissionsFields>,
 

@@ -3,6 +3,7 @@ import {
   createAdminRegister,
   listAdminRegister,
 } from "@/lib/services/adminCrudService";
+import { triggerMatrixSyncAfterRegister } from "@/lib/services/matrixSyncHook";
 
 export const dynamic = "force-dynamic";
 
@@ -21,10 +22,15 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   return withAdminApi(
     "POST /api/admin/training-records/in-house",
-    async (_context, req) => {
+    async (context, req) => {
       const body = (await req.json()) as Record<string, unknown>;
       const record = await createAdminRegister("inHouseCertificates", body);
-      return { record };
+      const matrixSync = await triggerMatrixSyncAfterRegister(
+        "inHouseCertificates",
+        record,
+        context.loggedInEmail,
+      );
+      return { record, matrixSync };
     },
     { errorMessage: "Failed to create In-House record" },
     request,

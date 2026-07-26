@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 
 import { handleApiError } from "@/lib/api/apiGuards";
-import { writeAuditLog } from "@/lib/services/auditLogService";
+import {
+  logDocumentDownload,
+  sanitizeAuditError,
+} from "@/lib/services/auditLogService";
 import {
   AccessDeniedError,
   NotFoundError,
@@ -30,13 +33,18 @@ export async function GET(
   context: { params: Promise<{ documentId: string }> },
 ) {
   let email = "unknown";
+  let roleType: string | null = null;
+  let company: string | null = null;
   let documentId = "";
+  let documentName: string | null = null;
 
   try {
     const params = await context.params;
     documentId = params.documentId;
     const customer = await requireCustomerAccess(request);
     email = customer.loggedInEmail;
+    roleType = customer.roleLabel;
+    company = customer.companyName;
 
     if (!customer.canDownload) {
       throw new AccessDeniedError();
@@ -52,6 +60,8 @@ export async function GET(
       throw new NotFoundError();
     }
 
+    documentName = document.name;
+
     if (!document.isFile || !document.companyMatches || !document.scopeAllowed) {
       throw new AccessDeniedError();
     }
@@ -63,12 +73,14 @@ export async function GET(
       throw new NotFoundError();
     }
 
-    await writeAuditLog({
+    await logDocumentDownload({
       userEmail: email,
-      action: "DOWNLOAD",
-      entityName: "Customer Documents",
-      itemId: documentId,
+      roleType,
+      company,
+      documentId,
+      documentName,
       success: true,
+      request,
     });
 
     const fileName = file.fileName ?? document.name;
@@ -81,13 +93,15 @@ export async function GET(
       },
     });
   } catch (error) {
-    await writeAuditLog({
+    await logDocumentDownload({
       userEmail: email,
-      action: "DOWNLOAD",
-      entityName: "Customer Documents",
-      itemId: documentId || null,
+      roleType,
+      company,
+      documentId,
+      documentName,
       success: false,
-      errorMessage: error instanceof Error ? error.message : "Unknown error",
+      errorMessage: sanitizeAuditError(error),
+      request,
     });
 
     return handleApiError(

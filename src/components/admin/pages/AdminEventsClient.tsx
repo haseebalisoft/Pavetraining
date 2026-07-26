@@ -1,13 +1,18 @@
 "use client";
 
+import { useCallback, useState } from "react";
+
 import {
   AdminCrudPage,
   type AdminColumn,
   type AdminFieldConfig,
 } from "@/components/admin/AdminCrudPage";
+import styles from "@/components/admin/admin.module.css";
+import { useAdminToast } from "@/components/admin/AdminToast";
+import { StatusBadge } from "@/components/ui/StatusBadge";
+import { readPublicApiError } from "@/lib/errors/publicMessages";
 import type { AdminEventRecord } from "@/lib/services/adminCrudService";
 import { formatDisplayDate } from "@/lib/training/expiryFilters";
-import { stripSharePointHtml } from "@/lib/text/stripSharePointHtml";
 import type { Company } from "@/types/models";
 
 function formatDateTime(value: string | null | undefined): string {
@@ -22,8 +27,15 @@ function formatDateTime(value: string | null | undefined): string {
   return `${day} ${time}`;
 }
 
-function plainText(value: string | null | undefined): string {
-  return stripSharePointHtml(value) ?? "—";
+function syncTone(
+  status: string | null | undefined,
+): "ok" | "warn" | "danger" | "neutral" {
+  const normalized = (status ?? "").trim().toLowerCase();
+  if (normalized === "synced") return "ok";
+  if (normalized === "pending") return "warn";
+  if (normalized === "failed") return "danger";
+  if (normalized === "skipped") return "neutral";
+  return "neutral";
 }
 
 const columns: AdminColumn<AdminEventRecord>[] = [
@@ -45,24 +57,37 @@ const columns: AdminColumn<AdminEventRecord>[] = [
     render: (row) => row.location ?? "—",
   },
   {
-    key: "trainingAddress",
-    header: "Training Address",
-    render: (row) => plainText(row.trainingAddress),
-  },
-  {
     key: "visible",
     header: "Customer Visible",
     render: (row) => (row.customerVisible ? "Yes" : "No"),
   },
   {
+    key: "doNotSync",
+    header: "Do Not Sync",
+    render: (row) => (row.doNotSync ? "Yes" : "No"),
+  },
+  {
     key: "syncStatus",
     header: "Sync Status",
-    render: (row) => row.syncStatus ?? "—",
+    render: (row) => (
+      <StatusBadge
+        label={row.syncStatus?.trim() || "—"}
+        tone={syncTone(row.syncStatus)}
+      />
+    ),
   },
   {
     key: "lastSynced",
     header: "Last Synced At",
     render: (row) => formatDateTime(row.lastSyncedAt),
+  },
+  {
+    key: "syncError",
+    header: "Sync Error",
+    render: (row) =>
+      row.syncStatus?.toLowerCase() === "failed"
+        ? row.syncError?.trim() || "—"
+        : "—",
   },
 ];
 
@@ -112,6 +137,12 @@ const fields: AdminFieldConfig[] = [
     readOnly: true,
   },
   {
+    name: "lastSyncedAt",
+    label: "Last Synced At",
+    type: "text",
+    readOnly: true,
+  },
+  {
     name: "syncError",
     label: "Sync Error",
     type: "textarea",
@@ -128,6 +159,82 @@ export function AdminEventsClient({
   initialRows: AdminEventRecord[];
   warnings?: string[];
 }) {
+  const { pushToast } = useAdminToast();
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const runSync = useCallback(
+    async (row: AdminEventRecord, mode: "sync" | "retry") => {
+      const path =
+        mode === "retry"
+          ? `/api/admin/events/${row.id}/retry-sync`
+          : `/api/admin/events/${row.id}/sync`;
+      setBusyId(row.id);
+      try {
+        const response = await fetch(path, { method: "POST" });
+        if (!response.ok) {
+          throw new Error(await readPublicApiError(response));
+        }
+        const payload = (await response.json()) as {
+          result?: {
+            status?: string;
+            error?: string | null;
+            reason?: string | null;
+          };
+        };
+        const result = payload.result;
+        const status = result?.status ?? "Unknown";
+        if (status === "Failed") {
+          pushToast(
+            result?.error || `Sync failed for “${row.title}”.`,
+            "error",
+          );
+        } else if (status === "Skipped") {
+          pushToast(result?.reason || `Sync skipped for “${row.title}”.`);
+        } else {
+          pushToast(
+            `Outlook sync ${status.toLowerCase()} for “${row.title}”.`,
+          );
+        }
+      } catch (error) {
+        pushToast(
+          error instanceof Error ? error.message : "Sync request failed.",
+          "error",
+        );
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [pushToast],
+  );
+
+  const markDoNotSync = useCallback(
+    async (row: AdminEventRecord, reload: () => Promise<void>) => {
+      setBusyId(row.id);
+      try {
+        const response = await fetch(`/api/admin/events/${row.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ doNotSync: true }),
+        });
+        if (!response.ok) {
+          throw new Error(await readPublicApiError(response));
+        }
+        pushToast(`“${row.title}” marked Do Not Sync.`);
+        await reload();
+      } catch (error) {
+        pushToast(
+          error instanceof Error
+            ? error.message
+            : "Failed to mark Do Not Sync.",
+          "error",
+        );
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [pushToast],
+  );
+
   return (
     <AdminCrudPage<AdminEventRecord>
       title="Events"
@@ -154,7 +261,73 @@ export function AdminEventsClient({
         (row) => row.location,
         (row) => row.description,
         (row) => row.syncStatus,
+        (row) => row.syncError,
       ]}
+      extraActions={(row, { reload }) => (
+        <>
+          <button
+            type="button"
+            className={styles.linkButton}
+            disabled={busyId === row.id || row.doNotSync}
+            onClick={() => {
+              void (async () => {
+                await runSync(row, "sync");
+                await reload();
+              })();
+            }}
+          >
+            {busyId === row.id ? "Working…" : "Sync now"}
+          </button>
+          {row.syncStatus?.toLowerCase() === "failed" ? (
+            <>
+              {" · "}
+              <button
+                type="button"
+                className={styles.linkButton}
+                disabled={busyId === row.id || row.doNotSync}
+                onClick={() => {
+                  void (async () => {
+                    await runSync(row, "retry");
+                    await reload();
+                  })();
+                }}
+              >
+                Retry sync
+              </button>
+            </>
+          ) : null}
+          {row.syncError?.trim() &&
+          row.syncStatus?.toLowerCase() === "failed" ? (
+            <>
+              {" · "}
+              <button
+                type="button"
+                className={styles.linkButton}
+                onClick={() => {
+                  pushToast(row.syncError || "No sync error details.", "error");
+                }}
+              >
+                View sync error
+              </button>
+            </>
+          ) : null}
+          {!row.doNotSync ? (
+            <>
+              {" · "}
+              <button
+                type="button"
+                className={styles.linkButton}
+                disabled={busyId === row.id}
+                onClick={() => {
+                  void markDoNotSync(row, reload);
+                }}
+              >
+                Mark Do Not Sync
+              </button>
+            </>
+          ) : null}
+        </>
+      )}
     />
   );
 }

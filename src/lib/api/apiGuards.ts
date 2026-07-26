@@ -4,7 +4,14 @@ import {
   PUBLIC_ERROR_MESSAGES,
   toPublicErrorPayload,
 } from "@/lib/services/errorHandler";
-import { extractItemId, writeAuditLog } from "@/lib/services/auditLogService";
+import {
+  extractItemId,
+  logAdminCreate,
+  logAdminDelete,
+  logAdminUpdate,
+  sanitizeAuditError,
+  writeAuditLog,
+} from "@/lib/services/auditLogService";
 import {
   requireAdminAccess,
   requireCustomerAccess,
@@ -24,6 +31,32 @@ function entityFromRouteLabel(routeLabel: string): string {
 
 function actionFromRequest(request: Request): string {
   return request.method.toUpperCase();
+}
+
+function inferEntityType(routeLabel: string, fallback?: string): string {
+  if (fallback) return fallback;
+  const path = entityFromRouteLabel(routeLabel).toLowerCase();
+  if (path.includes("compan")) return "Company List";
+  if (path.includes("workforce") || path.includes("candidate")) {
+    return "Workforce";
+  }
+  if (path.includes("document")) return "Customer Documents";
+  if (path.includes("event")) return "Events";
+  if (path.includes("permission")) return "Permissions";
+  if (path.includes("training-matrix") || path.includes("matrix")) {
+    return "Training Matrix";
+  }
+  if (path.includes("npors")) return "NPORS Register";
+  if (path.includes("eusr")) return "EUSR Register";
+  if (path.includes("streetworks") || path.includes("nrswa")) {
+    return "NRSWA Register";
+  }
+  if (path.includes("in-house")) return "In-House Certificates";
+  if (path.includes("nvq")) return "NVQ Register";
+  if (path.includes("offer")) return "Offers";
+  if (path.includes("settings")) return "Portal Settings";
+  if (path.includes("notification")) return "Notifications";
+  return entityFromRouteLabel(routeLabel);
 }
 
 /**
@@ -53,8 +86,12 @@ export async function withCustomerApi<T>(
         userEmail: email,
         action: actionFromRequest(request),
         entityName: options.entityName ?? entityFromRouteLabel(routeLabel),
+        entityType: inferEntityType(routeLabel, options.entityName),
         itemId: extractItemId(data),
         success: true,
+        roleType: context.roleLabel,
+        company: context.companyName,
+        request,
       });
     }
 
@@ -65,9 +102,10 @@ export async function withCustomerApi<T>(
         userEmail: email,
         action: actionFromRequest(request),
         entityName: options.entityName ?? entityFromRouteLabel(routeLabel),
+        entityType: inferEntityType(routeLabel, options.entityName),
         success: false,
-        errorMessage:
-          error instanceof Error ? error.message : "Unknown error",
+        errorMessage: sanitizeAuditError(error),
+        request,
       });
     }
 
@@ -95,20 +133,51 @@ export async function withAdminApi<T>(
   const method = request.method.toUpperCase();
   const shouldAudit =
     options?.audit ?? (method === "POST" || method === "PATCH" || method === "DELETE");
+  const entityType = inferEntityType(routeLabel, options?.entityName);
 
   try {
     const context = await requireAdminAccess();
     email = context.loggedInEmail;
     const data = await handler(context, request);
+    const itemId = extractItemId(data);
 
     if (shouldAudit) {
-      await writeAuditLog({
-        userEmail: email,
-        action: method,
-        entityName: options?.entityName ?? entityFromRouteLabel(routeLabel),
-        itemId: extractItemId(data),
-        success: true,
-      });
+      if (method === "POST") {
+        await logAdminCreate({
+          userEmail: email,
+          entityType,
+          entityId: itemId,
+          entityName: options?.entityName ?? entityType,
+          request,
+        });
+      } else if (method === "PATCH" || method === "PUT") {
+        await logAdminUpdate({
+          userEmail: email,
+          entityType,
+          entityId: itemId,
+          entityName: options?.entityName ?? entityType,
+          request,
+        });
+      } else if (method === "DELETE") {
+        await logAdminDelete({
+          userEmail: email,
+          entityType,
+          entityId: itemId,
+          entityName: options?.entityName ?? entityType,
+          request,
+        });
+      } else {
+        await writeAuditLog({
+          userEmail: email,
+          action: method,
+          entityName: options?.entityName ?? entityFromRouteLabel(routeLabel),
+          entityType,
+          itemId,
+          success: true,
+          roleType: "Admin",
+          request,
+        });
+      }
     }
 
     return NextResponse.json(data);
@@ -116,11 +185,20 @@ export async function withAdminApi<T>(
     if (shouldAudit) {
       await writeAuditLog({
         userEmail: email,
-        action: method,
+        action:
+          method === "POST"
+            ? "ADMIN_CREATE"
+            : method === "PATCH" || method === "PUT"
+              ? "ADMIN_UPDATE"
+              : method === "DELETE"
+                ? "ADMIN_DELETE"
+                : method,
         entityName: options?.entityName ?? entityFromRouteLabel(routeLabel),
+        entityType,
         success: false,
-        errorMessage:
-          error instanceof Error ? error.message : "Unknown error",
+        errorMessage: sanitizeAuditError(error),
+        roleType: "Admin",
+        request,
       });
     }
 

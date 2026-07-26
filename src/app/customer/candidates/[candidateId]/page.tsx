@@ -44,12 +44,42 @@ export default async function CustomerCandidateProfilePage({
   try {
     assertCompanyMatch(candidate.companyName, context.companyName);
   } catch {
+    const { logCandidateView } = await import("@/lib/services/auditLogService");
+    await logCandidateView({
+      userEmail: email,
+      roleType: context.roleLabel,
+      company: context.companyName,
+      candidateId,
+      candidateName: candidate.candidateName,
+      success: false,
+      errorMessage: "Candidate company mismatch",
+    });
     redirect("/access-denied");
   }
 
   if (!assertCandidateAccess(candidate, context)) {
+    const { logCandidateView } = await import("@/lib/services/auditLogService");
+    await logCandidateView({
+      userEmail: email,
+      roleType: context.roleLabel,
+      company: context.companyName,
+      candidateId,
+      candidateName: candidate.candidateName,
+      success: false,
+      errorMessage: "Candidate outside access scope",
+    });
     redirect("/access-denied");
   }
+
+  const { logCandidateView } = await import("@/lib/services/auditLogService");
+  await logCandidateView({
+    userEmail: email,
+    roleType: context.roleLabel,
+    company: context.companyName,
+    candidateId,
+    candidateName: candidate.candidateName,
+    success: true,
+  });
 
   const matrixRows = await getCustomerMatrixRecords(
     context.companyName,

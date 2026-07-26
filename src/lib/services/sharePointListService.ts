@@ -220,18 +220,54 @@ export function asLookupOrString(value: unknown): string | null {
     return direct;
   }
 
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const resolved = asLookupOrString(entry);
+      if (resolved) return resolved;
+    }
+    return null;
+  }
+
   if (value && typeof value === "object") {
     const record = value as {
       LookupValue?: unknown;
       lookupValue?: unknown;
       DisplayName?: unknown;
+      Title?: unknown;
     };
     return (
       asString(record.LookupValue) ??
       asString(record.lookupValue) ??
       asString(record.DisplayName) ??
+      asString(record.Title) ??
       null
     );
+  }
+
+  return null;
+}
+
+/**
+ * Graph often returns only `{Field}LookupId` without LookupValue.
+ * Reads nested LookupId or the sibling `{fieldInternalName}LookupId` field.
+ */
+export function extractLookupId(
+  fields: SharePointFields | Record<string, unknown>,
+  fieldInternalName: string,
+): string | null {
+  const direct = fields[fieldInternalName];
+  if (direct && typeof direct === "object" && "LookupId" in direct) {
+    const id = (direct as { LookupId?: unknown }).LookupId;
+    if (typeof id === "number" || typeof id === "string") {
+      const text = String(id).trim();
+      if (text) return text;
+    }
+  }
+
+  const lookupIdField = fields[`${fieldInternalName}LookupId`];
+  if (typeof lookupIdField === "number" || typeof lookupIdField === "string") {
+    const text = String(lookupIdField).trim();
+    return text || null;
   }
 
   return null;

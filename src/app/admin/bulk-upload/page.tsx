@@ -1,10 +1,5 @@
-import { AdminPlaceholder } from "@/components/admin/AdminPlaceholder";
+import { AdminBulkUploadClient } from "@/components/admin/pages/AdminBulkUploadClient";
 
 export default function AdminBulkUploadPage() {
-  return (
-    <AdminPlaceholder
-      title="Bulk Upload"
-      description="Bulk import tools for companies, candidates, and documents are not connected yet. Coming next."
-    />
-  );
+  return <AdminBulkUploadClient />;
 }

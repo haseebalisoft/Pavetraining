@@ -3,11 +3,13 @@ import "server-only";
 import { cache } from "react";
 
 import { getSharePointFields } from "@/lib/schema/sharepointSchema";
+import { getAllCompanies } from "@/lib/services/companyService";
 import {
   asLookupOrString,
   asNullableString,
   asString,
   buildSchemaFieldEqualsFilter,
+  extractLookupId,
   getListItemByKey,
   getListItemsByKey,
   type SharePointFields,
@@ -38,11 +40,16 @@ function asDepartment(value: unknown): string | null {
 function mapWorkforceItem(
   id: string,
   fields: SharePointFields,
+  companyNameById?: Map<string, string>,
 ): WorkforceCandidate | null {
   const candidateName = asString(fields[workforceFields.candidateName]);
+  const companyLookupId = extractLookupId(fields, workforceFields.companyName);
   const companyName =
     asLookupOrString(fields[workforceFields.companyName]) ??
-    asString(fields[workforceFields.companyName]);
+    asString(fields[workforceFields.companyName]) ??
+    (companyLookupId && companyNameById
+      ? (companyNameById.get(companyLookupId) ?? undefined)
+      : undefined);
 
   if (!candidateName || !companyName) {
     return null;
@@ -76,6 +83,11 @@ function mapWorkforceItem(
   };
 }
 
+async function companyNameLookupMap(): Promise<Map<string, string>> {
+  const companies = await getAllCompanies();
+  return new Map(companies.map((row) => [row.id, row.companyName] as const));
+}
+
 export async function getWorkforceById(
   candidateId: string,
 ): Promise<WorkforceCandidate | null> {
@@ -84,24 +96,39 @@ export async function getWorkforceById(
     return null;
   }
 
-  return mapWorkforceItem(item.id, item.fields);
+  const companyNameById = await companyNameLookupMap();
+  return mapWorkforceItem(item.id, item.fields, companyNameById);
 }
 
 /** Deduped per request so name-map + scope filters share one Graph read. */
 export const getWorkforceByCompanyName = cache(
   async (companyName: string): Promise<WorkforceCandidate[]> => {
+    const companies = await getAllCompanies();
+    const companyNameById = new Map(
+      companies.map((row) => [row.id, row.companyName] as const),
+    );
+    const company = companies.find(
+      (row) =>
+        row.companyName.trim().toLowerCase() ===
+        companyName.trim().toLowerCase(),
+    );
+
+    // Prefer LookupId filter — Graph text filters on Lookup CompanyName are unreliable.
     const items = await getListItemsByKey("workforce", {
-      filter: buildSchemaFieldEqualsFilter(
-        "workforce",
-        "companyName",
-        companyName,
-      ),
+      filter: company
+        ? `fields/CompanyNameLookupId eq ${Number(company.id)}`
+        : buildSchemaFieldEqualsFilter("workforce", "companyName", companyName),
       top: 5000,
     });
 
     return items
-      .map((item) => mapWorkforceItem(item.id, item.fields))
-      .filter((row): row is WorkforceCandidate => row !== null);
+      .map((item) => mapWorkforceItem(item.id, item.fields, companyNameById))
+      .filter((row): row is WorkforceCandidate => row !== null)
+      .filter(
+        (row) =>
+          row.companyName.trim().toLowerCase() ===
+          companyName.trim().toLowerCase(),
+      );
   },
 );
 

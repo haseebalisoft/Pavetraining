@@ -225,7 +225,37 @@ function mapPermissionItem(
     canEdit: asBoolean(fields[permissionFields.canEdit]),
     canAccessAdmin,
     canAccessCustomer,
+    receiveDocumentNotifications: preferenceOrDefault(
+      fields,
+      "receiveDocumentNotifications",
+      true,
+    ),
+    receiveExpiryNotifications: preferenceOrDefault(
+      fields,
+      "receiveExpiryNotifications",
+      true,
+    ),
+    customerNotificationsEnabled: preferenceOrDefault(
+      fields,
+      "customerNotificationsEnabled",
+      true,
+    ),
   };
+}
+
+/**
+ * Missing preference columns default to enabled so existing tenants keep notifying.
+ */
+function preferenceOrDefault(
+  fields: SharePointFields,
+  key: keyof typeof permissionFields,
+  defaultValue: boolean,
+): boolean {
+  const internal = permissionFields[key];
+  if (!(internal in fields)) {
+    return defaultValue;
+  }
+  return asBoolean(fields[internal]);
 }
 
 /**

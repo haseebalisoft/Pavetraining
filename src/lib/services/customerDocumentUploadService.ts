@@ -55,15 +55,21 @@ export type UploadDocumentInput = {
   candidateId?: string | null;
   documentType: string;
   customerVisible?: boolean;
+  /** When true, customers may be notified (subject to type/visibility rules). */
+  notifyCustomer?: boolean;
+  /** Bulk/import uploads should set true to suppress emails. */
+  suppressNotifications?: boolean;
   fileName: string;
   contentType?: string | null;
   bytes: Uint8Array;
+  actorEmail?: string | null;
 };
 
 export type UploadDocumentResult = {
   record: AdminDocumentRecord;
   folderPath: string;
   destinationFolder: DocumentDestinationFolder;
+  notification?: import("@/types/notifications").DocumentNotificationResult | null;
 };
 
 function sanitizeFileName(fileName: string): string {
@@ -214,11 +220,20 @@ export async function uploadCustomerDocument(
     throw new Error("Uploaded file has no SharePoint list item.");
   }
 
+  const customerVisible = input.customerVisible !== false;
+  const notifyCustomer =
+    input.notifyCustomer === true ||
+    (input.notifyCustomer !== false &&
+      customerVisible &&
+      !input.suppressNotifications);
+
   const metaPayload: SharePointFields = {
     ...toSharePointFields("customerDocuments", {
       title: fileName,
       documentType,
-      customerVisible: input.customerVisible !== false,
+      customerVisible,
+      notifyCustomer,
+      notificationSent: false,
     }),
     [documentFields.companyLookupId]: Number(company.id),
   };
@@ -240,9 +255,23 @@ export async function uploadCustomerDocument(
     throw new Error("Uploaded document could not be mapped.");
   }
 
+  const { triggerDocumentNotificationSafe } = await import(
+    "@/lib/services/documentNotificationService"
+  );
+  const notification = await triggerDocumentNotificationSafe(record, {
+    suppressNotifications: Boolean(input.suppressNotifications),
+    actorEmail: input.actorEmail,
+  });
+
+  const finalRecord =
+    (await getListItemByKey("customerDocuments", listItemId).then((item) =>
+      item ? mapDocument(item) : null,
+    )) ?? record;
+
   return {
-    record,
+    record: finalRecord,
     folderPath: folder.path,
     destinationFolder: folder.destinationFolder,
+    notification,
   };
 }

@@ -1,16 +1,19 @@
 import "server-only";
 
 import { getSharePointFields } from "@/lib/schema/sharepointSchema";
+import { listAuditLogs } from "@/lib/services/auditLogService";
 import {
   getAllCompanies,
   getCompanyById,
   isActiveCompanyStatus,
 } from "@/lib/services/companyService";
+import { COMPANY_LEVEL_FOLDERS } from "@/lib/services/customerDocumentsFolderService";
 import {
   asBoolean,
   asLookupOrString,
   asNullableString,
   asString,
+  extractLookupId,
   getListItemsByKey,
   type SharePointFields,
   type SharePointListItem,
@@ -37,7 +40,18 @@ const nvqFields = getSharePointFields("nvqRegister");
 const documentFields = getSharePointFields("customerDocuments");
 const eventFields = getSharePointFields("events");
 const permissionFields = getSharePointFields("permissions");
-const logFields = getSharePointFields("trainingManagerLogs");
+
+const FOLDER_NAME_BLOCKLIST = new Set(
+  [
+    ...COMPANY_LEVEL_FOLDERS,
+    "NVQ Documents",
+    "Training Documents",
+    "Certificates",
+    "Forms",
+    "Card Scans",
+    "Other Documents",
+  ].map((name) => name.trim().toLowerCase()),
+);
 
 function matchesCompanyFilter(
   value: string | null | undefined,
@@ -51,12 +65,33 @@ function matchesCompanyFilter(
 
 function companyFromFields(
   fields: SharePointFields,
+  companyNameById: Map<string, string>,
   ...keys: string[]
 ): string | null {
   for (const key of keys) {
     const value = asLookupOrString(fields[key]);
-    if (value) {
-      return value;
+    if (value) return value;
+    const lookupId = extractLookupId(fields, key);
+    if (lookupId) {
+      const resolved = companyNameById.get(lookupId);
+      if (resolved) return resolved;
+    }
+  }
+  return null;
+}
+
+function candidateFromFields(
+  fields: SharePointFields,
+  workforceNameById: Map<string, string>,
+  ...keys: string[]
+): string | null {
+  for (const key of keys) {
+    const value = asLookupOrString(fields[key]) ?? asString(fields[key]);
+    if (value) return value;
+    const lookupId = extractLookupId(fields, key);
+    if (lookupId) {
+      const resolved = workforceNameById.get(lookupId);
+      if (resolved) return resolved;
     }
   }
   return null;
@@ -96,6 +131,8 @@ function collectTrainingWarnings(
   source: string,
   items: SharePointListItem[],
   companyName: string | null,
+  companyNameById: Map<string, string>,
+  workforceNameById: Map<string, string>,
   map: {
     companyField: string;
     candidateField: string;
@@ -104,7 +141,11 @@ function collectTrainingWarnings(
   },
 ) {
   for (const item of items) {
-    const rowCompany = companyFromFields(item.fields, map.companyField);
+    const rowCompany = companyFromFields(
+      item.fields,
+      companyNameById,
+      map.companyField,
+    );
     if (!matchesCompanyFilter(rowCompany, companyName)) {
       continue;
     }
@@ -126,7 +167,11 @@ function collectTrainingWarnings(
     pushWarning(warnings, {
       id: item.id,
       source,
-      candidateName: asNullableString(item.fields[map.candidateField]),
+      candidateName: candidateFromFields(
+        item.fields,
+        workforceNameById,
+        map.candidateField,
+      ),
       issues,
     });
   }
@@ -134,7 +179,18 @@ function collectTrainingWarnings(
 
 function isSharePointFolder(fields: SharePointFields): boolean {
   const fs = fields[documentFields.fsObjType];
-  return fs === 1 || fs === "1";
+  if (fs === 1 || fs === "1") return true;
+  const contentType = asString(fields.ContentType) ?? "";
+  if (/folder/i.test(contentType)) return true;
+  const fileRef = asNullableString(fields[documentFields.fileRef]) ?? "";
+  if (fileRef.endsWith("/")) return true;
+  return false;
+}
+
+function isNoiseDocumentName(name: string | null | undefined): boolean {
+  const normalized = (name ?? "").trim().toLowerCase();
+  if (!normalized) return true;
+  return FOLDER_NAME_BLOCKLIST.has(normalized);
 }
 
 function expiryTone(
@@ -144,6 +200,21 @@ function expiryTone(
   if (status === "upcoming") return "warn";
   if (status === "valid") return "ok";
   return "missing";
+}
+
+function formatActivityTitle(
+  action: string,
+  entityType: string,
+  entityName: string | null,
+): string {
+  const cleanAction = action.replace(/_/g, " ").trim();
+  if (entityName?.trim()) {
+    return `${cleanAction} · ${entityName.trim()}`.slice(0, 120);
+  }
+  if (entityType.trim() && entityType !== "Unknown") {
+    return `${cleanAction} · ${entityType}`.slice(0, 120);
+  }
+  return cleanAction.slice(0, 120) || "Portal event";
 }
 
 /**
@@ -160,6 +231,9 @@ export async function getAdminDashboard(
       null)
     : null;
   const companyName = selectedCompany?.companyName ?? null;
+  const companyNameById = new Map(
+    companies.map((row) => [row.id, row.companyName] as const),
+  );
 
   const [
     workforce,
@@ -172,7 +246,7 @@ export async function getAdminDashboard(
     documents,
     events,
     permissions,
-    logs,
+    auditLogs,
   ] = await Promise.all([
     getListItemsByKey("workforce", { top: 5000 }),
     getListItemsByKey("trainingMatrix", { top: 5000 }),
@@ -184,12 +258,32 @@ export async function getAdminDashboard(
     getListItemsByKey("customerDocuments", { top: 5000 }),
     getListItemsByKey("events", { top: 5000 }),
     getListItemsByKey("permissions", { top: 5000 }).catch(() => []),
-    getListItemsByKey("trainingManagerLogs", { top: 50 }).catch(() => []),
+    listAuditLogs({ top: 40 }).catch(() => []),
   ]);
+
+  const workforceNameById = new Map<string, string>();
+  const workforceCompanyById = new Map<string, string>();
+  for (const item of workforce) {
+    const name =
+      asString(item.fields[workforceFields.candidateName]) ??
+      asLookupOrString(item.fields[workforceFields.candidateName]);
+    if (!name) continue;
+    workforceNameById.set(item.id, name);
+    const company = companyFromFields(
+      item.fields,
+      companyNameById,
+      workforceFields.companyName,
+    );
+    if (company) workforceCompanyById.set(item.id, company);
+  }
 
   const filteredWorkforce = workforce.filter((item) =>
     matchesCompanyFilter(
-      companyFromFields(item.fields, workforceFields.companyName),
+      companyFromFields(
+        item.fields,
+        companyNameById,
+        workforceFields.companyName,
+      ),
       companyName,
     ),
   );
@@ -201,16 +295,17 @@ export async function getAdminDashboard(
     return !status || status === "active";
   }).length;
 
-  const filteredMatrix = matrix.filter((item) =>
-    matchesCompanyFilter(
+  const filteredMatrix = matrix.filter((item) => {
+    const candidateId = extractLookupId(item.fields, matrixFields.candidateName);
+    const rowCompany =
       companyFromFields(
         item.fields,
-        matrixFields.companyName,
+        companyNameById,
         matrixFields.matrixCompany,
-      ),
-      companyName,
-    ),
-  );
+        matrixFields.companyName,
+      ) ?? (candidateId ? (workforceCompanyById.get(candidateId) ?? null) : null);
+    return matchesCompanyFilter(rowCompany, companyName);
+  });
 
   let expiredTraining = 0;
   let expiringWithin3Months = 0;
@@ -238,15 +333,31 @@ export async function getAdminDashboard(
       expiry.status === "urgent" ||
       expiry.status === "upcoming"
     ) {
+      const candidateId = extractLookupId(
+        item.fields,
+        matrixFields.candidateName,
+      );
+      const candidateName = candidateFromFields(
+        item.fields,
+        workforceNameById,
+        matrixFields.candidateName,
+      );
+      // Skip unresolved rows — never show "Unknown" placeholders.
+      if (!candidateName) continue;
+
       upcomingExpiries.push({
         id: item.id,
-        candidateName:
-          asString(item.fields[matrixFields.candidateName]) ?? "Unknown",
-        companyName: companyFromFields(
-          item.fields,
-          matrixFields.companyName,
-          matrixFields.matrixCompany,
-        ),
+        candidateName,
+        companyName:
+          companyFromFields(
+            item.fields,
+            companyNameById,
+            matrixFields.matrixCompany,
+            matrixFields.companyName,
+          ) ??
+          (candidateId
+            ? (workforceCompanyById.get(candidateId) ?? null)
+            : null),
         nextExpiryDate: nextExpiry,
         statusLabel: expiry.label,
         statusTone: expiryTone(expiry.status),
@@ -268,6 +379,7 @@ export async function getAdminDashboard(
     matchesCompanyFilter(
       companyFromFields(
         item.fields,
+        companyNameById,
         nvqFields.companyName,
         nvqFields.nvqCompany,
       ),
@@ -291,7 +403,15 @@ export async function getAdminDashboard(
 
   const filteredDocuments = documents.filter((item) => {
     if (isSharePointFolder(item.fields)) return false;
-    const rowCompany = companyFromFields(item.fields, documentFields.company);
+    const name =
+      asString(item.fields[documentFields.fileLeafRef]) ??
+      asString(item.fields[documentFields.title]);
+    if (isNoiseDocumentName(name)) return false;
+    const rowCompany = companyFromFields(
+      item.fields,
+      companyNameById,
+      documentFields.company,
+    );
     return matchesCompanyFilter(rowCompany, companyName);
   });
 
@@ -306,19 +426,29 @@ export async function getAdminDashboard(
         asNullableString(item.fields[documentFields.modified]) ??
         item.createdDateTime ??
         null;
+      const name =
+        asString(item.fields[documentFields.fileLeafRef]) ??
+        asString(item.fields[documentFields.title]);
+      if (!name || isNoiseDocumentName(name)) return null;
       return {
         id: item.id,
-        name:
-          asString(item.fields[documentFields.title]) ??
-          asString(item.fields[documentFields.fileLeafRef]) ??
-          "Document",
-        company: companyFromFields(item.fields, documentFields.company),
-        candidate: asLookupOrString(item.fields[documentFields.candidate]),
+        name,
+        company: companyFromFields(
+          item.fields,
+          companyNameById,
+          documentFields.company,
+        ),
+        candidate: candidateFromFields(
+          item.fields,
+          workforceNameById,
+          documentFields.candidate,
+        ),
         modifiedDate,
         customerVisible: asBoolean(item.fields[documentFields.customerVisible]),
         _sort: modifiedDate ? new Date(modifiedDate).getTime() : 0,
       };
     })
+    .filter((row): row is NonNullable<typeof row> => row !== null)
     .sort((a, b) => b._sort - a._sort)
     .slice(0, 8)
     .map(({ _sort: _ignored, ...row }) => row);
@@ -342,6 +472,7 @@ export async function getAdminDashboard(
         title: asString(item.fields[eventFields.title]) ?? "Event",
         company: companyFromFields(
           item.fields,
+          companyNameById,
           eventFields.eventCompany,
         ),
         eventDate,
@@ -362,6 +493,7 @@ export async function getAdminDashboard(
   const accessInvitationsPending = permissions.filter((item) => {
     const rowCompany = companyFromFields(
       item.fields,
+      companyNameById,
       permissionFields.company,
     );
     if (!matchesCompanyFilter(rowCompany, companyName)) return false;
@@ -371,26 +503,30 @@ export async function getAdminDashboard(
     return status === "pending" || status === "invited" || status === "inactive";
   }).length;
 
-  const recentActivity: AdminDashboardActivityRow[] = logs
-    .map((item) => ({
-      id: item.id,
-      title: asString(item.fields[logFields.title]) ?? "Activity",
-      userEmail: asNullableString(item.fields[logFields.userEmail]),
-      timestamp:
-        asNullableString(item.fields[logFields.timestamp]) ??
-        item.createdDateTime ??
-        null,
-      detail: asNullableString(item.fields[logFields.notes]),
-      _sort: (() => {
-        const stamp =
-          asNullableString(item.fields[logFields.timestamp]) ??
-          item.createdDateTime;
-        return stamp ? new Date(stamp).getTime() : 0;
-      })(),
-    }))
-    .sort((a, b) => b._sort - a._sort)
+  const recentActivity: AdminDashboardActivityRow[] = auditLogs
+    .filter((row) => {
+      const action = (row.action ?? "").trim();
+      if (!action || action.toLowerCase() === "activity") return false;
+      if (
+        !row.userEmail ||
+        row.userEmail === "unknown" ||
+        row.userEmail === "system"
+      ) {
+        if (!row.entityType || row.entityType === "Unknown") return false;
+      }
+      if (companyName && row.company) {
+        return matchesCompanyFilter(row.company, companyName);
+      }
+      return true;
+    })
     .slice(0, 8)
-    .map(({ _sort: _ignored, ...row }) => row);
+    .map((row) => ({
+      id: row.id,
+      title: formatActivityTitle(row.action, row.entityType, row.entityName),
+      userEmail: row.userEmail || null,
+      timestamp: row.timestamp,
+      detail: row.errorMessage,
+    }));
 
   const stats: AdminDashboardStats = {
     totalCompanies: companies.length,
@@ -412,45 +548,84 @@ export async function getAdminDashboard(
   };
 
   const warnings: AdminDataWarning[] = [];
-  collectTrainingWarnings(warnings, "NPORS", npors, companyName, {
-    companyField: nporsFields.companyName,
-    candidateField: nporsFields.candidateName,
-    addressField: nporsFields.trainingAddress,
-    visibleField: nporsFields.customerVisible,
-  });
-  collectTrainingWarnings(warnings, "EUSR", eusr, companyName, {
-    companyField: eusrFields.companyName,
-    candidateField: eusrFields.candidateName,
-    addressField: eusrFields.trainingAddress,
-    visibleField: eusrFields.customerVisible,
-  });
-  collectTrainingWarnings(warnings, "Streetworks", streetworks, companyName, {
-    companyField: streetworksFields.companyName,
-    candidateField: streetworksFields.candidateName,
-    addressField: streetworksFields.trainingAddress,
-    visibleField: streetworksFields.customerVisible,
-  });
-  collectTrainingWarnings(warnings, "In-House", inHouse, companyName, {
-    companyField: inHouseFields.companyName,
-    candidateField: inHouseFields.candidateName,
-    addressField: inHouseFields.trainingAddress,
-    visibleField: inHouseFields.customerVisible,
-  });
+  collectTrainingWarnings(
+    warnings,
+    "NPORS",
+    npors,
+    companyName,
+    companyNameById,
+    workforceNameById,
+    {
+      companyField: nporsFields.companyName,
+      candidateField: nporsFields.candidateName,
+      addressField: nporsFields.trainingAddress,
+      visibleField: nporsFields.customerVisible,
+    },
+  );
+  collectTrainingWarnings(
+    warnings,
+    "EUSR",
+    eusr,
+    companyName,
+    companyNameById,
+    workforceNameById,
+    {
+      companyField: eusrFields.companyName,
+      candidateField: eusrFields.candidateName,
+      addressField: eusrFields.trainingAddress,
+      visibleField: eusrFields.customerVisible,
+    },
+  );
+  collectTrainingWarnings(
+    warnings,
+    "Streetworks",
+    streetworks,
+    companyName,
+    companyNameById,
+    workforceNameById,
+    {
+      companyField: streetworksFields.companyName,
+      candidateField: streetworksFields.candidateName,
+      addressField: streetworksFields.trainingAddress,
+      visibleField: streetworksFields.customerVisible,
+    },
+  );
+  collectTrainingWarnings(
+    warnings,
+    "In-House",
+    inHouse,
+    companyName,
+    companyNameById,
+    workforceNameById,
+    {
+      companyField: inHouseFields.companyName,
+      candidateField: inHouseFields.candidateName,
+      addressField: inHouseFields.trainingAddress,
+      visibleField: inHouseFields.customerVisible,
+    },
+  );
 
   for (const item of filteredMatrix) {
     const issues: AdminWarningIssue[] = [];
-    const rowCompany = companyFromFields(
-      item.fields,
-      matrixFields.companyName,
-      matrixFields.matrixCompany,
-    );
+    const candidateId = extractLookupId(item.fields, matrixFields.candidateName);
+    const rowCompany =
+      companyFromFields(
+        item.fields,
+        companyNameById,
+        matrixFields.matrixCompany,
+        matrixFields.companyName,
+      ) ?? (candidateId ? (workforceCompanyById.get(candidateId) ?? null) : null);
     if (!rowCompany) {
       issues.push("CompanyName");
     }
     pushWarning(warnings, {
       id: item.id,
       source: "Training Matrix",
-      candidateName: asNullableString(item.fields[matrixFields.candidateName]),
+      candidateName: candidateFromFields(
+        item.fields,
+        workforceNameById,
+        matrixFields.candidateName,
+      ),
       issues,
     });
   }

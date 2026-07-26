@@ -1,10 +1,7 @@
-import { AdminPlaceholder } from "@/components/admin/AdminPlaceholder";
+import { AdminLogsClient } from "@/components/admin/pages/AdminLogsClient";
+
+export const dynamic = "force-dynamic";
 
 export default function AdminLogsPage() {
-  return (
-    <AdminPlaceholder
-      title="Audit / Activity Log"
-      description="Operational and sync logs are not connected yet. Coming next."
-    />
-  );
+  return <AdminLogsClient />;
 }

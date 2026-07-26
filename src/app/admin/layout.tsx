@@ -33,6 +33,17 @@ export default async function AdminLayout({
   try {
     context = await getAdminContext(email);
   } catch {
+    try {
+      const { logAccessDenied } = await import("@/lib/services/auditLogService");
+      await logAccessDenied({
+        userEmail: email,
+        entityType: "Admin Portal",
+        entityName: "/admin",
+        errorMessage: "Admin access denied",
+      });
+    } catch {
+      // ignore audit failures
+    }
     redirect("/access-denied");
   }
 

@@ -9,6 +9,7 @@ import {
   asNullableString,
   asString,
   createListItemByKey,
+  extractLookupId,
   getListItemByKey,
   getListItemsByKey,
   listHasColumn,
@@ -227,9 +228,43 @@ export interface AdminWorkforceRecord {
   supervisor: string | null;
 }
 
-function mapWorkforce(item: SharePointListItem): AdminWorkforceRecord | null {
-  const candidateName = asString(item.fields[workforceFields.candidateName]);
-  const companyName = asString(item.fields[workforceFields.companyName]);
+function mapWorkforceDepartment(value: unknown): string | null {
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((entry) => {
+        if (typeof entry === "string") return entry.trim();
+        if (entry && typeof entry === "object") {
+          const record = entry as { LookupValue?: unknown; Label?: unknown };
+          return (
+            asString(record.LookupValue) ?? asString(record.Label) ?? ""
+          ).trim();
+        }
+        return "";
+      })
+      .filter(Boolean);
+    return parts.length ? parts.join(", ") : null;
+  }
+  return asLookupOrString(value) ?? asNullableString(value);
+}
+
+function mapWorkforce(
+  item: SharePointListItem,
+  companyNameById?: Map<string, string>,
+): AdminWorkforceRecord | null {
+  // Candidate Name is text; Company Name is a Lookup (Graph often returns LookupId only).
+  const candidateName =
+    asLookupOrString(item.fields[workforceFields.candidateName]) ??
+    asString(item.fields[workforceFields.candidateName]);
+  const companyLookupId = extractLookupId(
+    item.fields,
+    workforceFields.companyName,
+  );
+  const companyName =
+    asLookupOrString(item.fields[workforceFields.companyName]) ??
+    asString(item.fields[workforceFields.companyName]) ??
+    (companyLookupId && companyNameById
+      ? (companyNameById.get(companyLookupId) ?? null)
+      : null);
   if (!candidateName || !companyName) return null;
   return {
     id: item.id,
@@ -239,19 +274,27 @@ function mapWorkforce(item: SharePointListItem): AdminWorkforceRecord | null {
       item.fields[workforceFields.workforceNumber],
     ),
     dateOfBirth: asNullableString(item.fields[workforceFields.dateOfBirth]),
-    department: asNullableString(item.fields[workforceFields.department]),
+    department: mapWorkforceDepartment(item.fields[workforceFields.department]),
     status: asNullableString(item.fields[workforceFields.status]),
-    trainingManager: asNullableString(
-      item.fields[workforceFields.trainingManager],
-    ),
-    supervisor: asNullableString(item.fields[workforceFields.supervisor]),
+    trainingManager:
+      asLookupOrString(item.fields[workforceFields.trainingManager]) ??
+      asNullableString(item.fields[workforceFields.trainingManager]),
+    supervisor:
+      asLookupOrString(item.fields[workforceFields.supervisor]) ??
+      asNullableString(item.fields[workforceFields.supervisor]),
   };
 }
 
 export async function listAdminWorkforce(companyName?: string | null) {
-  const items = await getListItemsByKey("workforce", { top: 5000 });
+  const [items, companies] = await Promise.all([
+    getListItemsByKey("workforce", { top: 5000 }),
+    listAdminCompanies(),
+  ]);
+  const companyNameById = new Map(
+    companies.map((row) => [row.id, row.companyName] as const),
+  );
   return items
-    .map(mapWorkforce)
+    .map((item) => mapWorkforce(item, companyNameById))
     .filter((row): row is AdminWorkforceRecord => {
       if (!row) return false;
       return matchesCompany(row.companyName, companyName);
@@ -263,32 +306,65 @@ export async function createAdminWorkforce(input: Record<string, unknown>) {
   const candidateName = requireText(input.candidateName, "Candidate name");
   const companyName = requireText(input.companyName, "Company");
   const workforceNumber = optionalText(input.workforceNumber);
+
+  const companies = await listAdminCompanies();
+  const company =
+    companies.find(
+      (row) =>
+        row.companyName.trim().toLowerCase() ===
+        companyName.trim().toLowerCase(),
+    ) ??
+    companies.find((row) => {
+      const normalize = (value: string) =>
+        value
+          .trim()
+          .toLowerCase()
+          .replace(/\bltd\b\.?/g, "")
+          .replace(/\blimited\b/g, "")
+          .replace(/[^\w\s]/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+      return normalize(row.companyName) === normalize(companyName);
+    }) ??
+    null;
+  if (!company) {
+    throw new ValidationError(`Company "${companyName}" was not found.`);
+  }
+
+  // CompanyName is a Lookup — write LookupId, not free text.
   const payload = toSharePointFields("workforce", {
     candidateName,
-    companyName,
     workforceNumber,
     dateOfBirth: asDateInput(input.dateOfBirth),
     department: optionalText(input.department),
     status: optionalText(input.status) ?? "Active",
-    trainingManager: optionalText(input.trainingManager),
-    supervisor: optionalText(input.supervisor),
   });
-  const item = await createListItemByKey("workforce", payload);
-  const mapped = mapWorkforce(item);
-  if (!mapped) throw new Error("Created candidate could not be mapped.");
+  payload.CompanyNameLookupId = Number(company.id);
 
-  const companies = await listAdminCompanies();
-  const company = companies.find(
-    (row) =>
-      row.companyName.trim().toLowerCase() === companyName.trim().toLowerCase(),
-  );
+  const item = await createListItemByKey("workforce", payload);
+  const mapped =
+    mapWorkforce(
+      item,
+      new Map([[company.id, company.companyName]]),
+    ) ??
+    ({
+      id: item.id,
+      candidateName,
+      companyName: company.companyName,
+      workforceNumber,
+      dateOfBirth: asNullableString(payload[workforceFields.dateOfBirth]),
+      department: optionalText(input.department),
+      status: optionalText(input.status) ?? "Active",
+      trainingManager: null,
+      supervisor: null,
+    } satisfies AdminWorkforceRecord);
 
   const { ensureCandidateDocumentFolders } = await import(
     "@/lib/services/customerDocumentsFolderService"
   );
   const folderResult = await ensureCandidateDocumentFolders({
-    companyName,
-    companyNumber: company?.companyNumber ?? null,
+    companyName: company.companyName,
+    companyNumber: company.companyNumber ?? null,
     candidateName,
     workforceNumber,
   });
@@ -308,7 +384,6 @@ export async function updateAdminWorkforce(
 
   const payload = toSharePointFields("workforce", {
     candidateName: optionalText(input.candidateName) ?? undefined,
-    companyName: optionalText(input.companyName) ?? undefined,
     workforceNumber:
       input.workforceNumber === undefined
         ? undefined
@@ -322,18 +397,30 @@ export async function updateAdminWorkforce(
         ? undefined
         : optionalText(input.department),
     status: optionalText(input.status) ?? undefined,
-    trainingManager:
-      input.trainingManager === undefined
-        ? undefined
-        : optionalText(input.trainingManager),
-    supervisor:
-      input.supervisor === undefined
-        ? undefined
-        : optionalText(input.supervisor),
   });
 
+  if (input.companyName !== undefined) {
+    const companyName = optionalText(input.companyName);
+    if (companyName) {
+      const companies = await listAdminCompanies();
+      const company = companies.find(
+        (row) =>
+          row.companyName.trim().toLowerCase() ===
+          companyName.trim().toLowerCase(),
+      );
+      if (!company) {
+        throw new ValidationError(`Company "${companyName}" was not found.`);
+      }
+      payload.CompanyNameLookupId = Number(company.id);
+    }
+  }
+
   const item = await updateListItemFieldsByKey("workforce", id, payload);
-  const mapped = mapWorkforce(item);
+  const companies = await listAdminCompanies();
+  const companyNameById = new Map(
+    companies.map((row) => [row.id, row.companyName] as const),
+  );
+  const mapped = mapWorkforce(item, companyNameById);
   if (!mapped) throw new Error("Updated candidate could not be mapped.");
   return mapped;
 }
@@ -361,15 +448,48 @@ export interface AdminMatrixRecord {
   n100Expiry: string | null;
 }
 
-function mapMatrix(item: SharePointListItem): AdminMatrixRecord | null {
-  const candidateName = asString(item.fields[matrixFields.candidateName]);
+function mapMatrix(
+  item: SharePointListItem,
+  lookups?: {
+    companyNameById?: Map<string, string>;
+    workforceById?: Map<string, AdminWorkforceRecord>;
+  },
+): AdminMatrixRecord | null {
+  // Candidate Name + company fields are Lookups — Graph often returns LookupId only.
+  const candidateLookupId = extractLookupId(
+    item.fields,
+    matrixFields.candidateName,
+  );
+  const companyLookupId =
+    extractLookupId(item.fields, matrixFields.matrixCompany) ??
+    extractLookupId(item.fields, matrixFields.companyName);
+
+  const workforceHit =
+    candidateLookupId && lookups?.workforceById
+      ? lookups.workforceById.get(candidateLookupId)
+      : undefined;
+
+  const candidateName =
+    asLookupOrString(item.fields[matrixFields.candidateName]) ??
+    asString(item.fields[matrixFields.candidateName]) ??
+    workforceHit?.candidateName ??
+    null;
+
   if (!candidateName) return null;
+
+  const companyName =
+    asLookupOrString(item.fields[matrixFields.matrixCompany]) ??
+    asLookupOrString(item.fields[matrixFields.companyName]) ??
+    (companyLookupId && lookups?.companyNameById
+      ? (lookups.companyNameById.get(companyLookupId) ?? null)
+      : null) ??
+    workforceHit?.companyName ??
+    null;
+
   return {
     id: item.id,
     candidateName,
-    companyName:
-      asLookupOrString(item.fields[matrixFields.companyName]) ??
-      asLookupOrString(item.fields[matrixFields.matrixCompany]),
+    companyName,
     department: asNullableString(item.fields[matrixFields.department]),
     overallStatus: asNullableString(item.fields[matrixFields.overallStatus]),
     needsReview: asBoolean(item.fields[matrixFields.needsReview]),
@@ -387,9 +507,19 @@ function mapMatrix(item: SharePointListItem): AdminMatrixRecord | null {
 }
 
 export async function listAdminMatrix(companyName?: string | null) {
-  const items = await getListItemsByKey("trainingMatrix", { top: 5000 });
+  const [items, companies, workforce] = await Promise.all([
+    getListItemsByKey("trainingMatrix", { top: 5000 }),
+    listAdminCompanies(),
+    listAdminWorkforce(),
+  ]);
+  const companyNameById = new Map(
+    companies.map((row) => [row.id, row.companyName] as const),
+  );
+  const workforceById = new Map(
+    workforce.map((row) => [row.id, row] as const),
+  );
   return items
-    .map(mapMatrix)
+    .map((item) => mapMatrix(item, { companyNameById, workforceById }))
     .filter((row): row is AdminMatrixRecord => {
       if (!row) return false;
       return matchesCompany(row.companyName, companyName);
@@ -399,11 +529,44 @@ export async function listAdminMatrix(companyName?: string | null) {
 export async function createAdminMatrix(input: Record<string, unknown>) {
   const candidateName = requireText(input.candidateName, "Candidate name");
   const companyName = requireText(input.companyName, "Company");
+
+  const [companies, workforce] = await Promise.all([
+    listAdminCompanies(),
+    listAdminWorkforce(),
+  ]);
+  const company =
+    companies.find(
+      (row) =>
+        row.companyName.trim().toLowerCase() ===
+        companyName.trim().toLowerCase(),
+    ) ?? null;
+  if (!company) {
+    throw new ValidationError(`Company "${companyName}" was not found.`);
+  }
+
+  const candidate =
+    workforce.find(
+      (row) =>
+        row.candidateName.trim().toLowerCase() ===
+          candidateName.trim().toLowerCase() &&
+        row.companyName.trim().toLowerCase() ===
+          company.companyName.trim().toLowerCase(),
+    ) ??
+    workforce.find(
+      (row) =>
+        row.candidateName.trim().toLowerCase() ===
+        candidateName.trim().toLowerCase(),
+    ) ??
+    null;
+  if (!candidate) {
+    throw new ValidationError(
+      `Candidate "${candidateName}" was not found in Workforce. Import or create the candidate first.`,
+    );
+  }
+
+  // CandidateName + MatrixCompany are Lookups — write LookupIds only.
   const payload = toSharePointFields("trainingMatrix", {
-    candidateName,
-    companyName,
-    matrixCompany: companyName,
-    department: optionalText(input.department),
+    department: optionalText(input.department) ?? candidate.department,
     overallStatus: optionalText(input.overallStatus),
     needsReview: optionalBool(input.needsReview) ?? false,
     matrixNotes: optionalText(input.matrixNotes),
@@ -417,9 +580,35 @@ export async function createAdminMatrix(input: Record<string, unknown>) {
     n027Expiry: asDateInput(input.n027Expiry),
     n100Expiry: asDateInput(input.n100Expiry),
   });
+  payload.CandidateNameLookupId = Number(candidate.id);
+  payload.MatrixCompanyLookupId = Number(company.id);
+
   const item = await createListItemByKey("trainingMatrix", payload);
-  const mapped = mapMatrix(item);
-  if (!mapped) throw new Error("Created matrix row could not be mapped.");
+  const mapped =
+    mapMatrix(item, {
+      companyNameById: new Map([[company.id, company.companyName]]),
+      workforceById: new Map([[candidate.id, candidate]]),
+    }) ??
+    ({
+      id: item.id,
+      candidateName: candidate.candidateName,
+      companyName: company.companyName,
+      department: optionalText(input.department) ?? candidate.department,
+      overallStatus: optionalText(input.overallStatus),
+      needsReview: optionalBool(input.needsReview) ?? false,
+      matrixNotes: optionalText(input.matrixNotes),
+      nextExpiryDate: asNullableString(
+        asDateInput(input.nextExpiryDate) ?? null,
+      ),
+      n001Expiry: asNullableString(asDateInput(input.n001Expiry) ?? null),
+      n003Expiry: asNullableString(asDateInput(input.n003Expiry) ?? null),
+      n004Expiry: asNullableString(asDateInput(input.n004Expiry) ?? null),
+      n010Expiry: asNullableString(asDateInput(input.n010Expiry) ?? null),
+      n020Expiry: asNullableString(asDateInput(input.n020Expiry) ?? null),
+      n021Expiry: asNullableString(asDateInput(input.n021Expiry) ?? null),
+      n027Expiry: asNullableString(asDateInput(input.n027Expiry) ?? null),
+      n100Expiry: asNullableString(asDateInput(input.n100Expiry) ?? null),
+    } satisfies AdminMatrixRecord);
   return mapped;
 }
 
@@ -430,11 +619,7 @@ export async function updateAdminMatrix(
   const existing = await getListItemByKey("trainingMatrix", id);
   if (!existing) throw new NotFoundError("Matrix record not found.");
 
-  const companyName = optionalText(input.companyName);
   const payload = toSharePointFields("trainingMatrix", {
-    candidateName: optionalText(input.candidateName) ?? undefined,
-    companyName: companyName ?? undefined,
-    matrixCompany: companyName ?? undefined,
     department:
       input.department === undefined
         ? undefined
@@ -486,8 +671,84 @@ export async function updateAdminMatrix(
         : asDateInput(input.n100Expiry),
   });
 
+  const wantsCandidate = input.candidateName !== undefined;
+  const wantsCompany = input.companyName !== undefined;
+  const [companies, workforce] = await Promise.all([
+    listAdminCompanies(),
+    listAdminWorkforce(),
+  ]);
+  const companyNameById = new Map(
+    companies.map((row) => [row.id, row.companyName] as const),
+  );
+  const workforceById = new Map(
+    workforce.map((row) => [row.id, row] as const),
+  );
+  const mappedExisting = mapMatrix(existing, {
+    companyNameById,
+    workforceById,
+  });
+
+  if (wantsCandidate || wantsCompany) {
+    const candidateName =
+      optionalText(input.candidateName) ?? mappedExisting?.candidateName ?? "";
+    const companyName =
+      optionalText(input.companyName) ?? mappedExisting?.companyName ?? "";
+
+    if (wantsCompany || !mappedExisting?.companyName) {
+      const company = companies.find(
+        (row) =>
+          row.companyName.trim().toLowerCase() ===
+          companyName.trim().toLowerCase(),
+      );
+      if (!company) {
+        throw new ValidationError(
+          `Company "${companyName || "(empty)"}" was not found.`,
+        );
+      }
+      payload.MatrixCompanyLookupId = Number(company.id);
+    }
+
+    if (wantsCandidate || !mappedExisting?.candidateName) {
+      const companyKey = (
+        optionalText(input.companyName) ??
+        mappedExisting?.companyName ??
+        ""
+      )
+        .trim()
+        .toLowerCase();
+      const candidate =
+        workforce.find(
+          (row) =>
+            row.candidateName.trim().toLowerCase() ===
+              candidateName.trim().toLowerCase() &&
+            row.companyName.trim().toLowerCase() === companyKey,
+        ) ??
+        workforce.find(
+          (row) =>
+            row.candidateName.trim().toLowerCase() ===
+            candidateName.trim().toLowerCase(),
+        );
+      if (!candidate) {
+        throw new ValidationError(
+          `Candidate "${candidateName || "(empty)"}" was not found in Workforce.`,
+        );
+      }
+      payload.CandidateNameLookupId = Number(candidate.id);
+      if (!payload.MatrixCompanyLookupId) {
+        const company = companies.find(
+          (row) =>
+            row.companyName.trim().toLowerCase() ===
+            candidate.companyName.trim().toLowerCase(),
+        );
+        if (company) {
+          payload.MatrixCompanyLookupId = Number(company.id);
+        }
+      }
+    }
+  }
+
   const item = await updateListItemFieldsByKey("trainingMatrix", id, payload);
-  const mapped = mapMatrix(item);
+  const mapped = mapMatrix(item, { companyNameById, workforceById });
   if (!mapped) throw new Error("Updated matrix row could not be mapped.");
   return mapped;
 }
@@ -522,39 +783,123 @@ export interface AdminTrainingRecord {
   courseCategory?: string | null;
 }
 
+type RegisterLookupMaps = {
+  companyNameById: Map<string, string>;
+  workforceNameById: Map<string, string>;
+  workforceCompanyById: Map<string, string>;
+};
+
+async function loadRegisterLookupMaps(): Promise<RegisterLookupMaps> {
+  const [companies, workforce] = await Promise.all([
+    listAdminCompanies(),
+    listAdminWorkforce(),
+  ]);
+  const companyNameById = new Map(
+    companies.map((row) => [row.id, row.companyName] as const),
+  );
+  const workforceNameById = new Map(
+    workforce.map((row) => [row.id, row.candidateName] as const),
+  );
+  const workforceCompanyById = new Map(
+    workforce.map((row) => [row.id, row.companyName] as const),
+  );
+  return { companyNameById, workforceNameById, workforceCompanyById };
+}
+
+function resolveRegisterPeople(
+  fields: SharePointFields,
+  candidateField: string,
+  companyField: string,
+  lookups: RegisterLookupMaps,
+): { candidateName: string; companyName: string } | null {
+  const candidateLookupId = extractLookupId(fields, candidateField);
+  const companyLookupId = extractLookupId(fields, companyField);
+
+  const candidateName =
+    asLookupOrString(fields[candidateField]) ??
+    asString(fields[candidateField]) ??
+    (candidateLookupId
+      ? (lookups.workforceNameById.get(candidateLookupId) ?? null)
+      : null);
+
+  if (!candidateName) return null;
+
+  const companyName =
+    asLookupOrString(fields[companyField]) ??
+    asString(fields[companyField]) ??
+    (companyLookupId
+      ? (lookups.companyNameById.get(companyLookupId) ?? null)
+      : null) ??
+    (candidateLookupId
+      ? (lookups.workforceCompanyById.get(candidateLookupId) ?? null)
+      : null);
+
+  if (!companyName) return null;
+  return { candidateName, companyName };
+}
+
+function asMultiChoiceText(value: unknown): string | null {
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((entry) => {
+        if (typeof entry === "string") return entry.trim();
+        if (entry && typeof entry === "object") {
+          const record = entry as { LookupValue?: unknown; Label?: unknown };
+          return (
+            asString(record.LookupValue) ?? asString(record.Label) ?? ""
+          ).trim();
+        }
+        return String(entry ?? "").trim();
+      })
+      .filter(Boolean);
+    return parts.length ? parts.join(", ") : null;
+  }
+  return asLookupOrString(value) ?? asNullableString(value);
+}
+
 function mapRegister(
   key: AdminRegisterKey,
   item: SharePointListItem,
+  lookups: RegisterLookupMaps,
 ): AdminTrainingRecord | null {
   if (key === "nporsRegister") {
     const f = getSharePointFields("nporsRegister");
-    const candidateName = asString(item.fields[f.candidateName]);
-    const companyName = asString(item.fields[f.companyName]);
-    if (!candidateName || !companyName) return null;
+    const people = resolveRegisterPeople(
+      item.fields,
+      f.candidateName,
+      f.companyName,
+      lookups,
+    );
+    if (!people) return null;
     return {
       id: item.id,
-      candidateName,
-      companyName,
+      ...people,
       trainingDate: asNullableString(item.fields[f.trainingDate]),
       trainingAddress: asNullableString(item.fields[f.trainingAddress]),
       trainingOutcome: asNullableString(item.fields[f.trainingOutcome]),
       customerVisible: asBoolean(item.fields[f.customerVisible]),
       expiry: asNullableString(item.fields[f.expiry]),
-      nporsNumber: asNullableString(item.fields[f.nporsNumber]),
+      nporsNumber:
+        asNullableString(item.fields[f.nporsNumber]) ??
+        asLookupOrString(item.fields.Candidate_x0020_Name_x003a__x0020) ??
+        asNullableString(item.fields.On_x002f_Number),
       noviceOrEwt: asNullableString(item.fields[f.noviceOrEwt]),
-      nporsCategory: asNullableString(item.fields[f.nporsCategory]),
+      nporsCategory: asMultiChoiceText(item.fields[f.nporsCategory]),
     };
   }
 
   if (key === "eusrRegister") {
     const f = getSharePointFields("eusrRegister");
-    const candidateName = asString(item.fields[f.candidateName]);
-    const companyName = asString(item.fields[f.companyName]);
-    if (!candidateName || !companyName) return null;
+    const people = resolveRegisterPeople(
+      item.fields,
+      f.candidateName,
+      f.companyName,
+      lookups,
+    );
+    if (!people) return null;
     return {
       id: item.id,
-      candidateName,
-      companyName,
+      ...people,
       trainingDate: asNullableString(item.fields[f.trainingDate]),
       trainingAddress: asNullableString(item.fields[f.trainingAddress]),
       trainingOutcome: asNullableString(item.fields[f.trainingOutcome]),
@@ -567,13 +912,16 @@ function mapRegister(
 
   if (key === "nrswaRegister") {
     const f = getSharePointFields("nrswaRegister");
-    const candidateName = asString(item.fields[f.candidateName]);
-    const companyName = asString(item.fields[f.companyName]);
-    if (!candidateName || !companyName) return null;
+    const people = resolveRegisterPeople(
+      item.fields,
+      f.candidateName,
+      f.companyName,
+      lookups,
+    );
+    if (!people) return null;
     return {
       id: item.id,
-      candidateName,
-      companyName,
+      ...people,
       trainingDate: asNullableString(item.fields[f.trainingDate]),
       trainingAddress: asNullableString(item.fields[f.trainingAddress]),
       trainingOutcome: asNullableString(item.fields[f.trainingOutcome]),
@@ -586,13 +934,16 @@ function mapRegister(
   }
 
   const f = getSharePointFields("inHouseCertificates");
-  const candidateName = asString(item.fields[f.candidateName]);
-  const companyName = asString(item.fields[f.companyName]);
-  if (!candidateName || !companyName) return null;
+  const people = resolveRegisterPeople(
+    item.fields,
+    f.candidateName,
+    f.companyName,
+    lookups,
+  );
+  if (!people) return null;
   return {
     id: item.id,
-    candidateName,
-    companyName,
+    ...people,
     trainingDate: asNullableString(item.fields[f.courseDate]),
     trainingAddress: asNullableString(item.fields[f.trainingAddress]),
     trainingOutcome: asNullableString(item.fields[f.trainingOutcome]),
@@ -624,16 +975,9 @@ function registerWritePayload(
       ? null
       : undefined;
 
+  // CandidateName/CompanyName are Lookups — set LookupIds separately.
   if (key === "nporsRegister") {
     const values: Record<string, unknown> = {
-      candidateName:
-        mode === "create"
-          ? requireText(input.candidateName, "Candidate name")
-          : optionalText(input.candidateName) ?? undefined,
-      companyName:
-        mode === "create"
-          ? requireText(input.companyName, "Company")
-          : optionalText(input.companyName) ?? undefined,
       nporsNumber:
         input.nporsNumber === undefined
           ? undefined
@@ -667,14 +1011,6 @@ function registerWritePayload(
 
   if (key === "eusrRegister") {
     const values: Record<string, unknown> = {
-      candidateName:
-        mode === "create"
-          ? requireText(input.candidateName, "Candidate name")
-          : optionalText(input.candidateName) ?? undefined,
-      companyName:
-        mode === "create"
-          ? requireText(input.companyName, "Company")
-          : optionalText(input.companyName) ?? undefined,
       eusrNumber:
         input.eusrNumber === undefined
           ? undefined
@@ -704,14 +1040,6 @@ function registerWritePayload(
 
   if (key === "nrswaRegister") {
     const values: Record<string, unknown> = {
-      candidateName:
-        mode === "create"
-          ? requireText(input.candidateName, "Candidate name")
-          : optionalText(input.candidateName) ?? undefined,
-      companyName:
-        mode === "create"
-          ? requireText(input.companyName, "Company")
-          : optionalText(input.companyName) ?? undefined,
       swqrNumber:
         input.swqrNumber === undefined
           ? undefined
@@ -742,14 +1070,6 @@ function registerWritePayload(
   }
 
   const values: Record<string, unknown> = {
-    candidateName:
-      mode === "create"
-        ? requireText(input.candidateName, "Candidate name")
-        : optionalText(input.candidateName) ?? undefined,
-    companyName:
-      mode === "create"
-        ? requireText(input.companyName, "Company")
-        : optionalText(input.companyName) ?? undefined,
     courseCategory:
       input.course === undefined && input.courseCategory === undefined
         ? undefined
@@ -777,13 +1097,97 @@ function registerWritePayload(
   return toSharePointFields(key, values);
 }
 
+async function applyRegisterLookupIds(
+  payload: SharePointFields,
+  input: Record<string, unknown>,
+  mode: "create" | "update",
+): Promise<void> {
+  const candidateName =
+    mode === "create"
+      ? requireText(input.candidateName, "Candidate name")
+      : optionalText(input.candidateName);
+  const companyName =
+    mode === "create"
+      ? requireText(input.companyName, "Company")
+      : optionalText(input.companyName);
+
+  if (!candidateName && !companyName) return;
+
+  const [companies, workforce] = await Promise.all([
+    listAdminCompanies(),
+    listAdminWorkforce(),
+  ]);
+
+  let resolvedCompany =
+    companyName
+      ? companies.find(
+          (row) =>
+            row.companyName.trim().toLowerCase() ===
+            companyName.trim().toLowerCase(),
+        )
+      : null;
+
+  let resolvedCandidate =
+    candidateName
+      ? workforce.find(
+          (row) =>
+            row.candidateName.trim().toLowerCase() ===
+              candidateName.trim().toLowerCase() &&
+            (!resolvedCompany ||
+              row.companyName.trim().toLowerCase() ===
+                resolvedCompany.companyName.trim().toLowerCase()),
+        ) ??
+        workforce.find(
+          (row) =>
+            row.candidateName.trim().toLowerCase() ===
+            candidateName.trim().toLowerCase(),
+        )
+      : null;
+
+  if (mode === "create" && !resolvedCandidate) {
+    throw new ValidationError(
+      `Candidate "${candidateName}" was not found in Workforce. Create the candidate first.`,
+    );
+  }
+  if (mode === "create" && !resolvedCompany) {
+    resolvedCompany =
+      companies.find(
+        (row) =>
+          row.companyName.trim().toLowerCase() ===
+          (resolvedCandidate?.companyName ?? "").trim().toLowerCase(),
+      ) ?? null;
+  }
+  if (mode === "create" && !resolvedCompany) {
+    throw new ValidationError(`Company "${companyName}" was not found.`);
+  }
+
+  if (resolvedCandidate) {
+    payload.CandidateNameLookupId = Number(resolvedCandidate.id);
+  }
+  if (resolvedCompany) {
+    payload.CompanyNameLookupId = Number(resolvedCompany.id);
+  } else if (resolvedCandidate) {
+    const fromWorkforce = companies.find(
+      (row) =>
+        row.companyName.trim().toLowerCase() ===
+        resolvedCandidate!.companyName.trim().toLowerCase(),
+    );
+    if (fromWorkforce) {
+      payload.CompanyNameLookupId = Number(fromWorkforce.id);
+    }
+  }
+}
+
 export async function listAdminRegister(
   key: AdminRegisterKey,
   companyName?: string | null,
 ) {
-  const items = await getListItemsByKey(key, { top: 5000 });
+  const [items, lookups] = await Promise.all([
+    getListItemsByKey(key, { top: 5000 }),
+    loadRegisterLookupMaps(),
+  ]);
   return items
-    .map((item) => mapRegister(key, item))
+    .map((item) => mapRegister(key, item, lookups))
     .filter((row): row is AdminTrainingRecord => {
       if (!row) return false;
       return matchesCompany(row.companyName, companyName);
@@ -795,8 +1199,10 @@ export async function createAdminRegister(
   input: Record<string, unknown>,
 ) {
   const payload = registerWritePayload(key, input, "create");
+  await applyRegisterLookupIds(payload, input, "create");
   const item = await createListItemByKey(key, payload);
-  const mapped = mapRegister(key, item);
+  const lookups = await loadRegisterLookupMaps();
+  const mapped = mapRegister(key, item, lookups);
   if (!mapped) throw new Error("Created training record could not be mapped.");
   return mapped;
 }
@@ -809,8 +1215,10 @@ export async function updateAdminRegister(
   const existing = await getListItemByKey(key, id);
   if (!existing) throw new NotFoundError("Training record not found.");
   const payload = registerWritePayload(key, input, "update");
+  await applyRegisterLookupIds(payload, input, "update");
   const item = await updateListItemFieldsByKey(key, id, payload);
-  const mapped = mapRegister(key, item);
+  const lookups = await loadRegisterLookupMaps();
+  const mapped = mapRegister(key, item, lookups);
   if (!mapped) throw new Error("Updated training record could not be mapped.");
   return mapped;
 }
@@ -834,16 +1242,40 @@ export interface AdminNvqRecord {
   status: "Active" | "Completed";
 }
 
-function mapNvq(item: SharePointListItem): AdminNvqRecord | null {
-  const candidateName = asString(item.fields[nvqFields.candidateName]);
+function mapNvq(
+  item: SharePointListItem,
+  lookups: RegisterLookupMaps,
+): AdminNvqRecord | null {
+  const candidateLookupId = extractLookupId(
+    item.fields,
+    nvqFields.candidateName,
+  );
+  const candidateName =
+    asLookupOrString(item.fields[nvqFields.candidateName]) ??
+    asString(item.fields[nvqFields.candidateName]) ??
+    (candidateLookupId
+      ? (lookups.workforceNameById.get(candidateLookupId) ?? null)
+      : null);
   if (!candidateName) return null;
+
+  const companyLookupId =
+    extractLookupId(item.fields, nvqFields.nvqCompany) ??
+    extractLookupId(item.fields, nvqFields.companyName);
+  const companyName =
+    asLookupOrString(item.fields[nvqFields.nvqCompany]) ??
+    asLookupOrString(item.fields[nvqFields.companyName]) ??
+    (companyLookupId
+      ? (lookups.companyNameById.get(companyLookupId) ?? null)
+      : null) ??
+    (candidateLookupId
+      ? (lookups.workforceCompanyById.get(candidateLookupId) ?? null)
+      : null);
+
   const completedDate = asNullableString(item.fields[nvqFields.completedDate]);
   return {
     id: item.id,
     candidateName,
-    companyName:
-      asLookupOrString(item.fields[nvqFields.companyName]) ??
-      asLookupOrString(item.fields[nvqFields.nvqCompany]),
+    companyName,
     nvqTitle: asNullableString(item.fields[nvqFields.nvqTitle]),
     boltOn: asNullableString(item.fields[nvqFields.boltonNvq]),
     dateRegistered: asNullableString(item.fields[nvqFields.dateRegistered]),
@@ -857,9 +1289,12 @@ function mapNvq(item: SharePointListItem): AdminNvqRecord | null {
 }
 
 export async function listAdminNvq(companyName?: string | null) {
-  const items = await getListItemsByKey("nvqRegister", { top: 5000 });
+  const [items, lookups] = await Promise.all([
+    getListItemsByKey("nvqRegister", { top: 5000 }),
+    loadRegisterLookupMaps(),
+  ]);
   return items
-    .map(mapNvq)
+    .map((item) => mapNvq(item, lookups))
     .filter((row): row is AdminNvqRecord => {
       if (!row) return false;
       return matchesCompany(row.companyName, companyName);
@@ -869,10 +1304,39 @@ export async function listAdminNvq(companyName?: string | null) {
 export async function createAdminNvq(input: Record<string, unknown>) {
   const candidateName = requireText(input.candidateName, "Candidate name");
   const companyName = requireText(input.companyName, "Company");
+  const [companies, workforce] = await Promise.all([
+    listAdminCompanies(),
+    listAdminWorkforce(),
+  ]);
+  const company =
+    companies.find(
+      (row) =>
+        row.companyName.trim().toLowerCase() ===
+        companyName.trim().toLowerCase(),
+    ) ?? null;
+  if (!company) {
+    throw new ValidationError(`Company "${companyName}" was not found.`);
+  }
+  const candidate =
+    workforce.find(
+      (row) =>
+        row.candidateName.trim().toLowerCase() ===
+          candidateName.trim().toLowerCase() &&
+        row.companyName.trim().toLowerCase() ===
+          company.companyName.trim().toLowerCase(),
+    ) ??
+    workforce.find(
+      (row) =>
+        row.candidateName.trim().toLowerCase() ===
+        candidateName.trim().toLowerCase(),
+    );
+  if (!candidate) {
+    throw new ValidationError(
+      `Candidate "${candidateName}" was not found in Workforce. Create the candidate first.`,
+    );
+  }
+
   const payload = toSharePointFields("nvqRegister", {
-    candidateName,
-    companyName,
-    nvqCompany: companyName,
     nvqTitle: optionalText(input.nvqTitle),
     boltonNvq: optionalText(input.boltOn),
     dateRegistered: asDateInput(input.dateRegistered),
@@ -882,8 +1346,12 @@ export async function createAdminNvq(input: Record<string, unknown>) {
     completedDate: asDateInput(input.completedDate),
     customerVisible: optionalBool(input.customerVisible) ?? true,
   });
+  payload.CandidateNameLookupId = Number(candidate.id);
+  payload.NVQCompanyLookupId = Number(company.id);
+
   const item = await createListItemByKey("nvqRegister", payload);
-  const mapped = mapNvq(item);
+  const lookups = await loadRegisterLookupMaps();
+  const mapped = mapNvq(item, lookups);
   if (!mapped) throw new Error("Created NVQ could not be mapped.");
   return mapped;
 }
@@ -894,11 +1362,7 @@ export async function updateAdminNvq(
 ) {
   const existing = await getListItemByKey("nvqRegister", id);
   if (!existing) throw new NotFoundError("NVQ record not found.");
-  const companyName = optionalText(input.companyName);
   const payload = toSharePointFields("nvqRegister", {
-    candidateName: optionalText(input.candidateName) ?? undefined,
-    companyName: companyName ?? undefined,
-    nvqCompany: companyName ?? undefined,
     nvqTitle:
       input.nvqTitle === undefined ? undefined : optionalText(input.nvqTitle),
     boltonNvq:
@@ -923,8 +1387,67 @@ export async function updateAdminNvq(
         : asDateInput(input.completedDate),
     customerVisible: optionalBool(input.customerVisible),
   });
+
+  if (input.candidateName !== undefined || input.companyName !== undefined) {
+    const [companies, workforce] = await Promise.all([
+      listAdminCompanies(),
+      listAdminWorkforce(),
+    ]);
+    const lookups = {
+      companyNameById: new Map(
+        companies.map((row) => [row.id, row.companyName] as const),
+      ),
+      workforceNameById: new Map(
+        workforce.map((row) => [row.id, row.candidateName] as const),
+      ),
+      workforceCompanyById: new Map(
+        workforce.map((row) => [row.id, row.companyName] as const),
+      ),
+    };
+    const existingMapped = mapNvq(existing, lookups);
+    const candidateName =
+      optionalText(input.candidateName) ?? existingMapped?.candidateName ?? "";
+    const companyName =
+      optionalText(input.companyName) ?? existingMapped?.companyName ?? "";
+
+    if (companyName) {
+      const company = companies.find(
+        (row) =>
+          row.companyName.trim().toLowerCase() ===
+          companyName.trim().toLowerCase(),
+      );
+      if (!company) {
+        throw new ValidationError(`Company "${companyName}" was not found.`);
+      }
+      payload.NVQCompanyLookupId = Number(company.id);
+    }
+
+    if (candidateName) {
+      const companyKey = companyName.trim().toLowerCase();
+      const candidate =
+        workforce.find(
+          (row) =>
+            row.candidateName.trim().toLowerCase() ===
+              candidateName.trim().toLowerCase() &&
+            row.companyName.trim().toLowerCase() === companyKey,
+        ) ??
+        workforce.find(
+          (row) =>
+            row.candidateName.trim().toLowerCase() ===
+            candidateName.trim().toLowerCase(),
+        );
+      if (!candidate) {
+        throw new ValidationError(
+          `Candidate "${candidateName}" was not found in Workforce.`,
+        );
+      }
+      payload.CandidateNameLookupId = Number(candidate.id);
+    }
+  }
+
   const item = await updateListItemFieldsByKey("nvqRegister", id, payload);
-  const mapped = mapNvq(item);
+  const lookups = await loadRegisterLookupMaps();
+  const mapped = mapNvq(item, lookups);
   if (!mapped) throw new Error("Updated NVQ could not be mapped.");
   return mapped;
 }
@@ -1351,6 +1874,9 @@ export interface AdminEventRecord {
   lastSyncSource: string | null;
   syncError: string | null;
   outlookEventId: string | null;
+  outlookCalendarId: string | null;
+  outlookICalUid: string | null;
+  syncHash: string | null;
 }
 
 function asDateTimeInput(value: unknown): string | null | undefined {
@@ -1422,6 +1948,11 @@ function mapEvent(item: SharePointListItem): AdminEventRecord | null {
     lastSyncSource: asNullableString(item.fields[eventFields.lastSyncSource]),
     syncError: asNullableString(item.fields[eventFields.syncError]),
     outlookEventId: asNullableString(item.fields[eventFields.outlookEventId]),
+    outlookCalendarId: asNullableString(
+      item.fields[eventFields.outlookCalendarId],
+    ),
+    outlookICalUid: asNullableString(item.fields[eventFields.outlookICalUid]),
+    syncHash: asNullableString(item.fields[eventFields.syncHash]),
   };
 }
 
