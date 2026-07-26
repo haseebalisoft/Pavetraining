@@ -23,7 +23,7 @@ export default async function CustomerNvqProgressPage() {
     redirect("/access-denied");
   }
 
-  const records = await getCustomerNvqRecords(context.companyId);
+  const records = await getCustomerNvqRecords(context.companyId, context);
 
   return (
     <NvqProgressView companyName={context.companyName} records={records} />

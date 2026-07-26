@@ -9,6 +9,7 @@ import { BaseClientSideWebPart } from "@microsoft/sp-webpart-base";
 
 import * as strings from "PaveCustomerPortalWebPartStrings";
 import { PortalShell } from "../../shared/ui/PortalShell";
+import { normalizeSharePointUserEmail } from "../../shared/services/sharePointListService";
 
 export interface IPaveCustomerPortalWebPartProps {
   description: string;
@@ -16,10 +17,11 @@ export interface IPaveCustomerPortalWebPartProps {
 
 export default class PaveCustomerPortalWebPart extends BaseClientSideWebPart<IPaveCustomerPortalWebPartProps> {
   public render(): void {
-    const email =
+    const rawEmail =
       this.context.pageContext.user.email ||
       this.context.pageContext.user.loginName ||
       "";
+    const email = normalizeSharePointUserEmail(rawEmail) || rawEmail;
 
     const element: React.ReactElement = React.createElement(PortalShell, {
       mode: "customer",

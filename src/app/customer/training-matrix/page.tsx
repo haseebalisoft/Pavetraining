@@ -43,7 +43,10 @@ export default async function CustomerTrainingMatrixPage({
   }
 
   const params = await searchParams;
-  const records = await getCustomerMatrixRecords(context.companyName);
+  const records = await getCustomerMatrixRecords(
+    context.companyName,
+    context,
+  );
 
   return (
     <TrainingMatrixView

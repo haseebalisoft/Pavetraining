@@ -3,7 +3,10 @@ import "server-only";
 import { cache } from "react";
 
 import { getCompanyById } from "@/lib/services/companyService";
-import { getActivePermissionByEmail } from "@/lib/services/permissionService";
+import {
+  accessScopeBadgeLabel,
+  getActivePermissionByEmail,
+} from "@/lib/services/permissionService";
 import {
   AccessDeniedError,
   UnauthorizedError,
@@ -11,10 +14,12 @@ import {
 import type {
   AdminContext,
   CustomerContext,
+  CustomerRoleType,
   MeResponse,
 } from "@/types/models";
 
 export { AccessDeniedError, UnauthorizedError } from "@/lib/services/errorHandler";
+export { accessScopeBadgeLabel };
 
 async function resolveCompanyName(
   companyId: string,
@@ -37,7 +42,6 @@ async function resolveCompanyName(
 /**
  * Builds the authenticated user's portal context from SharePoint Permissions.
  * Customer companyId is never accepted from the client — only from Permissions.
- * Deduped per request when layout + page both resolve context.
  */
 export const getMeContext = cache(
   async (email: string): Promise<MeResponse | null> => {
@@ -47,23 +51,41 @@ export const getMeContext = cache(
     }
 
     const companyName =
-      permission.roleType === "Customer"
+      permission.canAccessCustomer || permission.roleType === "Customer"
         ? await resolveCompanyName(
             permission.companyId,
             permission.companyDisplayName,
           )
         : (permission.companyDisplayName ?? null);
 
+    // Customer-side roles (Training Manager / Supervisor / Candidate) land on
+    // /customer first. Literal Admin (no customerRole) lands on /admin.
+    // Training Managers retain canAccessAdmin for /admin if they navigate there.
+    const redirectTo =
+      permission.customerRole != null
+        ? "/customer"
+        : permission.canAccessAdmin
+          ? "/admin"
+          : "/customer";
+
     return {
       loggedInEmail: permission.userEmail,
-      role: permission.roleType,
-      redirectTo: permission.roleType === "Admin" ? "/admin" : "/customer",
+      role:
+        permission.customerRole != null
+          ? "Customer"
+          : permission.canAccessAdmin
+            ? "Admin"
+            : permission.roleType,
+      redirectTo,
       companyId: permission.companyId,
       companyName,
       canView: permission.canView,
       canDownload: permission.canDownload,
       canEdit: permission.canEdit,
       accessScope: permission.accessScope,
+      customerRole: permission.customerRole,
+      roleLabel: permission.roleLabel,
+      normalizedAccessScope: permission.normalizedAccessScope,
     };
   },
 );
@@ -72,7 +94,11 @@ export const getCustomerContext = cache(
   async (email: string): Promise<CustomerContext> => {
     const permission = await getActivePermissionByEmail(email);
 
-    if (!permission || permission.roleType !== "Customer") {
+    if (
+      !permission ||
+      !permission.canAccessCustomer ||
+      !permission.customerRole
+    ) {
       throw new AccessDeniedError(
         "No active Customer permission found for this account.",
       );
@@ -84,6 +110,12 @@ export const getCustomerContext = cache(
       );
     }
 
+    if (!permission.canView) {
+      throw new AccessDeniedError(
+        "Your account does not have view permission.",
+      );
+    }
+
     const companyName = await resolveCompanyName(
       permission.companyId,
       permission.companyDisplayName,
@@ -92,12 +124,17 @@ export const getCustomerContext = cache(
     return {
       loggedInEmail: permission.userEmail,
       role: "Customer",
+      customerRole: permission.customerRole as CustomerRoleType,
+      roleLabel: permission.roleLabel,
       companyId: permission.companyId,
       companyName,
       canView: permission.canView,
       canDownload: permission.canDownload,
       canEdit: permission.canEdit,
       accessScope: permission.accessScope,
+      normalizedAccessScope: permission.normalizedAccessScope,
+      departmentScopes: permission.departmentScopes,
+      candidateScopeName: permission.candidateScopeName,
       permissionStatus: "Active",
     };
   },
@@ -107,7 +144,7 @@ export const getAdminContext = cache(
   async (email: string): Promise<AdminContext> => {
     const permission = await getActivePermissionByEmail(email);
 
-    if (!permission || permission.roleType !== "Admin") {
+    if (!permission || !permission.canAccessAdmin) {
       throw new AccessDeniedError(
         "No active Admin permission found for this account.",
       );

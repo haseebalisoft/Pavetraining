@@ -3,6 +3,7 @@ import {
   AccessDeniedError,
   NotFoundError,
 } from "@/lib/services/errorHandler";
+import { assertCandidateAccess } from "@/lib/services/customerAccessService";
 import { assertCompanyMatch } from "@/lib/services/securityService";
 import { getWorkforceById } from "@/lib/services/workforceService";
 
@@ -10,7 +11,7 @@ export const dynamic = "force-dynamic";
 
 /**
  * Customer candidate profile.
- * Returns 403 when the candidate does not belong to the caller's company.
+ * Returns 403 when the candidate does not belong to the caller's company/scope.
  */
 export async function GET(
   request: Request,
@@ -32,6 +33,10 @@ export async function GET(
         throw new AccessDeniedError();
       }
 
+      if (!assertCandidateAccess(candidate, customer)) {
+        throw new AccessDeniedError();
+      }
+
       return {
         candidate: {
           id: candidate.id,
@@ -42,6 +47,8 @@ export async function GET(
           // DOB is allowed but should stay de-emphasized in UI.
           dateOfBirth: candidate.dateOfBirth,
           status: candidate.status,
+          trainingManager: candidate.trainingManager,
+          supervisor: candidate.supervisor,
         },
       };
     },

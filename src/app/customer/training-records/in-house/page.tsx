@@ -23,7 +23,7 @@ export default async function CustomerInHouseRecordsPage() {
     redirect("/access-denied");
   }
 
-  const records = await getCustomerInHouseRecords(context.companyId);
+  const records = await getCustomerInHouseRecords(context.companyId, context);
 
   return (
     <InHouseRecordsView companyName={context.companyName} records={records} />

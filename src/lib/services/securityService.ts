@@ -16,7 +16,8 @@ const COMPANY_ID_KEYS = [
 ] as const;
 
 /**
- * Customer portal security: active Customer permission + assigned company only.
+ * Customer portal security: active customer-side permission + assigned company only.
+ * Supports Training Manager / Supervisor / Candidate via Permissions List.
  * Client-supplied companyId is rejected.
  */
 export async function requireCustomerAccess(
@@ -29,16 +30,16 @@ export async function requireCustomerAccess(
     rejectCustomerExportAttempt(request);
   }
 
-  // getCustomerContext enforces Active + RoleType=Customer and resolves company.
+  // getCustomerContext enforces Active + canAccessCustomer and resolves company/scope.
   return getCustomerContext(email);
 }
 
 /**
- * Admin portal security: active Admin permission only.
+ * Admin portal security: active Admin permission only (literal Admin or Training Manager legacy).
  */
 export async function requireAdminAccess(): Promise<AdminContext> {
   const email = await requireAuthenticatedEmail();
-  // getAdminContext enforces Active + RoleType=Admin.
+  // getAdminContext enforces Active + canAccessAdmin.
   return getAdminContext(email);
 }
 

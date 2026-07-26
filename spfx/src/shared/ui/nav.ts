@@ -47,13 +47,13 @@ export const CUSTOMER_NAV: ReadonlyArray<{
   id: CustomerViewId;
   label: string;
 }> = [
-  { id: "dashboard", label: "Dashboard" },
   { id: "training-matrix", label: "Training Matrix" },
-  { id: "candidates", label: "Candidates" },
+  { id: "dashboard", label: "Dashboard" },
+  { id: "candidates", label: "Candidates / Workforce" },
   { id: "training-records", label: "Training Records" },
   { id: "nvq-progress", label: "NVQ Progress" },
   { id: "documents", label: "Documents" },
-  { id: "events", label: "Events" },
+  { id: "events", label: "Events / Bookings" },
   { id: "offers", label: "Offers" },
   { id: "support", label: "Support" },
 ];

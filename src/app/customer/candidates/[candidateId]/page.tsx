@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 
 import { CandidateProfileView } from "@/components/customer/CandidateProfileView";
 import { auth } from "@/auth";
+import { assertCandidateAccess } from "@/lib/services/customerAccessService";
 import { getCustomerContext } from "@/lib/services/customerContextService";
 import { assertCompanyMatch } from "@/lib/services/securityService";
 import { getWorkforceById } from "@/lib/services/workforceService";
@@ -38,6 +39,10 @@ export default async function CustomerCandidateProfilePage({
   try {
     assertCompanyMatch(candidate.companyName, context.companyName);
   } catch {
+    redirect("/access-denied");
+  }
+
+  if (!assertCandidateAccess(candidate, context)) {
     redirect("/access-denied");
   }
 

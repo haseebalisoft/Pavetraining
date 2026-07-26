@@ -1,5 +1,7 @@
 import "server-only";
 
+import { cache } from "react";
+
 import { getSharePointFields } from "@/lib/schema/sharepointSchema";
 import {
   asNullableString,
@@ -34,6 +36,7 @@ function mapWorkforceItem(
     status: asNullableString(fields[workforceFields.status]),
     trainingManager: asNullableString(fields[workforceFields.trainingManager]),
     supervisor: asNullableString(fields[workforceFields.supervisor]),
+    email: asNullableString(fields[workforceFields.email])?.toLowerCase() ?? null,
     cscsNumber: asNullableString(fields[workforceFields.cscsNumber]),
     swqrNumber: asNullableString(fields[workforceFields.swqrNumber]),
     eusrNumber: asNullableString(fields[workforceFields.eusrNumber]),
@@ -55,22 +58,23 @@ export async function getWorkforceById(
   return mapWorkforceItem(item.id, item.fields);
 }
 
-export async function getWorkforceByCompanyName(
-  companyName: string,
-): Promise<WorkforceCandidate[]> {
-  const items = await getListItemsByKey("workforce", {
-    filter: buildSchemaFieldEqualsFilter(
-      "workforce",
-      "companyName",
-      companyName,
-    ),
-    top: 5000,
-  });
+/** Deduped per request so name-map + scope filters share one Graph read. */
+export const getWorkforceByCompanyName = cache(
+  async (companyName: string): Promise<WorkforceCandidate[]> => {
+    const items = await getListItemsByKey("workforce", {
+      filter: buildSchemaFieldEqualsFilter(
+        "workforce",
+        "companyName",
+        companyName,
+      ),
+      top: 5000,
+    });
 
-  return items
-    .map((item) => mapWorkforceItem(item.id, item.fields))
-    .filter((row): row is WorkforceCandidate => row !== null);
-}
+    return items
+      .map((item) => mapWorkforceItem(item.id, item.fields))
+      .filter((row): row is WorkforceCandidate => row !== null);
+  },
+);
 
 /**
  * Builds a case-insensitive candidate-name → workforce id map for profile links.

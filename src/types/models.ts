@@ -7,6 +7,20 @@ export type RoleType = "Admin" | "Customer";
 export type AccessScope = string;
 export type PermissionStatus = "Active" | "Inactive" | string;
 
+/** Customer-side role from Permissions List (Wayne brief). */
+export type CustomerRoleType =
+  | "TrainingManager"
+  | "Supervisor"
+  | "Candidate";
+
+/** Normalized AccessScope for server-side filtering. */
+export type NormalizedAccessScope =
+  | "All"
+  | "Company"
+  | "Department"
+  | "AssignedCandidates"
+  | "CandidateOnly";
+
 /** SharePoint person/lookup style value when returned as an object. */
 export interface SharePointLookupValue {
   lookupId: string;
@@ -60,6 +74,8 @@ export interface WorkforceCandidate {
   status: string | null;
   trainingManager: string | null;
   supervisor: string | null;
+  /** Workforce Email — used for CandidateOnly matching. */
+  email: string | null;
   cscsNumber: string | null;
   swqrNumber: string | null;
   eusrNumber: string | null;
@@ -199,14 +215,32 @@ export interface OfferPromotion {
 export interface PermissionProfile {
   id: string;
   userEmail: string;
+  /** Admin | Customer — portal routing bucket (legacy compatible). */
   roleType: RoleType;
+  /** Raw SharePoint RoleType choice text. */
+  sharePointRoleType: string;
+  /** Customer-side role when user may use the customer portal. */
+  customerRole: CustomerRoleType | null;
+  /** UI label e.g. "Training Manager". */
+  roleLabel: string;
   status: PermissionStatus;
   companyId: string;
   companyDisplayName?: string;
+  /** Raw SharePoint AccessScope choice. */
   accessScope: AccessScope;
+  /** Normalized scope used by customer filters. */
+  normalizedAccessScope: NormalizedAccessScope;
+  /** From Permissions.Departments / DepartmentsAllowed. */
+  departmentScopes: string[];
+  /** CandidateOnly — Permissions.Name or matched workforce name. */
+  candidateScopeName: string | null;
   canView: boolean;
   canDownload: boolean;
   canEdit: boolean;
+  /** PAVE Admin portal (includes legacy Training Manager). */
+  canAccessAdmin: boolean;
+  /** Customer portal (TM / Supervisor / Candidate). */
+  canAccessCustomer: boolean;
 }
 
 export interface TrainingCourseCategory {
@@ -232,17 +266,25 @@ export interface MeResponse {
   canDownload: boolean;
   canEdit: boolean;
   accessScope: AccessScope | null;
+  customerRole?: CustomerRoleType | null;
+  roleLabel?: string;
+  normalizedAccessScope?: NormalizedAccessScope;
 }
 
 export interface CustomerContext {
   loggedInEmail: string;
   role: "Customer";
+  customerRole: CustomerRoleType;
+  roleLabel: string;
   companyId: string;
   companyName: string;
   canView: boolean;
   canDownload: boolean;
   canEdit: boolean;
   accessScope: AccessScope;
+  normalizedAccessScope: NormalizedAccessScope;
+  departmentScopes: string[];
+  candidateScopeName: string | null;
   permissionStatus: "Active";
 }
 

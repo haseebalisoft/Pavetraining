@@ -11,7 +11,7 @@ export async function GET(request: Request) {
   return withCustomerApi(
     "GET /api/customer/training-records/npors",
     async (context) => {
-      const records = await getCustomerNporsRecords(context.companyId);
+      const records = await getCustomerNporsRecords(context.companyId, context);
       return { records };
     },
     { entityName: "NPORS Register" },

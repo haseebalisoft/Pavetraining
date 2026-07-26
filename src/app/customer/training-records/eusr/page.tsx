@@ -23,7 +23,7 @@ export default async function CustomerEusrRecordsPage() {
     redirect("/access-denied");
   }
 
-  const records = await getCustomerEusrRecords(context.companyId);
+  const records = await getCustomerEusrRecords(context.companyId, context);
 
   return (
     <EusrRecordsView companyName={context.companyName} records={records} />

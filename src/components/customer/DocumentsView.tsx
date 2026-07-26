@@ -11,6 +11,9 @@ import styles from "./customer.module.css";
 
 interface Props {
   companyName: string;
+  email: string;
+  roleLabel: string;
+  accessLabel: string;
   canDownload: boolean;
   records: CustomerDocumentRecord[];
 }
@@ -22,7 +25,14 @@ function cell(value: string | null | undefined) {
   return value;
 }
 
-export function DocumentsView({ companyName, canDownload, records }: Props) {
+export function DocumentsView({
+  companyName,
+  email,
+  roleLabel,
+  accessLabel,
+  canDownload,
+  records,
+}: Props) {
   const [search, setSearch] = useState("");
   const [documentTypeFilter, setDocumentTypeFilter] = useState("");
   const [candidateFilter, setCandidateFilter] = useState("");
@@ -77,17 +87,23 @@ export function DocumentsView({ companyName, canDownload, records }: Props) {
           { label: "Documents" },
         ]}
         title="Documents"
-        subtitle="Company documents shared with your organisation."
+        subtitle="Certificates, card scans, NVQ files, brochures, and other customer-visible documents."
       />
 
       <p className={styles.companyMeta}>
-        Showing documents for <strong>{companyName}</strong>
+        Welcome back, <strong>{email}</strong>
         {" · "}
+        Company: <strong>{companyName}</strong>
+      </p>
+
+      <div className={styles.accessBadges} aria-label="Access permissions">
+        <StatusBadge label={`Role: ${roleLabel}`} tone="neutral" />
+        <StatusBadge label={`Access: ${accessLabel}`} tone="neutral" />
         <StatusBadge
-          label={canDownload ? "Downloads enabled" : "View only"}
+          label={canDownload ? "Downloads: Enabled" : "Downloads: Disabled"}
           tone={canDownload ? "ok" : "neutral"}
         />
-      </p>
+      </div>
 
       <div className={styles.toolbar}>
         <label className={styles.field}>
@@ -142,7 +158,7 @@ export function DocumentsView({ companyName, canDownload, records }: Props) {
           <h2>No documents found</h2>
           <p>
             {records.length === 0
-              ? "No documents have been shared with your company yet."
+              ? "No documents have been shared with your account yet."
               : "Try adjusting your search or filters to find matching documents."}
           </p>
         </div>
@@ -153,9 +169,10 @@ export function DocumentsView({ companyName, canDownload, records }: Props) {
               <tr>
                 <th scope="col">Document name</th>
                 <th scope="col">Document type</th>
-                <th scope="col">Candidate</th>
+                <th scope="col">Candidate name</th>
                 <th scope="col">Modified date</th>
-                <th scope="col">Actions</th>
+                <th scope="col">View</th>
+                <th scope="col">Download</th>
               </tr>
             </thead>
             <tbody>
@@ -172,23 +189,27 @@ export function DocumentsView({ companyName, canDownload, records }: Props) {
                     )}
                   </td>
                   <td>
-                    <span className={styles.actionLinks}>
-                      {row.viewPath ? (
-                        <a
-                          className={styles.link}
-                          href={row.viewPath}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          View
-                        </a>
-                      ) : null}
-                      {row.canDownload && row.downloadPath ? (
-                        <a className={styles.link} href={row.downloadPath}>
-                          Download
-                        </a>
-                      ) : null}
-                    </span>
+                    {row.viewPath ? (
+                      <a
+                        className={styles.link}
+                        href={row.viewPath}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        View
+                      </a>
+                    ) : (
+                      <span className={styles.muted}>—</span>
+                    )}
+                  </td>
+                  <td>
+                    {row.canDownload && row.downloadPath ? (
+                      <a className={styles.link} href={row.downloadPath}>
+                        Download
+                      </a>
+                    ) : (
+                      <span className={styles.muted}>—</span>
+                    )}
                   </td>
                 </tr>
               ))}

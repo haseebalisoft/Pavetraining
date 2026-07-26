@@ -7,8 +7,17 @@ export async function GET(request: Request) {
   return withCustomerApi(
     "GET /api/customer/training-matrix",
     async (customer) => {
-      const records = await getCustomerMatrixRecords(customer.companyName);
-      return { companyName: customer.companyName, records };
+      const records = await getCustomerMatrixRecords(
+        customer.companyName,
+        customer,
+      );
+      return {
+        companyName: customer.companyName,
+        customerRole: customer.customerRole,
+        roleLabel: customer.roleLabel,
+        accessScope: customer.normalizedAccessScope,
+        records,
+      };
     },
     { entityName: "Training Matrix", audit: true },
     request,

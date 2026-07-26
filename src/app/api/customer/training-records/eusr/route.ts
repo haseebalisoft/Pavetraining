@@ -7,7 +7,7 @@ export async function GET(request: Request) {
   return withCustomerApi(
     "GET /api/customer/training-records/eusr",
     async (context) => {
-      const records = await getCustomerEusrRecords(context.companyId);
+      const records = await getCustomerEusrRecords(context.companyId, context);
       return { records };
     },
     { entityName: "EUSR Register" },

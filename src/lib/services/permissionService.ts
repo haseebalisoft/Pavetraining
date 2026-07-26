@@ -10,13 +10,22 @@ import {
   getListItemsByKey,
   type SharePointFields,
 } from "@/lib/services/sharePointListService";
-import type { PermissionProfile, RoleType } from "@/types/models";
+import type {
+  CustomerRoleType,
+  NormalizedAccessScope,
+  PermissionProfile,
+  RoleType,
+} from "@/types/models";
 
 const permissionFields = getSharePointFields("permissions");
 
 /**
- * SharePoint RoleType choices are Training Manager / Supervisor.
- * Portal routing only has Admin (/admin) and Customer (/customer).
+ * SharePoint RoleType choices today: Training Manager | Supervisor
+ * (Admin / Candidate may be added later — already mapped).
+ *
+ * Portal routing bucket:
+ * - Admin: Admin + Training Manager (legacy PAVE staff keep /admin)
+ * - Customer: Supervisor + Candidate (+ Training Manager can also use customer APIs)
  */
 export function normalizePermissionRoleType(
   value: unknown,
@@ -24,10 +33,18 @@ export function normalizePermissionRoleType(
   const role = asString(value);
   if (!role) return null;
   const normalized = role.toLowerCase().trim();
-  if (normalized === "admin" || normalized === "training manager") {
+  if (
+    normalized === "admin" ||
+    normalized === "training manager" ||
+    normalized === "trainingmanager"
+  ) {
     return "Admin";
   }
-  if (normalized === "customer" || normalized === "supervisor") {
+  if (
+    normalized === "customer" ||
+    normalized === "supervisor" ||
+    normalized === "candidate"
+  ) {
     return "Customer";
   }
   return null;
@@ -36,6 +53,84 @@ export function normalizePermissionRoleType(
 /** Values written back to the SharePoint RoleType choice column. */
 export function toSharePointRoleType(role: RoleType): string {
   return role === "Admin" ? "Training Manager" : "Supervisor";
+}
+
+export function resolveCustomerRole(
+  sharePointRole: string,
+  accessScope: string,
+): CustomerRoleType | null {
+  const role = sharePointRole.toLowerCase().trim();
+  const scope = accessScope.toLowerCase().trim();
+
+  if (role === "admin") return null;
+
+  if (role === "training manager" || role === "trainingmanager") {
+    return "TrainingManager";
+  }
+
+  if (role === "candidate") return "Candidate";
+
+  if (role === "supervisor" || role === "customer") {
+    if (scope.includes("candidate")) return "Candidate";
+    return "Supervisor";
+  }
+
+  return null;
+}
+
+export function roleLabelFor(
+  sharePointRole: string,
+  customerRole: CustomerRoleType | null,
+): string {
+  if (customerRole === "TrainingManager") return "Training Manager";
+  if (customerRole === "Supervisor") return "Supervisor";
+  if (customerRole === "Candidate") return "Candidate";
+  return sharePointRole.trim() || "Admin";
+}
+
+export function normalizeAccessScopeValue(
+  value: string,
+  customerRole: CustomerRoleType | null,
+  isAdminOnly: boolean,
+): NormalizedAccessScope {
+  if (isAdminOnly) return "All";
+  const s = value.toLowerCase().trim();
+  if (s === "all" || s.includes("all compan")) return "All";
+  if (s.includes("candidate")) return "CandidateOnly";
+  if (s.includes("assigned")) return "AssignedCandidates";
+  if (s.includes("department")) return "Department";
+  if (s.includes("full company") || s === "company") return "Company";
+  if (customerRole === "Candidate") return "CandidateOnly";
+  if (customerRole === "Supervisor") return "Department";
+  if (customerRole === "TrainingManager") return "Company";
+  return "Company";
+}
+
+function parseMultiChoice(value: unknown): string[] {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => {
+        if (typeof entry === "string") return entry.trim();
+        if (entry && typeof entry === "object") {
+          return (
+            asString((entry as { LookupValue?: unknown }).LookupValue) ||
+            asString((entry as { Title?: unknown }).Title) ||
+            asString((entry as { Name?: unknown }).Name) ||
+            ""
+          );
+        }
+        return "";
+      })
+      .filter(Boolean);
+  }
+  if (typeof value === "string") {
+    return value
+      .split(/;|#/)
+      .map((part) => part.trim())
+      .filter((part) => part && !/^\d+$/.test(part));
+  }
+  return [];
 }
 
 function resolveCompanyId(fields: SharePointFields): string | null {
@@ -61,6 +156,7 @@ function resolveCompanyDisplayName(fields: SharePointFields): string | undefined
   const companyValue = fields[permissionFields.company];
 
   if (typeof companyValue === "string") {
+    if (/^\d+$/.test(companyValue.trim())) return undefined;
     return companyValue.trim() || undefined;
   }
 
@@ -81,34 +177,60 @@ function mapPermissionItem(
 ): PermissionProfile | null {
   const userEmail = asString(fields[permissionFields.userEmail])?.trim();
   const status = asString(fields[permissionFields.status])?.trim();
-  const roleType = normalizePermissionRoleType(
-    fields[permissionFields.roleType],
-  );
+  const sharePointRoleType =
+    asString(fields[permissionFields.roleType])?.trim() || "";
+  const roleType = normalizePermissionRoleType(sharePointRoleType);
   const companyId = resolveCompanyId(fields);
   const accessScope = asString(fields[permissionFields.accessScope])?.trim();
 
-  if (!userEmail || !status || !roleType || !companyId || !accessScope) {
+  if (!userEmail || !status || !roleType || !companyId) {
     return null;
   }
+
+  const resolvedAccessScope = accessScope || "Full Company";
+  const customerRole = resolveCustomerRole(sharePointRoleType, resolvedAccessScope);
+  const isAdminOnly = roleType === "Admin" && customerRole === null;
+  const canAccessAdmin =
+    roleType === "Admin" || customerRole === "TrainingManager";
+  const canAccessCustomer = customerRole !== null;
+  const departmentScopes = Array.from(
+    new Set([
+      ...parseMultiChoice(fields[permissionFields.departments]),
+      ...parseMultiChoice(fields[permissionFields.departmentsAllowed]),
+    ]),
+  );
+  const candidateScopeName =
+    asString(fields[permissionFields.name])?.trim() || null;
 
   return {
     id,
     userEmail: userEmail.toLowerCase(),
     status,
     roleType,
+    sharePointRoleType,
+    customerRole,
+    roleLabel: roleLabelFor(sharePointRoleType, customerRole),
     companyId,
     companyDisplayName: resolveCompanyDisplayName(fields),
-    accessScope,
+    accessScope: resolvedAccessScope,
+    normalizedAccessScope: normalizeAccessScopeValue(
+      resolvedAccessScope,
+      customerRole,
+      isAdminOnly,
+    ),
+    departmentScopes,
+    candidateScopeName,
     canView: asBoolean(fields[permissionFields.canView]),
     canDownload: asBoolean(fields[permissionFields.canDownload]),
     canEdit: asBoolean(fields[permissionFields.canEdit]),
+    canAccessAdmin,
+    canAccessCustomer,
   };
 }
 
 /**
  * Reads the SharePoint Permissions List for the signed-in user.
  * Company is always taken from this list — never from client input.
- * Deduped per request via React.cache; list reads use short SharePoint cache.
  */
 export const getActivePermissionByEmail = cache(
   async (email: string): Promise<PermissionProfile | null> => {
@@ -117,8 +239,6 @@ export const getActivePermissionByEmail = cache(
       return null;
     }
 
-    // Prefer exact SharePoint filter, then fall back to Active scan so leading/
-    // trailing spaces in UserEmail still match the signed-in account.
     const exactFilter = [
       buildSchemaFieldEqualsFilter("permissions", "userEmail", normalizedEmail),
       buildSchemaFieldEqualsFilter("permissions", "status", "Active"),
@@ -159,3 +279,17 @@ export const getActivePermissionByEmail = cache(
     );
   },
 );
+
+export function accessScopeBadgeLabel(permission: PermissionProfile): string {
+  const scope = permission.normalizedAccessScope;
+  if (scope === "Company" || scope === "All") return "Company-wide";
+  if (scope === "Department") {
+    if (permission.departmentScopes.length > 0) {
+      return `${permission.departmentScopes.join(", ")} department`;
+    }
+    return "Department";
+  }
+  if (scope === "AssignedCandidates") return "Assigned candidates";
+  if (scope === "CandidateOnly") return "Own records only";
+  return permission.accessScope || "Company";
+}

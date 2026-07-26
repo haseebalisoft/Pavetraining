@@ -7,7 +7,7 @@ export async function GET(request: Request) {
   return withCustomerApi(
     "GET /api/customer/nvq",
     async (context) => {
-      const records = await getCustomerNvqRecords(context.companyId);
+      const records = await getCustomerNvqRecords(context.companyId, context);
       return { records };
     },
     { entityName: "NVQ Register" },

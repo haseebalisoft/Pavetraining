@@ -181,3 +181,157 @@
   border-color: #8dc63f !important;
   color: #fff !important;
 }
+
+.success {
+  color: #5c8228;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.actionsCol {
+  white-space: nowrap;
+  position: sticky;
+  left: 0;
+  background: #fff;
+  z-index: 1;
+}
+
+.linkBtn,
+.linkBtnDanger {
+  border: none;
+  background: transparent;
+  font-weight: 700;
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 2px 6px;
+  margin-right: 4px;
+}
+
+.linkBtn {
+  color: #5c8228;
+}
+
+.linkBtnDanger {
+  color: #dc2626;
+}
+
+.linkBtn:disabled,
+.linkBtnDanger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.drawerBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(30, 30, 30, 0.45);
+  display: flex;
+  justify-content: flex-end;
+  z-index: 1000;
+}
+
+.drawer {
+  width: min(480px, 100%);
+  height: 100%;
+  background: #fff;
+  box-shadow: -4px 0 24px rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  overflow: auto;
+}
+
+.drawerHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.formGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 12px 0;
+  flex: 1;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fieldLabel {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #8a8a8a;
+}
+
+.field input,
+.field select {
+  border: 1px solid #e2e2e2;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 0.875rem;
+  color: #4a4a4a;
+}
+
+.field input:focus,
+.field select:focus {
+  outline: 2px solid #8dc63f;
+  outline-offset: 1px;
+}
+
+.drawerFooter {
+  display: flex;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid #e2e2e2;
+}
+
+.drawerFooter button {
+  border: 1px solid #e2e2e2;
+  background: #fff;
+  color: #4a4a4a;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.drawerFooter button:first-child {
+  background: #8dc63f;
+  border-color: #8dc63f;
+  color: #fff;
+}
+
+.drawerFooter button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.logoBox {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px dashed #c5d6a7;
+  border-radius: 8px;
+  background: #f8fbf2;
+}
+
+.logoPreview {
+  width: 96px;
+  height: 96px;
+  object-fit: contain;
+  border: 1px solid #e2e2e2;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.logoBox input[type="file"] {
+  font-size: 0.8rem;
+}

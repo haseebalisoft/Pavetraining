@@ -66,8 +66,10 @@ const workforceFields = {
   dateOfBirth: "Dateofbirth",
   department: "Department",
   status: "Status",
-  trainingManager: "TrainingManager",
+  /** Live internal name is Trainingmanager (lowercase m). */
+  trainingManager: "Trainingmanager",
   supervisor: "Supervisor",
+  email: "Email",
   cscsNumber: "CSCSNumber",
   swqrNumber: "SWQRNumber",
   eusrNumber: "EUSRNumber",
@@ -188,7 +190,11 @@ const customerDocumentsFields = {
   id: "ID",
   title: "Title",
   company: "Company",
+  /** Graph expand companion for lookup field `Candidate`. */
+  companyLookupId: "CompanyLookupId",
   candidate: "Candidate",
+  /** Graph expand companion for lookup field `Candidate`. */
+  candidateLookupId: "CandidateLookupId",
   documentType: "DocumentType",
   customerVisible: "CustomerVisible",
   notificationSent: "NotificationSent",
@@ -244,6 +250,12 @@ const permissionsFields = {
   /** Graph expand companion for lookup field `Company`. */
   companyLookupId: "CompanyLookupId",
   accessScope: "AccessScope",
+  /** Person/display name — used for CandidateOnly and Supervisor matching. */
+  name: "Name",
+  /** Multi-choice department scopes for Supervisor. */
+  departments: "Departments",
+  /** Lookup multi to Departments list. */
+  departmentsAllowed: "DepartmentsAllowed",
   canView: "CanView",
   canDownload: "CanDownload",
   canEdit: "CanEdit",
@@ -321,6 +333,7 @@ export const SHAREPOINT_LISTS = {
       status: "Status",
       trainingManager: "Training manager",
       supervisor: "Supervisor",
+      email: "Email",
       cscsNumber: "CSCS number",
       swqrNumber: "SWQR number",
       eusrNumber: "EUSR number",
@@ -490,7 +503,9 @@ export const SHAREPOINT_LISTS = {
       id: "ID",
       title: "Title",
       company: "Company",
+      companyLookupId: "Company lookup id",
       candidate: "Candidate",
+      candidateLookupId: "Candidate lookup id",
       documentType: "Document type",
       customerVisible: "Customer visible",
       notificationSent: "Notification sent",
@@ -563,6 +578,9 @@ export const SHAREPOINT_LISTS = {
       company: "Company",
       companyLookupId: "Company lookup ID",
       accessScope: "Access scope",
+      name: "Name",
+      departments: "Departments",
+      departmentsAllowed: "Departments allowed",
       canView: "Can view",
       canDownload: "Can download",
       canEdit: "Can edit",

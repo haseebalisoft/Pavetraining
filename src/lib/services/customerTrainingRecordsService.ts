@@ -1,6 +1,10 @@
 import "server-only";
 
 import { getSharePointFields } from "@/lib/schema/sharepointSchema";
+import {
+  getAllowedCandidateNames,
+  isCompanyWideScope,
+} from "@/lib/services/customerAccessService";
 import { getCompanyById } from "@/lib/services/companyService";
 import {
   asBoolean,
@@ -13,6 +17,7 @@ import {
 import { getWorkforceIdByCandidateName } from "@/lib/services/workforceService";
 import { toCustomerOutcome } from "@/lib/training/customerOutcome";
 import type {
+  CustomerContext,
   CustomerEusrRecord,
   CustomerInHouseRecord,
   CustomerNporsRecord,
@@ -188,6 +193,7 @@ function mapInHouse(
  */
 export async function getCustomerNporsRecords(
   companyId: string,
+  context?: CustomerContext,
 ): Promise<CustomerNporsRecord[]> {
   const companyName = await resolveCompanyName(companyId);
   const [items, workforceIds] = await Promise.all([
@@ -198,13 +204,23 @@ export async function getCustomerNporsRecords(
     getWorkforceIdByCandidateName(companyName),
   ]);
 
-  return items
+  let rows = items
     .map((item) => mapNpors(item.id, item.fields, workforceIds))
     .filter((row): row is CustomerNporsRecord => row !== null);
+
+  if (context && !isCompanyWideScope(context.normalizedAccessScope)) {
+    const allowedNames = await getAllowedCandidateNames(context);
+    rows = rows.filter((row) =>
+      allowedNames.has(row.candidateName.trim().toLowerCase()),
+    );
+  }
+
+  return rows;
 }
 
 export async function getCustomerEusrRecords(
   companyId: string,
+  context?: CustomerContext,
 ): Promise<CustomerEusrRecord[]> {
   const companyName = await resolveCompanyName(companyId);
   const [items, workforceIds] = await Promise.all([
@@ -215,9 +231,18 @@ export async function getCustomerEusrRecords(
     getWorkforceIdByCandidateName(companyName),
   ]);
 
-  return items
+  let rows = items
     .map((item) => mapEusr(item.id, item.fields, workforceIds))
     .filter((row): row is CustomerEusrRecord => row !== null);
+
+  if (context && !isCompanyWideScope(context.normalizedAccessScope)) {
+    const allowedNames = await getAllowedCandidateNames(context);
+    rows = rows.filter((row) =>
+      allowedNames.has(row.candidateName.trim().toLowerCase()),
+    );
+  }
+
+  return rows;
 }
 
 /**
@@ -226,6 +251,7 @@ export async function getCustomerEusrRecords(
  */
 export async function getCustomerStreetworksRecords(
   companyId: string,
+  context?: CustomerContext,
 ): Promise<CustomerStreetworksRecord[]> {
   const companyName = await resolveCompanyName(companyId);
   const [items, workforceIds] = await Promise.all([
@@ -236,13 +262,23 @@ export async function getCustomerStreetworksRecords(
     getWorkforceIdByCandidateName(companyName),
   ]);
 
-  return items
+  let rows = items
     .map((item) => mapStreetworks(item.id, item.fields, workforceIds))
     .filter((row): row is CustomerStreetworksRecord => row !== null);
+
+  if (context && !isCompanyWideScope(context.normalizedAccessScope)) {
+    const allowedNames = await getAllowedCandidateNames(context);
+    rows = rows.filter((row) =>
+      allowedNames.has(row.candidateName.trim().toLowerCase()),
+    );
+  }
+
+  return rows;
 }
 
 export async function getCustomerInHouseRecords(
   companyId: string,
+  context?: CustomerContext,
 ): Promise<CustomerInHouseRecord[]> {
   const companyName = await resolveCompanyName(companyId);
   const [items, workforceIds] = await Promise.all([
@@ -253,7 +289,16 @@ export async function getCustomerInHouseRecords(
     getWorkforceIdByCandidateName(companyName),
   ]);
 
-  return items
+  let rows = items
     .map((item) => mapInHouse(item.id, item.fields, workforceIds))
     .filter((row): row is CustomerInHouseRecord => row !== null);
+
+  if (context && !isCompanyWideScope(context.normalizedAccessScope)) {
+    const allowedNames = await getAllowedCandidateNames(context);
+    rows = rows.filter((row) =>
+      allowedNames.has(row.candidateName.trim().toLowerCase()),
+    );
+  }
+
+  return rows;
 }

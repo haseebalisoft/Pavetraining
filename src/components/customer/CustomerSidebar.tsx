@@ -8,13 +8,13 @@ import { BrandLogo } from "@/components/brand/BrandLogo";
 import styles from "./customer.module.css";
 
 const NAV_ITEMS = [
-  { href: "/customer", label: "Dashboard", exact: true },
   { href: "/customer/training-matrix", label: "Training Matrix" },
-  { href: "/customer/candidates", label: "Candidates" },
+  { href: "/customer", label: "Dashboard", exact: true },
+  { href: "/customer/candidates", label: "Candidates / Workforce" },
   { href: "/customer/training-records", label: "Training Records" },
   { href: "/customer/nvq-progress", label: "NVQ Progress" },
   { href: "/customer/documents", label: "Documents" },
-  { href: "/customer/events", label: "Events" },
+  { href: "/customer/events", label: "Events / Bookings" },
   { href: "/customer/offers", label: "Offers" },
   { href: "/customer/support", label: "Support" },
 ] as const;
@@ -22,12 +22,18 @@ const NAV_ITEMS = [
 interface CustomerSidebarProps {
   email: string;
   companyName: string;
+  roleLabel: string;
+  accessLabel: string;
+  canDownload: boolean;
   signOutAction: () => Promise<void>;
 }
 
 export function CustomerSidebar({
   email,
   companyName,
+  roleLabel,
+  accessLabel,
+  canDownload,
   signOutAction,
 }: CustomerSidebarProps) {
   const pathname = usePathname();
@@ -44,8 +50,13 @@ export function CustomerSidebar({
           <div className={styles.brandLogoPanel}>
             <BrandLogo variant="compact" priority />
           </div>
-          <p className={styles.brandMeta}>Customer portal</p>
+          <p className={styles.brandMeta}>PAVE Training Customer Portal</p>
           <p className={styles.companyChip}>{companyName}</p>
+          <p className={styles.accessChip}>Role: {roleLabel}</p>
+          <p className={styles.accessChip}>Access: {accessLabel}</p>
+          <p className={styles.accessChip}>
+            Downloads: {canDownload ? "Enabled" : "Disabled"}
+          </p>
         </div>
         <button
           type="button"

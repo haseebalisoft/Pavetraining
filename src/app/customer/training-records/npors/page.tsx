@@ -23,7 +23,7 @@ export default async function CustomerNporsRecordsPage() {
     redirect("/access-denied");
   }
 
-  const records = await getCustomerNporsRecords(context.companyId);
+  const records = await getCustomerNporsRecords(context.companyId, context);
 
   return (
     <NporsRecordsView companyName={context.companyName} records={records} />

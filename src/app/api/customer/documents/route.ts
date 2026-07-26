@@ -10,9 +10,13 @@ export async function GET(request: Request) {
       const records = await getCustomerDocumentRecords(
         context.companyId,
         context.canDownload,
+        context,
       );
       return {
         canDownload: context.canDownload,
+        customerRole: context.customerRole,
+        roleLabel: context.roleLabel,
+        accessScope: context.normalizedAccessScope,
         records,
       };
     },

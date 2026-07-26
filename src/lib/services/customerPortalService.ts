@@ -1,6 +1,14 @@
 import "server-only";
 
 import { getSharePointFields } from "@/lib/schema/sharepointSchema";
+import {
+  extractCandidateLookupId,
+  getAllowedCandidateIds,
+  getAllowedCandidateNames,
+  getCompanyCandidateNameMap,
+  isCompanyWideScope,
+  resolveCandidateDisplayNameSync,
+} from "@/lib/services/customerAccessService";
 import { getCompanyById } from "@/lib/services/companyService";
 import {
   asBoolean,
@@ -14,6 +22,7 @@ import {
   type SharePointFields,
 } from "@/lib/services/sharePointListService";
 import type {
+  CustomerContext,
   CustomerDocumentRecord,
   CustomerEventRecord,
   CustomerNvqRecord,
@@ -49,14 +58,16 @@ function companyAndVisibleFilter(
   return `${companyFilter} and fields/${visibleField} eq true`;
 }
 
-/** Customer document list filter: company + visible + files only (FSObjType = 0). */
-function customerDocumentsFilter(companyName: string): string {
-  const base = companyAndVisibleFilter(
-    "customerDocuments",
-    "company",
-    companyName,
-  );
-  return `${base} and fields/${documentFields.fsObjType} eq 0`;
+/**
+ * Prefer CompanyLookupId (indexed) over Company display-name text filters.
+ * FSObjType is filtered in memory — including it in OData often makes Graph hang.
+ */
+function customerDocumentsByCompanyIdFilter(companyId: string): string {
+  const id = Number(companyId);
+  const companyClause = Number.isFinite(id)
+    ? `fields/${documentFields.companyLookupId} eq ${id}`
+    : buildSchemaFieldEqualsFilter("customerDocuments", "company", companyId);
+  return `${companyClause} and fields/${documentFields.customerVisible} eq true`;
 }
 
 function matchesCompany(
@@ -131,6 +142,7 @@ function mapDocument(
   fields: SharePointFields,
   uploadedDate: string | null,
   canDownload: boolean,
+  candidateName: string | null,
 ): CustomerDocumentRecord | null {
   if (!isSharePointFile(fields)) {
     return null;
@@ -141,8 +153,8 @@ function mapDocument(
   }
 
   const name =
-    asString(fields[documentFields.title]) ??
-    asString(fields[documentFields.fileLeafRef]);
+    asString(fields[documentFields.fileLeafRef]) ??
+    asString(fields[documentFields.title]);
   if (!name) {
     return null;
   }
@@ -159,9 +171,9 @@ function mapDocument(
     id,
     name,
     documentType: asNullableString(fields[documentFields.documentType]),
-    candidate: asLookupOrString(fields[documentFields.candidate]),
+    candidate: candidateName,
     uploadedDate,
-    canDownload: canDownload,
+    canDownload,
     viewPath: `/api/customer/documents/${id}/view`,
     downloadPath: canDownload
       ? `/api/customer/documents/${id}/download`
@@ -232,6 +244,7 @@ function mapOffer(
 
 export async function getCustomerNvqRecords(
   companyId: string,
+  context?: CustomerContext,
 ): Promise<CustomerNvqRecord[]> {
   const companyName = await resolveCompanyName(companyId);
   const items = await getListItemsByKey("nvqRegister", {
@@ -239,49 +252,122 @@ export async function getCustomerNvqRecords(
     top: 5000,
   });
 
-  return items
+  let rows = items
     .map((item) => mapNvq(item.id, item.fields))
     .filter((row): row is CustomerNvqRecord => row !== null);
+
+  if (context && !isCompanyWideScope(context.normalizedAccessScope)) {
+    const allowedNames = await getAllowedCandidateNames(context);
+    rows = rows.filter((row) =>
+      allowedNames.has(row.candidateName.trim().toLowerCase()),
+    );
+  }
+
+  return rows;
 }
 
 export async function getCustomerDocumentRecords(
   companyId: string,
   canDownload: boolean,
+  context?: CustomerContext,
 ): Promise<CustomerDocumentRecord[]> {
-  const companyName = await resolveCompanyName(companyId);
-  const items = await getListItemsByKey("customerDocuments", {
-    filter: customerDocumentsFilter(companyName),
-    top: 5000,
-  });
+  // Prefer company name already resolved on the permission context.
+  const companyName =
+    context?.companyName?.trim() || (await resolveCompanyName(companyId));
 
-  return items
-    .map((item) => {
-      const company = asLookupOrString(item.fields[documentFields.company]);
-      if (!matchesCompany(company, companyName)) {
-        return null;
+  // Indexed CompanyLookupId filter — avoid slow Company text + FSObjType OData.
+  const [items, nameCache, allowedIds] = await Promise.all([
+    getListItemsByKey("customerDocuments", {
+      filter: customerDocumentsByCompanyIdFilter(companyId),
+      top: 500,
+    }),
+    getCompanyCandidateNameMap(companyName),
+    context && !isCompanyWideScope(context.normalizedAccessScope)
+      ? getAllowedCandidateIds(context)
+      : Promise.resolve(null),
+  ]);
+
+  const needsScope = allowedIds != null;
+  const rows: CustomerDocumentRecord[] = [];
+
+  for (const item of items) {
+    if (!isSharePointFile(item.fields)) {
+      continue;
+    }
+
+    const company = asLookupOrString(item.fields[documentFields.company]);
+    const companyLookupId = asString(
+      item.fields[documentFields.companyLookupId],
+    );
+    const companyOk =
+      companyLookupId === companyId ||
+      matchesCompany(company, companyName);
+    if (!companyOk) {
+      continue;
+    }
+
+    const candidateRaw = item.fields[documentFields.candidate];
+    const candidateId =
+      asString(item.fields[documentFields.candidateLookupId]) ||
+      extractCandidateLookupId(item.fields, documentFields.candidate);
+
+    if (needsScope && allowedIds && context) {
+      // Company-level docs (no candidate) — Training Manager only.
+      if (!candidateId) {
+        if (context.customerRole !== "TrainingManager") {
+          continue;
+        }
+      } else if (!allowedIds.has(candidateId)) {
+        continue;
       }
+    }
 
-      const modified =
-        item.lastModifiedDateTime ??
-        asNullableString(item.fields[documentFields.modified]) ??
-        item.createdDateTime ??
-        asNullableString(item.fields.Created) ??
-        asNullableString(item.fields.CreatedDateTime);
+    const candidateName = resolveCandidateDisplayNameSync(
+      candidateRaw,
+      candidateId,
+      nameCache,
+    );
 
-      return mapDocument(item.id, item.fields, modified, canDownload);
-    })
-    .filter((row): row is CustomerDocumentRecord => row !== null);
+    // Never surface raw numeric IDs as the candidate label.
+    const safeCandidateName =
+      candidateName && !/^\d+$/.test(candidateName.trim())
+        ? candidateName
+        : null;
+
+    const modified =
+      item.lastModifiedDateTime ??
+      asNullableString(item.fields[documentFields.modified]) ??
+      item.createdDateTime ??
+      asNullableString(item.fields.Created) ??
+      asNullableString(item.fields.CreatedDateTime);
+
+    const mapped = mapDocument(
+      item.id,
+      item.fields,
+      modified,
+      canDownload,
+      safeCandidateName,
+    );
+    if (mapped) {
+      rows.push(mapped);
+    }
+  }
+
+  return rows;
 }
 
 export async function getCustomerDocumentForAccess(
   companyId: string,
   documentId: string,
+  context?: CustomerContext,
 ): Promise<{
   id: string;
   name: string;
   companyMatches: boolean;
   customerVisible: boolean;
   isFile: boolean;
+  candidateId: string | null;
+  scopeAllowed: boolean;
 } | null> {
   const companyName = await resolveCompanyName(companyId);
   const item = await getListItemByKey("customerDocuments", documentId);
@@ -291,9 +377,23 @@ export async function getCustomerDocumentForAccess(
 
   const company = asLookupOrString(item.fields[documentFields.company]);
   const name =
-    asString(item.fields[documentFields.title]) ??
     asString(item.fields[documentFields.fileLeafRef]) ??
+    asString(item.fields[documentFields.title]) ??
     "document";
+
+  const candidateId =
+    asString(item.fields[documentFields.candidateLookupId]) ||
+    extractCandidateLookupId(item.fields, documentFields.candidate);
+
+  let scopeAllowed = true;
+  if (context && !isCompanyWideScope(context.normalizedAccessScope)) {
+    if (!candidateId) {
+      scopeAllowed = context.customerRole === "TrainingManager";
+    } else {
+      const allowedIds = await getAllowedCandidateIds(context);
+      scopeAllowed = allowedIds.has(candidateId);
+    }
+  }
 
   return {
     id: item.id,
@@ -301,6 +401,8 @@ export async function getCustomerDocumentForAccess(
     companyMatches: matchesCompany(company, companyName),
     customerVisible: asBoolean(item.fields[documentFields.customerVisible]),
     isFile: isSharePointFile(item.fields),
+    candidateId,
+    scopeAllowed,
   };
 }
 
@@ -308,8 +410,9 @@ export async function getCustomerDocumentForAccess(
 export async function getCustomerDocumentForDownload(
   companyId: string,
   documentId: string,
+  context?: CustomerContext,
 ) {
-  return getCustomerDocumentForAccess(companyId, documentId);
+  return getCustomerDocumentForAccess(companyId, documentId, context);
 }
 
 export async function downloadCustomerDocumentFile(documentId: string) {

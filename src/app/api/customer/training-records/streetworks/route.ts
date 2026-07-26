@@ -7,7 +7,7 @@ export async function GET(request: Request) {
   return withCustomerApi(
     "GET /api/customer/training-records/streetworks",
     async (context) => {
-      const records = await getCustomerStreetworksRecords(context.companyId);
+      const records = await getCustomerStreetworksRecords(context.companyId, context);
       return { records };
     },
     { entityName: "Streetworks Training" },

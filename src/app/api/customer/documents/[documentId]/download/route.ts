@@ -45,13 +45,14 @@ export async function GET(
     const document = await getCustomerDocumentForAccess(
       customer.companyId,
       documentId,
+      customer,
     );
 
     if (!document) {
       throw new NotFoundError();
     }
 
-    if (!document.isFile || !document.companyMatches) {
+    if (!document.isFile || !document.companyMatches || !document.scopeAllowed) {
       throw new AccessDeniedError();
     }
 

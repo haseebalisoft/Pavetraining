@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 
 import { CustomerSidebar } from "@/components/customer/CustomerSidebar";
 import { auth, signOut } from "@/auth";
+import { accessScopeBadgeLabel } from "@/lib/services/customerAccessService";
 import { getCustomerContext } from "@/lib/services/customerContextService";
 import type { CustomerContext } from "@/types/models";
 
@@ -39,6 +40,9 @@ export default async function CustomerLayout({
       <CustomerSidebar
         email={context.loggedInEmail}
         companyName={context.companyName}
+        roleLabel={context.roleLabel}
+        accessLabel={accessScopeBadgeLabel(context)}
+        canDownload={context.canDownload}
         signOutAction={signOutAction}
       />
       <main className={styles.main}>{children}</main>

@@ -43,7 +43,7 @@ export default async function CustomerPage() {
 
   let stats: DashboardStats;
   try {
-    stats = await getCustomerDashboard(context.companyId, context.companyName);
+    stats = await getCustomerDashboard(context);
   } catch {
     stats = {
       workforceCount: 0,
@@ -68,6 +68,9 @@ export default async function CustomerPage() {
       email={context.loggedInEmail}
       permissionStatus={context.permissionStatus}
       accessScope={context.accessScope}
+      roleLabel={context.roleLabel}
+      normalizedAccessScope={context.normalizedAccessScope}
+      departmentScopes={context.departmentScopes}
       canDownload={context.canDownload}
       stats={stats}
       companyProfile={companyProfile}

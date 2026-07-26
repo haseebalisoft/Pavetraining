@@ -66,8 +66,10 @@ const workforceFields = {
   dateOfBirth: "Dateofbirth",
   department: "Department",
   status: "Status",
-  trainingManager: "TrainingManager",
+  /** Live internal name is Trainingmanager (lowercase m). */
+  trainingManager: "Trainingmanager",
   supervisor: "Supervisor",
+  email: "Email",
   cscsNumber: "CSCSNumber",
   swqrNumber: "SWQRNumber",
   eusrNumber: "EUSRNumber",
@@ -244,6 +246,12 @@ const permissionsFields = {
   /** Graph expand companion for lookup field `Company`. */
   companyLookupId: "CompanyLookupId",
   accessScope: "AccessScope",
+  /** Person/display name — used for CandidateOnly and Supervisor matching. */
+  name: "Name",
+  /** Multi-choice department scopes for Supervisor. */
+  departments: "Departments",
+  /** Lookup multi to Departments list. */
+  departmentsAllowed: "DepartmentsAllowed",
   canView: "CanView",
   canDownload: "CanDownload",
   canEdit: "CanEdit",
@@ -303,7 +311,7 @@ export const SHAREPOINT_LISTS = {
       companyLogo: "Company logo",
       status: "Status",
     },
-  } satisfies SharePointListDefinition<typeof companyFields>,
+  },
 
   workforce: {
     key: "workforce",
@@ -321,13 +329,14 @@ export const SHAREPOINT_LISTS = {
       status: "Status",
       trainingManager: "Training manager",
       supervisor: "Supervisor",
+      email: "Email",
       cscsNumber: "CSCS number",
       swqrNumber: "SWQR number",
       eusrNumber: "EUSR number",
       nporsNumbers: "NPORS numbers",
       inHouseCertificationNumber: "In-house certification number",
     },
-  } satisfies SharePointListDefinition<typeof workforceFields>,
+  },
 
   trainingMatrix: {
     key: "trainingMatrix",
@@ -354,7 +363,7 @@ export const SHAREPOINT_LISTS = {
       n027Expiry: "N027 expiry",
       n100Expiry: "N100 expiry",
     },
-  } satisfies SharePointListDefinition<typeof trainingMatrixFields>,
+  },
 
   nporsRegister: {
     key: "nporsRegister",
@@ -379,7 +388,7 @@ export const SHAREPOINT_LISTS = {
       outcomeNotes: "Outcome notes",
       notes: "Notes",
     },
-  } satisfies SharePointListDefinition<typeof nporsRegisterFields>,
+  },
 
   eusrRegister: {
     key: "eusrRegister",
@@ -404,7 +413,7 @@ export const SHAREPOINT_LISTS = {
       outcomeNotes: "Outcome notes",
       notes: "Notes",
     },
-  } satisfies SharePointListDefinition<typeof eusrRegisterFields>,
+  },
 
   nrswaRegister: {
     key: "nrswaRegister",
@@ -428,7 +437,7 @@ export const SHAREPOINT_LISTS = {
       customerVisible: "Customer visible",
       outcomeNotes: "Outcome notes",
     },
-  } satisfies SharePointListDefinition<typeof nrswaRegisterFields>,
+  },
 
   inHouseCertificates: {
     key: "inHouseCertificates",
@@ -452,7 +461,7 @@ export const SHAREPOINT_LISTS = {
       outcomeNotes: "Outcome notes",
       notes: "Notes",
     },
-  } satisfies SharePointListDefinition<typeof inHouseCertificatesFields>,
+  },
 
   nvqRegister: {
     key: "nvqRegister",
@@ -478,7 +487,7 @@ export const SHAREPOINT_LISTS = {
       assessorTrainer: "Assessor / trainer",
       outcomeNotes: "Outcome notes",
     },
-  } satisfies SharePointListDefinition<typeof nvqRegisterFields>,
+  },
 
   customerDocuments: {
     key: "customerDocuments",
@@ -500,7 +509,7 @@ export const SHAREPOINT_LISTS = {
       modified: "Modified date",
       editor: "Modified by",
     },
-  } satisfies SharePointListDefinition<typeof customerDocumentsFields>,
+  },
 
   events: {
     key: "events",
@@ -529,12 +538,14 @@ export const SHAREPOINT_LISTS = {
       syncError: "Sync error",
       doNotSync: "Do not sync",
     },
-  } satisfies SharePointListDefinition<typeof eventsFields>,
+  },
 
   offersPromotions: {
     key: "offersPromotions",
     listName: "Offers / Promotions",
     displayName: "Offers / Promotions",
+    /** GUID avoids REST 404 — slash in title breaks getbytitle URLs. */
+    listId: "8e887fc7-0404-47e3-977c-e6e24e0b85c6",
     listIdEnvVar: "SHAREPOINT_OFFERS_PROMOTIONS_LIST_ID",
     fields: offersPromotionsFields,
     labels: {
@@ -547,7 +558,7 @@ export const SHAREPOINT_LISTS = {
       shortDescription: "Short description",
       status: "Status",
     },
-  } satisfies SharePointListDefinition<typeof offersPromotionsFields>,
+  },
 
   permissions: {
     key: "permissions",
@@ -563,11 +574,14 @@ export const SHAREPOINT_LISTS = {
       company: "Company",
       companyLookupId: "Company lookup ID",
       accessScope: "Access scope",
+      name: "Name",
+      departments: "Departments",
+      departmentsAllowed: "Departments allowed",
       canView: "Can view",
       canDownload: "Can download",
       canEdit: "Can edit",
     },
-  } satisfies SharePointListDefinition<typeof permissionsFields>,
+  },
 
   trainingCourseCategories: {
     key: "trainingCourseCategories",
@@ -587,7 +601,7 @@ export const SHAREPOINT_LISTS = {
       displayOrder: "Display order",
       notes: "Notes",
     },
-  } satisfies SharePointListDefinition<typeof trainingCourseCategoriesFields>,
+  },
 
   trainingManagerLogs: {
     key: "trainingManagerLogs",
@@ -607,7 +621,7 @@ export const SHAREPOINT_LISTS = {
       company: "Company",
       role: "Role",
     },
-  } satisfies SharePointListDefinition<typeof trainingManagerLogsFields>,
+  },
 } as const;
 
 export type SharePointListKey = keyof typeof SHAREPOINT_LISTS;
@@ -636,7 +650,14 @@ export function getSharePointFields<K extends SharePointListKey>(
 export function getSharePointFieldInternalNames(
   listKey: SharePointListKey,
 ): string[] {
-  return Object.values(SHAREPOINT_LISTS[listKey].fields);
+  const fields = SHAREPOINT_LISTS[listKey].fields as Record<string, string>;
+  const names: string[] = [];
+  for (const key in fields) {
+    if (Object.prototype.hasOwnProperty.call(fields, key)) {
+      names.push(fields[key]);
+    }
+  }
+  return names;
 }
 
 export function getSharePointFieldLabel(

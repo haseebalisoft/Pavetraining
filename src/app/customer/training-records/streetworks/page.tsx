@@ -23,7 +23,7 @@ export default async function CustomerStreetworksRecordsPage() {
     redirect("/access-denied");
   }
 
-  const records = await getCustomerStreetworksRecords(context.companyId);
+  const records = await getCustomerStreetworksRecords(context.companyId, context);
 
   return (
     <StreetworksRecordsView

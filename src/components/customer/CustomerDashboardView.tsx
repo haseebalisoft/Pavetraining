@@ -50,9 +50,35 @@ interface CustomerDashboardViewProps {
   email: string;
   permissionStatus: string;
   accessScope: string;
+  roleLabel: string;
+  normalizedAccessScope: string;
+  departmentScopes: string[];
   canDownload: boolean;
   stats: DashboardStats;
   companyProfile?: CustomerCompanyProfile | null;
+}
+
+function accessLabel(
+  normalizedAccessScope: string,
+  departmentScopes: string[],
+  accessScope: string,
+): string {
+  if (normalizedAccessScope === "Company" || normalizedAccessScope === "All") {
+    return "Company-wide";
+  }
+  if (normalizedAccessScope === "Department") {
+    if (departmentScopes.length > 0) {
+      return `${departmentScopes.join(", ")} department`;
+    }
+    return "Department";
+  }
+  if (normalizedAccessScope === "AssignedCandidates") {
+    return "Assigned candidates";
+  }
+  if (normalizedAccessScope === "CandidateOnly") {
+    return "Own records only";
+  }
+  return accessScope || "Company";
 }
 
 export function CustomerDashboardView({
@@ -60,6 +86,9 @@ export function CustomerDashboardView({
   email,
   permissionStatus,
   accessScope,
+  roleLabel,
+  normalizedAccessScope,
+  departmentScopes,
   canDownload,
   stats,
   companyProfile = null,
@@ -114,6 +143,18 @@ export function CustomerDashboardView({
           <p className={styles.metaValue}>{email}</p>
         </div>
         <div className={styles.metaItem}>
+          <p className={styles.metaLabel}>Role</p>
+          <p className={styles.metaValue}>
+            <StatusBadge label={roleLabel} tone="neutral" />
+          </p>
+        </div>
+        <div className={styles.metaItem}>
+          <p className={styles.metaLabel}>Access</p>
+          <p className={styles.metaValue}>
+            {accessLabel(normalizedAccessScope, departmentScopes, accessScope)}
+          </p>
+        </div>
+        <div className={styles.metaItem}>
           <p className={styles.metaLabel}>Permission status</p>
           <p className={styles.metaValue}>
             <StatusBadge
@@ -125,14 +166,10 @@ export function CustomerDashboardView({
           </p>
         </div>
         <div className={styles.metaItem}>
-          <p className={styles.metaLabel}>Access scope</p>
-          <p className={styles.metaValue}>{accessScope}</p>
-        </div>
-        <div className={styles.metaItem}>
           <p className={styles.metaLabel}>Downloads</p>
           <p className={styles.metaValue}>
             <StatusBadge
-              label={canDownload ? "Enabled" : "View only"}
+              label={canDownload ? "Enabled" : "Disabled"}
               tone={canDownload ? "ok" : "neutral"}
             />
           </p>

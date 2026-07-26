@@ -133,6 +133,17 @@
   border: 1px solid var(--pave-lime-hover);
 }
 
+.accessChip {
+  margin: 0.35rem 0 0;
+  padding: 0.35rem 0.55rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: rgba(240, 240, 240, 0.88);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
 .nav {
   display: flex;
   flex-direction: column;
@@ -242,6 +253,13 @@
 .companyMeta strong {
   color: var(--pave-charcoal);
   font-weight: 650;
+}
+
+.accessBadges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 0 0 1.2rem;
 }
 
 .statsGrid {

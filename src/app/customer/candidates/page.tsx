@@ -2,8 +2,8 @@ import { redirect } from "next/navigation";
 
 import { CandidatesView } from "@/components/customer/CandidatesView";
 import { auth } from "@/auth";
+import { getAllowedWorkforceForCustomer } from "@/lib/services/customerAccessService";
 import { getCustomerContext } from "@/lib/services/customerContextService";
-import { getWorkforceByCompanyName } from "@/lib/services/workforceService";
 import type { CustomerContext } from "@/types/models";
 
 export const dynamic = "force-dynamic";
@@ -23,7 +23,7 @@ export default async function CustomerCandidatesPage() {
     redirect("/access-denied");
   }
 
-  const candidates = await getWorkforceByCompanyName(context.companyName);
+  const candidates = await getAllowedWorkforceForCustomer(context);
 
   return (
     <CandidatesView
