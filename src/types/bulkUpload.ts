@@ -1,4 +1,5 @@
 export type BulkImportType =
+  | "company"
   | "workforce"
   | "trainingMatrix"
   | "npors"
@@ -49,6 +50,8 @@ export type BulkPreviewRow = {
   status: BulkRowStatus;
   messages: string[];
   fields: Record<string, string | null>;
+  /** Original spreadsheet cells keyed by Excel header (exact template columns). */
+  source?: Record<string, string | null>;
   /** Resolved SharePoint company display name when known. */
   resolvedCompanyName?: string | null;
   /** Matched existing entity id when duplicate detected. */
@@ -70,6 +73,8 @@ export type BulkImportSummary = {
 export type BulkPreviewResult = {
   importType: BulkImportType;
   fileName: string;
+  /** Exact header row from the uploaded spreadsheet. */
+  headers: string[];
   rows: BulkPreviewRow[];
   summary: BulkImportSummary;
   suppressNotifications: boolean;

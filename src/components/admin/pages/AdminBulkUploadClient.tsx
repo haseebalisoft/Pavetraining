@@ -25,14 +25,19 @@ const IMPORT_OPTIONS: Array<{
   hint: string;
 }> = [
   {
+    value: "company",
+    label: "Companies",
+    hint: "Use Company list.xlsx exactly. Preview shows every Excel column. Creates or updates Company List rows.",
+  },
+  {
     value: "workforce",
     label: "Workforce / Candidates",
-    hint: "Use your Workforce List CSV. Required: Candidate Name + Company Name. Import this first.",
+    hint: "Use Workforce list.xlsx exactly. Preview shows every Excel column. Missing companies are created on import.",
   },
   {
     value: "trainingMatrix",
     label: "Training Matrix rows",
-    hint: "Use your Training Matrix CSV. Candidates must already exist (match Workforce Number).",
+    hint: "Use Training matrix example.xlsx exactly. Preview shows every Excel column. Import Workforce first (match by Name / DOB).",
   },
   {
     value: "npors",
@@ -111,21 +116,56 @@ function SummaryCards({ summary }: { summary: BulkImportSummary }) {
   );
 }
 
-function PreviewTable({ rows }: { rows: BulkPreviewRow[] }) {
+function PreviewTable({
+  rows,
+  headers,
+}: {
+  rows: BulkPreviewRow[];
+  headers: string[];
+}) {
   if (!rows.length) {
     return <p className={styles.bulkEmpty}>No rows to show.</p>;
   }
+
+  const dataHeaders = headers.length
+    ? headers
+    : [
+        "Candidate Name",
+        "Company Name",
+        "Workforce Number",
+        "Date of birth",
+      ];
+
+  const cellValue = (row: BulkPreviewRow, header: string): string => {
+    const fromSource = row.source?.[header];
+    if (fromSource != null && String(fromSource).trim() !== "") {
+      return String(fromSource);
+    }
+    // Fallbacks for mapped internal keys when source cell is blank/missing.
+    const key = header.trim().toLowerCase();
+    const mapped: Record<string, string | null | undefined> = {
+      "candidate name": row.fields.candidateName,
+      name: row.fields.candidateName,
+      "company name": row.fields.company,
+      company: row.fields.company,
+      "workforce number": row.fields.workforceNumber,
+      "date of birth": row.fields.dateOfBirth,
+      dob: row.fields.dateOfBirth,
+    };
+    const hit = mapped[key] ?? row.fields[header] ?? null;
+    return hit?.trim() ? hit : "—";
+  };
+
   return (
-    <div className={styles.tableWrap}>
-      <table className={styles.dataTable}>
+    <div className={`${styles.tableWrap} ${styles.bulkPreviewTableWrap}`}>
+      <table className={`${styles.dataTable} ${styles.bulkPreviewTable}`}>
         <thead>
           <tr>
             <th>Row</th>
             <th>Status</th>
-            <th>Candidate</th>
-            <th>Company</th>
-            <th>Workforce #</th>
-            <th>DOB</th>
+            {dataHeaders.map((header) => (
+              <th key={header}>{header}</th>
+            ))}
             <th>Messages</th>
           </tr>
         </thead>
@@ -136,10 +176,11 @@ function PreviewTable({ rows }: { rows: BulkPreviewRow[] }) {
               <td>
                 <StatusBadge label={row.status} tone={statusTone(row.status)} />
               </td>
-              <td>{row.fields.candidateName ?? "—"}</td>
-              <td>{row.fields.company ?? "—"}</td>
-              <td>{row.fields.workforceNumber ?? "—"}</td>
-              <td>{row.fields.dateOfBirth ?? "—"}</td>
+              {dataHeaders.map((header) => (
+                <td key={`${row.rowNumber}-${header}`}>
+                  {cellValue(row, header)}
+                </td>
+              ))}
               <td className={styles.bulkMessageCell}>
                 {row.messages.length ? row.messages.join(" ") : "—"}
               </td>
@@ -299,6 +340,33 @@ export function AdminBulkUploadClient() {
           { cache: "no-store" },
         );
         if (!response.ok) throw new Error(await readPublicApiError(response));
+
+        const contentType = response.headers.get("content-type") ?? "";
+        if (
+          contentType.includes(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          ) ||
+          contentType.includes("application/octet-stream")
+        ) {
+          const blob = await response.blob();
+          const disposition = response.headers.get("content-disposition") ?? "";
+          const match = disposition.match(/filename=\"([^\"]+)\"/);
+          const fileName =
+            match?.[1] ??
+            (type === "workforce"
+              ? "Workforce-list-template.xlsx"
+              : type === "trainingMatrix"
+                ? "Training-matrix-template.xlsx"
+                : "template.xlsx");
+          const url = URL.createObjectURL(blob);
+          const anchor = document.createElement("a");
+          anchor.href = url;
+          anchor.download = fileName;
+          anchor.click();
+          URL.revokeObjectURL(url);
+          return;
+        }
+
         const data = (await response.json()) as {
           fileName: string;
           csv: string;
@@ -317,30 +385,32 @@ export function AdminBulkUploadClient() {
   const downloadReport = useCallback(() => {
     const rows = commitResult?.rows ?? preview?.rows ?? [];
     if (!rows.length) return;
-    const header = [
-      "Row",
-      "Status",
-      "Candidate Name",
-      "Company",
-      "Workforce Number",
-      "DOB",
-      "Department",
-      "Matched Id",
-      "Messages",
-    ];
+    const dataHeaders = preview?.headers?.length
+      ? preview.headers
+      : [
+          "Candidate Name",
+          "Company Name",
+          "Workforce Number",
+          "Date of birth",
+          "Department",
+        ];
+    const header = ["Row", "Status", ...dataHeaders, "Matched Id", "Messages"];
     const escape = (value: string) =>
       /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
     const lines = [header.map(escape).join(",")];
     for (const row of rows) {
+      const cells = dataHeaders.map((col) => {
+        const fromSource = row.source?.[col];
+        if (fromSource != null && String(fromSource).trim() !== "") {
+          return String(fromSource);
+        }
+        return row.fields[col] ?? "";
+      });
       lines.push(
         [
           String(row.rowNumber),
           row.status,
-          row.fields.candidateName ?? "",
-          row.fields.company ?? "",
-          row.fields.workforceNumber ?? "",
-          row.fields.dateOfBirth ?? "",
-          row.fields.department ?? "",
+          ...cells,
           row.matchedEntityId ?? "",
           row.messages.join("; "),
         ]
@@ -444,7 +514,11 @@ export function AdminBulkUploadClient() {
         <section className={styles.settingsCard}>
           <header className={styles.settingsCardHeader}>
             <h2>2. Upload spreadsheet</h2>
-            <p>Accepted formats: .xlsx and .csv. Max 15 MB.</p>
+            <p>
+              Accepted formats: .xlsx and .csv. Max 15 MB. Download the exact
+              client Workforce / Training Matrix Excel templates above — column
+              headers must match for a clean import.
+            </p>
           </header>
           <div className={styles.settingsCardBody}>
             <div
@@ -590,7 +664,10 @@ export function AdminBulkUploadClient() {
                 ) : null}
               </div>
 
-              <PreviewTable rows={displayRows} />
+              <PreviewTable
+                rows={displayRows}
+                headers={preview?.headers ?? []}
+              />
             </div>
           </section>
         ) : null}
@@ -609,7 +686,8 @@ export function AdminBulkUploadClient() {
               <li>
                 Go to <strong>Bulk Upload</strong> → choose{" "}
                 <strong>Workforce / Candidates</strong> → upload{" "}
-                <code>Workforce List (2).csv</code> → Preview → Confirm import.
+                <code>Workforce list.xlsx</code> → Preview (all Excel columns
+                shown) → Confirm import.
               </li>
               <li>
                 Refresh <strong>Workforce / Candidates</strong> — rows should
@@ -618,8 +696,9 @@ export function AdminBulkUploadClient() {
               </li>
               <li>
                 Then choose <strong>Training Matrix rows</strong> → upload{" "}
-                <code>Training Matrix (6).csv</code> → Preview → Confirm.
-                Matrix rows link to existing candidates by Workforce Number.
+                <code>Training matrix example.xlsx</code> → Preview (all Excel
+                columns shown) → Confirm. Rows match Workforce by Name / DOB;
+                N-code dates are stored in Category Records.
               </li>
               <li>
                 Required workforce columns: Candidate Name, Company Name.

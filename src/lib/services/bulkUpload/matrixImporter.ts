@@ -8,6 +8,11 @@ import {
   type AdminMatrixRecord,
   type AdminWorkforceRecord,
 } from "@/lib/services/adminCrudService";
+import { CLIENT_MATRIX_CATEGORY_COLUMNS } from "@/lib/services/bulkUpload/clientTemplateHeaders";
+import {
+  extractCategoryWritesFromRow,
+  upsertMatrixCategoryRecords,
+} from "@/lib/services/bulkUpload/matrixCategoryService";
 import { nameKey, normalizeCompanyKey } from "@/lib/services/bulkUpload/matching";
 import {
   normalizeDateValue,
@@ -20,18 +25,10 @@ import type {
   BulkPreviewRow,
 } from "@/types/bulkUpload";
 
-function asBoolField(value: string | null): boolean | null {
-  if (!value?.trim()) return null;
-  const normalized = value.trim().toLowerCase();
-  if (["true", "yes", "1"].includes(normalized)) return true;
-  if (["false", "no", "0"].includes(normalized)) return false;
-  return null;
-}
-
 function mapMatrixFields(
   raw: Record<string, string | null>,
 ): Record<string, string | null> {
-  return {
+  const fields: Record<string, string | null> = {
     candidateName: pickField(raw, [
       "Candidate Name",
       "CandidateName",
@@ -43,7 +40,7 @@ function mapMatrixFields(
       "Workforce No",
     ]),
     company: pickField(raw, ["Company", "Company Name", "CompanyName"]),
-    department: pickField(raw, ["Department", "Dept"]),
+    department: pickField(raw, ["Department", "Dept", " Department"]),
     dateOfBirth: normalizeDateValue(
       pickField(raw, ["DOB", "Date of birth", "DateOfBirth"]),
     ),
@@ -53,15 +50,34 @@ function mapMatrixFields(
     nextExpiryDate: normalizeDateValue(
       pickField(raw, ["Next Expiry Date", "NextExpiryDate"]),
     ),
-    n001Expiry: normalizeDateValue(pickField(raw, ["N001 Expiry", "N001Expiry"])),
-    n003Expiry: normalizeDateValue(pickField(raw, ["N003 Expiry", "N003Expiry"])),
-    n004Expiry: normalizeDateValue(pickField(raw, ["N004 Expiry", "N004Expiry"])),
-    n010Expiry: normalizeDateValue(pickField(raw, ["N010 Expiry", "N010Expiry"])),
-    n020Expiry: normalizeDateValue(pickField(raw, ["N020 Expiry", "N020Expiry"])),
-    n021Expiry: normalizeDateValue(pickField(raw, ["N021 Expiry", "N021Expiry"])),
-    n027Expiry: normalizeDateValue(pickField(raw, ["N027 Expiry", "N027Expiry"])),
-    n100Expiry: normalizeDateValue(pickField(raw, ["N100 Expiry", "N100Expiry"])),
+    cscsExpiry: normalizeDateValue(
+      pickField(raw, ["CSCS Expiry", "Cscs Expiry"]),
+    ),
+    ssstsExpiry: normalizeDateValue(pickField(raw, ["SSSTS Expiry"])),
+    smstsExpiry: normalizeDateValue(pickField(raw, ["SMSTS Expiry"])),
+    nrswaExpiry: normalizeDateValue(pickField(raw, ["NRSWA Expiry"])),
+    eusrExpiry: normalizeDateValue(
+      pickField(raw, ["EUSR Expiry", "Eusr Expiry"]),
+    ),
+    faceFitExpiry: normalizeDateValue(
+      pickField(raw, ["Face ift", "Face Fit", "FaceFit"]),
+    ),
   };
+
+  // Map known Training Matrix list expiry columns from client N-code headers.
+  for (const column of CLIENT_MATRIX_CATEGORY_COLUMNS) {
+    if (!column.matrixField) continue;
+    const value = normalizeDateValue(
+      pickField(raw, [column.header, `${column.code} Expiry`, column.code]),
+    );
+    if (value) fields[column.matrixField] = value;
+  }
+
+  // Count filled category cells for preview messaging.
+  const categoryWrites = extractCategoryWritesFromRow(raw);
+  fields._categoryCount = String(categoryWrites.length);
+
+  return fields;
 }
 
 function findWorkforceForMatrix(
@@ -95,6 +111,17 @@ function findWorkforceForMatrix(
     if (byNameCompany) return byNameCompany;
   }
 
+  // Client matrix template often has Name + DOB only.
+  if (fields.dateOfBirth?.trim()) {
+    const byNameDob = workforce.filter(
+      (row) =>
+        nameKey(row.candidateName) === cName &&
+        nameKey(row.dateOfBirth).slice(0, 10) ===
+          nameKey(fields.dateOfBirth).slice(0, 10),
+    );
+    if (byNameDob.length === 1) return byNameDob[0]!;
+  }
+
   const matches = workforce.filter((row) => nameKey(row.candidateName) === cName);
   return matches.length === 1 ? matches[0]! : null;
 }
@@ -116,6 +143,25 @@ function findMatrixDuplicate(
   );
 }
 
+function earliestExpiry(fields: Record<string, string | null>): string | null {
+  const dates: number[] = [];
+  for (const [key, value] of Object.entries(fields)) {
+    if (!value?.trim()) continue;
+    if (
+      !/expiry$/i.test(key) &&
+      !["cscsExpiry", "ssstsExpiry", "smstsExpiry", "nrswaExpiry", "eusrExpiry", "faceFitExpiry", "nextExpiryDate"].includes(
+        key,
+      )
+    ) {
+      continue;
+    }
+    const t = new Date(value).getTime();
+    if (!Number.isNaN(t)) dates.push(t);
+  }
+  if (!dates.length) return null;
+  return new Date(Math.min(...dates)).toISOString().slice(0, 10);
+}
+
 function validateMatrixRow(
   rowNumber: number,
   fields: Record<string, string | null>,
@@ -124,13 +170,13 @@ function validateMatrixRow(
 ): BulkPreviewRow {
   const messages: string[] = [];
   if (!fields.candidateName?.trim() && !fields.workforceNumber?.trim()) {
-    messages.push("Candidate Name or Workforce Number is required.");
+    messages.push("Name (Candidate) or Workforce Number is required.");
   }
 
   const candidate = findWorkforceForMatrix(workforce, fields);
   if (!candidate) {
     messages.push(
-      "Candidate was not found in Workforce. Import Workforce first, then matrix rows.",
+      "Candidate was not found in Workforce. Import Workforce first (same Name / DOB), then matrix rows.",
     );
     return {
       rowNumber,
@@ -151,7 +197,16 @@ function validateMatrixRow(
     company: resolvedCompanyName,
     workforceNumber: candidate.workforceNumber,
     department: fields.department ?? candidate.department,
+    nextExpiryDate:
+      fields.nextExpiryDate ?? earliestExpiry(fields),
   };
+
+  const categoryCount = Number(fields._categoryCount ?? "0");
+  if (categoryCount > 0) {
+    messages.push(
+      `${categoryCount} category expiry value(s) will be written to Training Matrix Category Records.`,
+    );
+  }
 
   const existing = findMatrixDuplicate(matrix, candidate);
   if (existing) {
@@ -160,6 +215,7 @@ function validateMatrixRow(
       status: "Duplicate",
       messages: [
         `Duplicate matrix row for "${candidate.candidateName}" at ${resolvedCompanyName}.`,
+        ...messages,
       ],
       fields: enrichedFields,
       resolvedCompanyName,
@@ -167,10 +223,6 @@ function validateMatrixRow(
       matchedEntityName: existing.candidateName,
       duplicateMatch: "nameCompany",
     };
-  }
-
-  if (!fields.overallStatus) {
-    messages.push("Overall Status is missing (optional).");
   }
 
   return {
@@ -186,7 +238,6 @@ function validateMatrixRow(
 }
 
 function buildMatrixWritePayload(fields: Record<string, string | null>) {
-  const needsReview = asBoolField(fields.needsReview);
   const payload: Record<string, unknown> = {
     candidateName: fields.candidateName,
     companyName: fields.company,
@@ -195,11 +246,9 @@ function buildMatrixWritePayload(fields: Record<string, string | null>) {
   if (fields.overallStatus?.trim()) {
     payload.overallStatus = fields.overallStatus.trim();
   }
-  if (needsReview !== null) payload.needsReview = needsReview;
   if (fields.matrixNotes?.trim()) payload.matrixNotes = fields.matrixNotes.trim();
-  if (fields.nextExpiryDate?.trim()) {
-    payload.nextExpiryDate = fields.nextExpiryDate.trim();
-  }
+  const next = fields.nextExpiryDate ?? earliestExpiry(fields);
+  if (next) payload.nextExpiryDate = next;
   for (const key of [
     "n001Expiry",
     "n003Expiry",
@@ -215,6 +264,27 @@ function buildMatrixWritePayload(fields: Record<string, string | null>) {
   return payload;
 }
 
+async function writeCategoriesForRow(
+  fields: Record<string, string | null>,
+  raw: Record<string, string | null>,
+): Promise<string[]> {
+  const categories = extractCategoryWritesFromRow({ ...raw, ...fields });
+  if (!categories.length) return [];
+  const result = await upsertMatrixCategoryRecords({
+    candidateName: fields.candidateName ?? "",
+    companyName: fields.company ?? "",
+    categories,
+  });
+  const messages = [
+    `Category records: ${result.written} written` +
+      (result.failed ? `, ${result.failed} failed` : ""),
+  ];
+  if (result.errors.length) {
+    messages.push(...result.errors.slice(0, 5));
+  }
+  return messages;
+}
+
 export async function previewMatrixImport(
   spreadsheet: ParsedSpreadsheet,
 ): Promise<BulkPreviewRow[]> {
@@ -225,7 +295,11 @@ export async function previewMatrixImport(
 
   return spreadsheet.rows.map((raw, index) => {
     const fields = mapMatrixFields(raw);
-    return validateMatrixRow(index + 2, fields, workforce, matrix);
+    const validated = validateMatrixRow(index + 2, fields, workforce, matrix);
+    return {
+      ...validated,
+      source: raw,
+    };
   });
 }
 
@@ -242,26 +316,22 @@ export async function commitMatrixImport(input: {
 
   for (const row of input.rows) {
     const fields = mapMatrixFields(row.fields);
-    // Prefer already-normalized fields from preview when present.
     for (const [key, value] of Object.entries(row.fields)) {
       if (value && !fields[key]) fields[key] = value;
-      if (value && ["candidateName", "company", "workforceNumber"].includes(key)) {
+      if (
+        value &&
+        ["candidateName", "company", "workforceNumber", "dateOfBirth"].includes(
+          key,
+        )
+      ) {
         fields[key] = value;
       }
     }
     fields.dateOfBirth = normalizeDateValue(fields.dateOfBirth);
-    for (const key of [
-      "nextExpiryDate",
-      "n001Expiry",
-      "n003Expiry",
-      "n004Expiry",
-      "n010Expiry",
-      "n020Expiry",
-      "n021Expiry",
-      "n027Expiry",
-      "n100Expiry",
-    ] as const) {
-      fields[key] = normalizeDateValue(fields[key]);
+    for (const key of Object.keys(fields)) {
+      if (/expiry$/i.test(key) || key === "nextExpiryDate") {
+        fields[key] = normalizeDateValue(fields[key]);
+      }
     }
 
     const validated = validateMatrixRow(
@@ -276,50 +346,49 @@ export async function commitMatrixImport(input: {
       continue;
     }
 
-    if (validated.status === "Duplicate") {
-      if (input.duplicateMode === "skip") {
-        results.push({
-          ...validated,
-          status: "Skipped",
-          messages: [...validated.messages, "Skipped duplicate (default)."],
-        });
-        continue;
-      }
+    try {
+      if (validated.status === "Duplicate") {
+        if (input.duplicateMode === "skip") {
+          results.push({
+            ...validated,
+            status: "Skipped",
+            messages: [...validated.messages, "Skipped duplicate (default)."],
+          });
+          continue;
+        }
 
-      if (input.duplicateMode === "update" && validated.matchedEntityId) {
-        try {
+        if (input.duplicateMode === "update" && validated.matchedEntityId) {
           const updated = await updateAdminMatrix(
             validated.matchedEntityId,
             buildMatrixWritePayload(validated.fields),
           );
           const idx = liveMatrix.findIndex((m) => m.id === updated.id);
           if (idx >= 0) liveMatrix[idx] = updated;
+          const catMessages = await writeCategoriesForRow(
+            validated.fields,
+            row.fields,
+          );
           results.push({
             ...validated,
             status: "Imported",
-            messages: [...validated.messages, "Updated existing matrix row."],
-          });
-        } catch (error) {
-          results.push({
-            ...validated,
-            status: "Error",
             messages: [
               ...validated.messages,
-              error instanceof Error
-                ? error.message
-                : "Failed to update matrix row.",
+              "Updated existing matrix row.",
+              ...catMessages,
             ],
           });
+          continue;
         }
-        continue;
-      }
 
-      if (input.duplicateMode === "create") {
-        try {
+        if (input.duplicateMode === "create") {
           const created = await createAdminMatrix(
             buildMatrixWritePayload(validated.fields),
           );
           liveMatrix.push(created);
+          const catMessages = await writeCategoriesForRow(
+            validated.fields,
+            row.fields,
+          );
           results.push({
             ...validated,
             status: "Imported",
@@ -327,41 +396,37 @@ export async function commitMatrixImport(input: {
             messages: [
               ...validated.messages,
               "Created new matrix row (admin confirmed create despite duplicate).",
+              ...catMessages,
             ],
           });
-        } catch (error) {
-          results.push({
-            ...validated,
-            status: "Error",
-            messages: [
-              ...validated.messages,
-              error instanceof Error
-                ? error.message
-                : "Failed to create matrix row.",
-            ],
-          });
+          continue;
         }
+
+        results.push({
+          ...validated,
+          status: "Skipped",
+          messages: [...validated.messages, "Skipped duplicate."],
+        });
         continue;
       }
 
-      results.push({
-        ...validated,
-        status: "Skipped",
-        messages: [...validated.messages, "Skipped duplicate."],
-      });
-      continue;
-    }
-
-    try {
       const created = await createAdminMatrix(
         buildMatrixWritePayload(validated.fields),
       );
       liveMatrix.push(created);
+      const catMessages = await writeCategoriesForRow(
+        validated.fields,
+        row.fields,
+      );
       results.push({
         ...validated,
         status: "Imported",
         matchedEntityId: created.id,
-        messages: [...validated.messages, "Imported successfully."],
+        messages: [
+          ...validated.messages,
+          "Imported successfully.",
+          ...catMessages,
+        ],
       });
     } catch (error) {
       results.push({
@@ -371,7 +436,7 @@ export async function commitMatrixImport(input: {
           ...validated.messages,
           error instanceof Error
             ? error.message
-            : "Failed to create matrix row.",
+            : "Failed to import matrix row.",
         ],
       });
     }

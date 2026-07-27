@@ -7,26 +7,108 @@ import {
 } from "@/components/admin/AdminCrudPage";
 import type { Company } from "@/types/models";
 
+function cell(value: string | null | undefined) {
+  const text = value?.trim();
+  return text ? text : "—";
+}
+
+function logoCell(value: string | null | undefined) {
+  const text = value?.trim();
+  if (!text) return "—";
+  if (text.startsWith("http") || text.startsWith("/")) {
+    return text.length > 40 ? `${text.slice(0, 37)}…` : text;
+  }
+  return "Uploaded";
+}
+
+/**
+ * Table columns match Company list.xlsx / SharePoint Company List exactly:
+ * Company Number | Company Name | Company Size | Registered Address |
+ * Company Reg Number | VAT No | Tel No | Email | Main Contact |
+ * Accounts Contact Name | Accounts address | Accounts Contact number |
+ * Accounts email | Notes prices agreed | Company Logo | Status
+ */
 const columns: AdminColumn<Company>[] = [
   {
-    key: "number",
+    key: "companyNumber",
     header: "Company Number",
-    render: (row) => row.companyNumber ?? "—",
+    render: (row) => cell(row.companyNumber),
   },
-  { key: "name", header: "Company Name", render: (row) => row.companyName },
   {
-    key: "size",
+    key: "companyName",
+    header: "Company Name",
+    render: (row) => row.companyName,
+  },
+  {
+    key: "companySize",
     header: "Company Size",
-    render: (row) => row.companySize ?? "—",
+    render: (row) => cell(row.companySize),
+  },
+  {
+    key: "registeredAddress",
+    header: "Registered Address",
+    render: (row) => cell(row.registeredAddress),
+  },
+  {
+    key: "companyRegNumber",
+    header: "Company Reg Number",
+    render: (row) => cell(row.companyRegNumber),
+  },
+  {
+    key: "vatNo",
+    header: "VAT No",
+    render: (row) => cell(row.vatNo),
+  },
+  {
+    key: "telNo",
+    header: "Tel No",
+    render: (row) => cell(row.telNo),
+  },
+  {
+    key: "email",
+    header: "Email",
+    render: (row) => cell(row.email),
   },
   {
     key: "mainContact",
     header: "Main Contact",
-    render: (row) => row.mainContact ?? "—",
+    render: (row) => cell(row.mainContact),
   },
-  { key: "email", header: "Email", render: (row) => row.email ?? "—" },
-  { key: "tel", header: "Tel No", render: (row) => row.telNo ?? "—" },
-  { key: "status", header: "Status", render: (row) => row.status },
+  {
+    key: "accountsContactName",
+    header: "Accounts Contact Name",
+    render: (row) => cell(row.accountsContactName),
+  },
+  {
+    key: "accountsAddress",
+    header: "Accounts address",
+    render: (row) => cell(row.accountsAddress),
+  },
+  {
+    key: "accountsContactNumber",
+    header: "Accounts Contact number",
+    render: (row) => cell(row.accountsContactNumber),
+  },
+  {
+    key: "accountsEmail",
+    header: "Accounts email",
+    render: (row) => cell(row.accountsEmail),
+  },
+  {
+    key: "notesPricesAgreed",
+    header: "Notes prices agreed",
+    render: (row) => cell(row.notesPricesAgreed),
+  },
+  {
+    key: "companyLogo",
+    header: "Company Logo",
+    render: (row) => logoCell(row.companyLogo),
+  },
+  {
+    key: "status",
+    header: "Status",
+    render: (row) => cell(row.status),
+  },
 ];
 
 const companySizeOptions = [
@@ -34,30 +116,103 @@ const companySizeOptions = [
   { value: "Medium", label: "Medium" },
   { value: "Large", label: "Large" },
   { value: "Enterprise", label: "Enterprise" },
-  { value: "Other", label: "Other" },
 ];
 
+/** Form fields — same column set as Company list.xlsx. */
 const fields: AdminFieldConfig[] = [
-  {
-    name: "companyName",
-    label: "Company Name",
-    type: "text",
-    required: true,
-    section: "Company Details",
-  },
   {
     name: "companyNumber",
     label: "Company Number",
     type: "text",
     required: true,
-    section: "Company Details",
+    section: "Company List",
+  },
+  {
+    name: "companyName",
+    label: "Company Name",
+    type: "text",
+    required: true,
+    section: "Company List",
   },
   {
     name: "companySize",
     label: "Company Size",
     type: "select",
     options: companySizeOptions,
-    section: "Company Details",
+    section: "Company List",
+  },
+  {
+    name: "registeredAddress",
+    label: "Registered Address",
+    type: "textarea",
+    section: "Company List",
+  },
+  {
+    name: "companyRegNumber",
+    label: "Company Reg Number",
+    type: "text",
+    section: "Company List",
+  },
+  {
+    name: "vatNo",
+    label: "VAT No",
+    type: "text",
+    section: "Company List",
+  },
+  {
+    name: "telNo",
+    label: "Tel No",
+    type: "text",
+    section: "Company List",
+  },
+  {
+    name: "email",
+    label: "Email",
+    type: "email",
+    section: "Company List",
+  },
+  {
+    name: "mainContact",
+    label: "Main Contact",
+    type: "text",
+    section: "Company List",
+  },
+  {
+    name: "accountsContactName",
+    label: "Accounts Contact Name",
+    type: "text",
+    section: "Company List",
+  },
+  {
+    name: "accountsAddress",
+    label: "Accounts address",
+    type: "textarea",
+    section: "Company List",
+  },
+  {
+    name: "accountsContactNumber",
+    label: "Accounts Contact number",
+    type: "text",
+    section: "Company List",
+  },
+  {
+    name: "accountsEmail",
+    label: "Accounts email",
+    type: "email",
+    section: "Company List",
+  },
+  {
+    name: "notesPricesAgreed",
+    label: "Notes prices agreed",
+    type: "textarea",
+    section: "Company List",
+  },
+  {
+    name: "companyLogo",
+    label: "Company Logo",
+    type: "text",
+    placeholder: "Logo URL or leave blank",
+    section: "Company List",
   },
   {
     name: "status",
@@ -68,80 +223,7 @@ const fields: AdminFieldConfig[] = [
       { value: "Active", label: "Active" },
       { value: "Inactive", label: "Inactive" },
     ],
-    section: "Company Details",
-  },
-  {
-    name: "registeredAddress",
-    label: "Registered Address",
-    type: "textarea",
-    section: "Registration Details",
-  },
-  {
-    name: "companyRegNumber",
-    label: "Company Reg Number",
-    type: "text",
-    section: "Registration Details",
-  },
-  {
-    name: "vatNo",
-    label: "VAT No",
-    type: "text",
-    section: "Registration Details",
-  },
-  {
-    name: "mainContact",
-    label: "Main Contact",
-    type: "text",
-    section: "Main Contact",
-  },
-  {
-    name: "telNo",
-    label: "Tel No",
-    type: "text",
-    section: "Main Contact",
-  },
-  {
-    name: "email",
-    label: "Email",
-    type: "email",
-    section: "Main Contact",
-  },
-  {
-    name: "accountsContactName",
-    label: "Accounts Contact Name",
-    type: "text",
-    section: "Accounts Contact",
-  },
-  {
-    name: "accountsAddress",
-    label: "Accounts Address",
-    type: "textarea",
-    section: "Accounts Contact",
-  },
-  {
-    name: "accountsContactNumber",
-    label: "Accounts Contact Number",
-    type: "text",
-    section: "Accounts Contact",
-  },
-  {
-    name: "accountsEmail",
-    label: "Accounts Email",
-    type: "email",
-    section: "Accounts Contact",
-  },
-  {
-    name: "notesPricesAgreed",
-    label: "Notes / Prices Agreed",
-    type: "textarea",
-    section: "Notes and Branding",
-  },
-  {
-    name: "companyLogo",
-    label: "Company Logo URL",
-    type: "text",
-    placeholder: "https://…",
-    section: "Notes and Branding",
+    section: "Company List",
   },
 ];
 
@@ -153,25 +235,40 @@ export function AdminCompaniesClient({
   return (
     <AdminCrudPage<Company>
       title="Companies"
-      description="Manage client companies, contacts, account details, and portal status."
+      description="Company List — same columns as Company list.xlsx / SharePoint Company List."
       columns={columns}
       fields={fields}
       initialRows={initialRows}
       listUrl="/api/admin/companies"
       createUrl="/api/admin/companies"
       updateUrl={(id) => `/api/admin/companies/${id}`}
+      deleteUrl={(id) => `/api/admin/companies/${id}`}
+      bulkDeleteUrl="/api/admin/companies/bulk-delete"
+      enableBulkDelete
+      deleteConfirmExtra={
+        "This also deletes related Customer Documents, Training Matrix rows, NPORS/EUSR/Streetworks/In-House registers, NVQ records, Events, Workforce candidates, Permissions, and matching Training Manager Logs for that company."
+      }
       mapResponse={(payload) =>
         (payload as { companies?: Company[] }).companies ?? []
       }
       emptyLabel="No companies found. Add your first company to begin."
       drawerWide
+      wideTable
       searchKeys={[
-        (row) => row.companyName,
         (row) => row.companyNumber,
+        (row) => row.companyName,
         (row) => row.companySize,
-        (row) => row.mainContact,
-        (row) => row.email,
+        (row) => row.registeredAddress,
+        (row) => row.companyRegNumber,
+        (row) => row.vatNo,
         (row) => row.telNo,
+        (row) => row.email,
+        (row) => row.mainContact,
+        (row) => row.accountsContactName,
+        (row) => row.accountsAddress,
+        (row) => row.accountsContactNumber,
+        (row) => row.accountsEmail,
+        (row) => row.notesPricesAgreed,
         (row) => row.status,
       ]}
     />

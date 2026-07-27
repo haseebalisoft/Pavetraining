@@ -1,11 +1,15 @@
 import "server-only";
 
 import {
+  createAdminCompany,
   createAdminWorkforce,
+  findPermissionPerson,
   listAdminCompanies,
   listAdminWorkforce,
+  loadPermissionPeople,
   updateAdminWorkforce,
   type AdminWorkforceRecord,
+  type PermissionPersonRef,
 } from "@/lib/services/adminCrudService";
 import {
   findCandidateDuplicate,
@@ -22,6 +26,7 @@ import type {
   BulkImportSummary,
   BulkPreviewRow,
 } from "@/types/bulkUpload";
+import type { Company } from "@/types/models";
 
 const NAME_ALIASES = [
   "Candidate Name",
@@ -30,8 +35,19 @@ const NAME_ALIASES = [
   "Full Name",
 ];
 const COMPANY_ALIASES = ["Company", "Company Name", "CompanyName"];
-const DEPT_ALIASES = ["Department", "Dept"];
-const DOB_ALIASES = ["DOB", "Date of Birth", "DateOfBirth", "Birth Date"];
+const COMPANY_NUMBER_ALIASES = [
+  "Company Number",
+  "CompanyNumber",
+  "Company No",
+];
+const DEPT_ALIASES = ["Department", "Dept", " Department"];
+const DOB_ALIASES = [
+  "DOB",
+  "Date of Birth",
+  "Date of birth",
+  "DateOfBirth",
+  "Birth Date",
+];
 const WF_ALIASES = [
   "Workforce Number",
   "WorkforceNumber",
@@ -39,7 +55,7 @@ const WF_ALIASES = [
   "Workforce No.",
 ];
 const STATUS_ALIASES = ["Status"];
-const TM_ALIASES = ["Training Manager", "TrainingManager"];
+const TM_ALIASES = ["Training Manager", "Training manager", "TrainingManager"];
 const SUPERVISOR_ALIASES = ["Supervisor"];
 
 function emptySummary(): BulkImportSummary {
@@ -90,20 +106,106 @@ function mapCandidateFields(
   return {
     candidateName: pickField(raw, NAME_ALIASES),
     company: pickField(raw, COMPANY_ALIASES),
+    companyNumber: pickField(raw, COMPANY_NUMBER_ALIASES),
     department: pickField(raw, DEPT_ALIASES),
     dateOfBirth: normalizeDateValue(pickField(raw, DOB_ALIASES)),
     workforceNumber: pickField(raw, WF_ALIASES),
     status: pickField(raw, STATUS_ALIASES),
     trainingManager: pickField(raw, TM_ALIASES),
     supervisor: pickField(raw, SUPERVISOR_ALIASES),
+    candidateAddress: pickField(raw, [
+      "Candidate Address",
+      "CandidateAddress",
+      "Address",
+    ]),
+    email: pickField(raw, ["Email", "E-mail"]),
+    contactNumber: pickField(raw, [
+      "Contact number",
+      "Contact Number",
+      "Phone",
+      "Mobile",
+    ]),
+    niNumber: pickField(raw, ["Ni Number", "NI Number", "NiNumber", "NI"]),
+    nporsNumbers: pickField(raw, [
+      "NPORS Number",
+      "NPORS Numbers",
+      "NPORSNumbers",
+    ]),
+    cscsNumber: pickField(raw, ["CSCS Number", "CSCSNumber"]),
+    cscsExpiry: normalizeDateValue(
+      pickField(raw, ["Cscs Expiry", "CSCS Expiry", "CscsExpiry"]),
+    ),
+    swqrNumber: pickField(raw, ["SWQR Number", "SWQRNumber"]),
+    swqrExpiry: normalizeDateValue(
+      pickField(raw, ["Swqr Expiry", "SWQR Expiry", "SwqrExpiry"]),
+    ),
+    eusrNumber: pickField(raw, ["EUSR Number", "EUSRNumber"]),
+    eusrExpiry: normalizeDateValue(
+      pickField(raw, ["Eusr Expiry", "EUSR Expiry", "EusrExpiry"]),
+    ),
+    inHouseCertificationNumber: pickField(raw, [
+      "In House Certification Number",
+      "In-House Certification Number",
+      "InHouseCertificationNumber",
+    ]),
+    notes: pickField(raw, ["Notes"]),
   };
+}
+
+function workforceWritePayload(
+  fields: Record<string, string | null>,
+  resolvedCompanyName: string,
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    candidateName: fields.candidateName,
+    companyName: resolvedCompanyName,
+  };
+  const assign = (key: string, value: string | null | undefined) => {
+    if (value?.trim()) payload[key] = value.trim();
+  };
+  assign("workforceNumber", fields.workforceNumber);
+  assign("dateOfBirth", fields.dateOfBirth);
+  assign("department", fields.department);
+  assign("departmentText", fields.department);
+  assign("status", fields.status ?? "Active");
+  assign("trainingManager", fields.trainingManager);
+  assign("supervisor", fields.supervisor);
+  assign("candidateAddress", fields.candidateAddress);
+  assign("email", fields.email);
+  assign("contactNumber", fields.contactNumber);
+  assign("niNumber", fields.niNumber);
+  assign("nporsNumbers", fields.nporsNumbers);
+  assign("cscsNumber", fields.cscsNumber);
+  assign("cscsExpiry", fields.cscsExpiry);
+  assign("swqrNumber", fields.swqrNumber);
+  assign("swqrExpiry", fields.swqrExpiry);
+  assign("eusrNumber", fields.eusrNumber);
+  assign("eusrExpiry", fields.eusrExpiry);
+  assign("inHouseCertificationNumber", fields.inHouseCertificationNumber);
+  assign("notes", fields.notes);
+  return payload;
+}
+
+function buildNonBlankUpdate(
+  fields: Record<string, string | null>,
+  resolvedCompanyName: string,
+): Record<string, unknown> {
+  const full = workforceWritePayload(fields, resolvedCompanyName);
+  const payload: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(full)) {
+    if (value === null || value === undefined) continue;
+    if (typeof value === "string" && !value.trim()) continue;
+    payload[key] = value;
+  }
+  return payload;
 }
 
 function validateCandidateRow(
   rowNumber: number,
   fields: Record<string, string | null>,
-  companies: Awaited<ReturnType<typeof listAdminCompanies>>,
+  companies: Company[],
   workforce: AdminWorkforceRecord[],
+  people: PermissionPersonRef[],
 ): BulkPreviewRow {
   const messages: string[] = [];
   const candidateName = fields.candidateName?.trim() ?? "";
@@ -113,15 +215,30 @@ function validateCandidateRow(
     messages.push("Candidate Name is required.");
   }
   if (!companyInput) {
-    messages.push("Company is required.");
+    messages.push("Company Name is required.");
   }
 
   const company = findCompanyByName(companies, companyInput);
   if (companyInput && !company) {
-    messages.push(`Company "${companyInput}" was not found.`);
+    messages.push(
+      `Company "${companyInput}" was not found — it will be created on import.`,
+    );
   }
 
-  if (messages.length) {
+  const tm = fields.trainingManager?.trim();
+  if (tm && !findPermissionPerson(people, tm)) {
+    messages.push(
+      `Training manager "${tm}" not in Permissions — will be created on import.`,
+    );
+  }
+  const supervisor = fields.supervisor?.trim();
+  if (supervisor && !findPermissionPerson(people, supervisor)) {
+    messages.push(
+      `Supervisor "${supervisor}" not in Permissions — will be created on import.`,
+    );
+  }
+
+  if (!candidateName || !companyInput) {
     return {
       rowNumber,
       status: "Error",
@@ -134,7 +251,7 @@ function validateCandidateRow(
     };
   }
 
-  const resolvedCompanyName = company!.companyName;
+  const resolvedCompanyName = company?.companyName ?? companyInput;
   const duplicate = findCandidateDuplicate(workforce, {
     candidateName,
     companyName: resolvedCompanyName,
@@ -187,23 +304,25 @@ function validateCandidateRow(
     };
   }
 
+  if (!company) {
+    // keep as Warning — will auto-create company on commit
+    return {
+      rowNumber,
+      status: "Warning",
+      messages,
+      fields: { ...fields, company: resolvedCompanyName },
+      resolvedCompanyName,
+      matchedEntityId: null,
+      matchedEntityName: null,
+      duplicateMatch: null,
+    };
+  }
+
   if (!fields.workforceNumber) {
     messages.push("Workforce Number is missing (optional).");
   }
   if (!fields.dateOfBirth) {
     messages.push("DOB is missing (optional).");
-  }
-  if (!fields.department) {
-    messages.push("Department is missing (optional).");
-  }
-
-  const exactCompany =
-    company &&
-    company.companyName.trim().toLowerCase() === companyInput.toLowerCase();
-  if (!exactCompany) {
-    messages.push(
-      `Company matched as "${resolvedCompanyName}" (normalized name match).`,
-    );
   }
 
   return {
@@ -218,277 +337,176 @@ function validateCandidateRow(
   };
 }
 
+async function ensureCompany(
+  companies: Company[],
+  companyName: string,
+  companyNumber: string | null,
+): Promise<{ companies: Company[]; company: Company }> {
+  const existing = findCompanyByName(companies, companyName);
+  if (existing) {
+    return { companies, company: existing };
+  }
+  const created = await createAdminCompany({
+    companyName,
+    companyNumber: companyNumber?.trim() || `AUTO-${Date.now()}`,
+    status: "Active",
+  });
+  return { companies: [...companies, created], company: created };
+}
+
 export async function previewCandidateImport(
   spreadsheet: ParsedSpreadsheet,
 ): Promise<BulkPreviewRow[]> {
-  const [companies, workforce] = await Promise.all([
+  const [companies, workforce, people] = await Promise.all([
     listAdminCompanies(),
     listAdminWorkforce(),
+    loadPermissionPeople(),
   ]);
 
   return spreadsheet.rows.map((raw, index) => {
     const fields = mapCandidateFields(raw);
-    return validateCandidateRow(index + 2, fields, companies, workforce);
+    const validated = validateCandidateRow(
+      index + 2,
+      fields,
+      companies,
+      workforce,
+      people,
+    );
+    return {
+      ...validated,
+      source: raw,
+    };
   });
-}
-
-/**
- * Build update payload that never overwrites existing fields with blanks.
- */
-function buildNonBlankUpdate(
-  fields: Record<string, string | null>,
-  resolvedCompanyName: string,
-): Record<string, unknown> {
-  const payload: Record<string, unknown> = {};
-  if (fields.candidateName?.trim()) {
-    payload.candidateName = fields.candidateName.trim();
-  }
-  if (resolvedCompanyName.trim()) {
-    payload.companyName = resolvedCompanyName.trim();
-  }
-  if (fields.workforceNumber?.trim()) {
-    payload.workforceNumber = fields.workforceNumber.trim();
-  }
-  if (fields.dateOfBirth?.trim()) {
-    payload.dateOfBirth = fields.dateOfBirth.trim();
-  }
-  if (fields.department?.trim()) {
-    payload.department = fields.department.trim();
-  }
-  if (fields.status?.trim()) {
-    payload.status = fields.status.trim();
-  }
-  if (fields.trainingManager?.trim()) {
-    payload.trainingManager = fields.trainingManager.trim();
-  }
-  if (fields.supervisor?.trim()) {
-    payload.supervisor = fields.supervisor.trim();
-  }
-  return payload;
 }
 
 export async function commitCandidateImport(input: {
   rows: BulkCommitRowInput[];
   duplicateMode: BulkDuplicateMode;
 }): Promise<BulkPreviewRow[]> {
-  const [companies, workforce] = await Promise.all([
-    listAdminCompanies(),
+  let companies = await listAdminCompanies();
+  const [workforce, initialPeople] = await Promise.all([
     listAdminWorkforce(),
+    loadPermissionPeople(),
   ]);
-
-  // Live copy we update as we create so later rows see earlier imports.
+  let people = initialPeople;
   const liveWorkforce = [...workforce];
   const results: BulkPreviewRow[] = [];
 
   for (const row of input.rows) {
-    const fields = {
-      candidateName: row.fields.candidateName ?? null,
-      company: row.fields.company ?? null,
-      department: row.fields.department ?? null,
-      dateOfBirth: normalizeDateValue(row.fields.dateOfBirth ?? null),
-      workforceNumber: row.fields.workforceNumber ?? null,
-      status: row.fields.status ?? null,
-      trainingManager: row.fields.trainingManager ?? null,
-      supervisor: row.fields.supervisor ?? null,
-    };
+    const fields = mapCandidateFields(row.fields);
+    // Prefer already-normalized preview fields when present.
+    for (const [key, value] of Object.entries(row.fields)) {
+      if (value != null && value !== "") {
+        fields[key] = value;
+      }
+    }
+    fields.dateOfBirth = normalizeDateValue(fields.dateOfBirth);
+    fields.cscsExpiry = normalizeDateValue(fields.cscsExpiry);
+    fields.swqrExpiry = normalizeDateValue(fields.swqrExpiry);
+    fields.eusrExpiry = normalizeDateValue(fields.eusrExpiry);
 
     const validated = validateCandidateRow(
       row.rowNumber,
       fields,
       companies,
       liveWorkforce,
+      people,
     );
 
     if (validated.status === "Error") {
-      results.push({ ...validated, status: "Error" });
+      results.push(validated);
       continue;
     }
 
-    // Soft name+company warning: treat as Ready for create unless update mode
-    // and matched id present.
-    if (validated.status === "Warning" && validated.duplicateMatch === "nameCompany") {
-      if (input.duplicateMode === "update" && validated.matchedEntityId) {
-        try {
-          const payload = buildNonBlankUpdate(
-            validated.fields,
-            validated.resolvedCompanyName ?? validated.fields.company ?? "",
-          );
-          const updated = await updateAdminWorkforce(
-            validated.matchedEntityId,
-            payload,
-          );
-          const idx = liveWorkforce.findIndex((w) => w.id === updated.id);
-          if (idx >= 0) liveWorkforce[idx] = updated;
-          results.push({
-            ...validated,
-            status: "Imported",
-            messages: [
-              ...validated.messages,
-              "Updated existing candidate (name + company match).",
-            ],
-          });
-        } catch (error) {
-          results.push({
-            ...validated,
-            status: "Error",
-            messages: [
-              ...validated.messages,
-              error instanceof Error
-                ? error.message
-                : "Failed to update candidate.",
-            ],
-          });
-        }
-        continue;
-      }
-      // Default / create: create new despite soft warning
-      try {
+    try {
+      const ensured = await ensureCompany(
+        companies,
+        validated.resolvedCompanyName ?? validated.fields.company ?? "",
+        validated.fields.companyNumber,
+      );
+      companies = ensured.companies;
+      const companyName = ensured.company.companyName;
+
+      const runCreate = async (extraMessages: string[]) => {
         const created = await createAdminWorkforce({
-          candidateName: validated.fields.candidateName,
-          companyName:
-            validated.resolvedCompanyName ?? validated.fields.company,
-          workforceNumber: validated.fields.workforceNumber,
-          dateOfBirth: validated.fields.dateOfBirth,
-          department: validated.fields.department,
-          status: validated.fields.status ?? "Active",
-          trainingManager: validated.fields.trainingManager,
-          supervisor: validated.fields.supervisor,
+          ...workforceWritePayload(validated.fields, companyName),
+          createMissingPermissionPeople: true,
         });
         liveWorkforce.push(created);
+        people = await loadPermissionPeople();
         results.push({
           ...validated,
           status: "Imported",
           matchedEntityId: created.id,
           matchedEntityName: created.candidateName,
-          messages: [
-            ...validated.messages,
-            "Created new candidate (soft name match was a warning only).",
-          ],
+          resolvedCompanyName: companyName,
+          messages: [...validated.messages, ...extraMessages],
         });
-      } catch (error) {
+      };
+
+      const runUpdate = async (id: string, extraMessages: string[]) => {
+        const updated = await updateAdminWorkforce(id, {
+          ...buildNonBlankUpdate(validated.fields, companyName),
+          createMissingPermissionPeople: true,
+        });
+        const idx = liveWorkforce.findIndex((w) => w.id === updated.id);
+        if (idx >= 0) liveWorkforce[idx] = updated;
+        people = await loadPermissionPeople();
         results.push({
           ...validated,
-          status: "Error",
-          messages: [
-            ...validated.messages,
-            error instanceof Error
-              ? error.message
-              : "Failed to create candidate.",
-          ],
+          status: "Imported",
+          resolvedCompanyName: companyName,
+          messages: [...validated.messages, ...extraMessages],
         });
-      }
-      continue;
-    }
+      };
 
-    if (validated.status === "Duplicate") {
-      if (input.duplicateMode === "skip") {
+      if (
+        validated.status === "Warning" &&
+        validated.duplicateMatch === "nameCompany"
+      ) {
+        if (input.duplicateMode === "update" && validated.matchedEntityId) {
+          await runUpdate(
+            validated.matchedEntityId,
+            ["Updated existing candidate (name + company match)."],
+          );
+          continue;
+        }
+        await runCreate([
+          "Created new candidate (soft name match was a warning only).",
+        ]);
+        continue;
+      }
+
+      if (validated.status === "Duplicate") {
+        if (input.duplicateMode === "skip") {
+          results.push({
+            ...validated,
+            status: "Skipped",
+            messages: [...validated.messages, "Skipped duplicate (default)."],
+          });
+          continue;
+        }
+        if (input.duplicateMode === "update" && validated.matchedEntityId) {
+          await runUpdate(validated.matchedEntityId, [
+            "Updated existing candidate.",
+          ]);
+          continue;
+        }
+        if (input.duplicateMode === "create") {
+          await runCreate([
+            "Created new candidate (admin confirmed create despite duplicate).",
+          ]);
+          continue;
+        }
         results.push({
           ...validated,
           status: "Skipped",
-          messages: [...validated.messages, "Skipped duplicate (default)."],
+          messages: [...validated.messages, "Skipped duplicate."],
         });
         continue;
       }
 
-      if (input.duplicateMode === "update" && validated.matchedEntityId) {
-        try {
-          const payload = buildNonBlankUpdate(
-            validated.fields,
-            validated.resolvedCompanyName ?? validated.fields.company ?? "",
-          );
-          const updated = await updateAdminWorkforce(
-            validated.matchedEntityId,
-            payload,
-          );
-          const idx = liveWorkforce.findIndex((w) => w.id === updated.id);
-          if (idx >= 0) liveWorkforce[idx] = updated;
-          results.push({
-            ...validated,
-            status: "Imported",
-            messages: [...validated.messages, "Updated existing candidate."],
-          });
-        } catch (error) {
-          results.push({
-            ...validated,
-            status: "Error",
-            messages: [
-              ...validated.messages,
-              error instanceof Error
-                ? error.message
-                : "Failed to update candidate.",
-            ],
-          });
-        }
-        continue;
-      }
-
-      if (input.duplicateMode === "create") {
-        try {
-          const created = await createAdminWorkforce({
-            candidateName: validated.fields.candidateName,
-            companyName:
-              validated.resolvedCompanyName ?? validated.fields.company,
-            workforceNumber: validated.fields.workforceNumber,
-            dateOfBirth: validated.fields.dateOfBirth,
-            department: validated.fields.department,
-            status: validated.fields.status ?? "Active",
-            trainingManager: validated.fields.trainingManager,
-            supervisor: validated.fields.supervisor,
-          });
-          liveWorkforce.push(created);
-          results.push({
-            ...validated,
-            status: "Imported",
-            matchedEntityId: created.id,
-            matchedEntityName: created.candidateName,
-            messages: [
-              ...validated.messages,
-              "Created new candidate (admin confirmed create despite duplicate).",
-            ],
-          });
-        } catch (error) {
-          results.push({
-            ...validated,
-            status: "Error",
-            messages: [
-              ...validated.messages,
-              error instanceof Error
-                ? error.message
-                : "Failed to create candidate.",
-            ],
-          });
-        }
-        continue;
-      }
-
-      results.push({
-        ...validated,
-        status: "Skipped",
-        messages: [...validated.messages, "Skipped duplicate."],
-      });
-      continue;
-    }
-
-    // Ready or informational Warning (missing optional fields)
-    try {
-      const created = await createAdminWorkforce({
-        candidateName: validated.fields.candidateName,
-        companyName: validated.resolvedCompanyName ?? validated.fields.company,
-        workforceNumber: validated.fields.workforceNumber,
-        dateOfBirth: validated.fields.dateOfBirth,
-        department: validated.fields.department,
-        status: validated.fields.status ?? "Active",
-        trainingManager: validated.fields.trainingManager,
-        supervisor: validated.fields.supervisor,
-      });
-      liveWorkforce.push(created);
-      results.push({
-        ...validated,
-        status: "Imported",
-        matchedEntityId: created.id,
-        matchedEntityName: created.candidateName,
-        messages: [...validated.messages, "Imported successfully."],
-      });
+      await runCreate(["Imported successfully."]);
     } catch (error) {
       results.push({
         ...validated,
@@ -497,7 +515,7 @@ export async function commitCandidateImport(input: {
           ...validated.messages,
           error instanceof Error
             ? error.message
-            : "Failed to create candidate.",
+            : "Failed to import candidate.",
         ],
       });
     }

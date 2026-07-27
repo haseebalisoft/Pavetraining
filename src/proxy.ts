@@ -2,11 +2,26 @@ import { NextResponse } from "next/server";
 
 import { auth } from "@/auth";
 
-const publicPaths = new Set(["/login", "/access-denied", "/preview/admin"]);
+const publicPaths = new Set([
+  "/login",
+  "/access-denied",
+  "/preview/admin",
+  "/~offline",
+]);
 
 export const proxy = auth((req) => {
   const { pathname } = req.nextUrl;
   const isLoggedIn = !!req.auth;
+
+  // PWA service worker + workbox runtime assets must stay public.
+  if (
+    pathname === "/sw.js" ||
+    pathname.startsWith("/swe-worker") ||
+    pathname === "/manifest.webmanifest" ||
+    pathname === "/manifest.webmanifest/"
+  ) {
+    return NextResponse.next();
+  }
 
   if (pathname.startsWith("/api/auth")) {
     return NextResponse.next();
@@ -35,6 +50,6 @@ export const proxy = auth((req) => {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|sw\\.js|swe-worker.*|icons/|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

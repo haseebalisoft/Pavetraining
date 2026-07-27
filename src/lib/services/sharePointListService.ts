@@ -371,6 +371,21 @@ export async function updateListItemFieldsByKey(
 }
 
 /**
+ * Deletes a SharePoint list item via Graph.
+ */
+export async function deleteListItemByKey(
+  listKey: SharePointListKey,
+  itemId: string,
+): Promise<void> {
+  const siteRoot = getSharePointSiteApiRoot();
+  const listId = getSharePointListId(listKey);
+  const client = getGraphClient();
+
+  await client.api(`${siteRoot}/lists/${listId}/items/${itemId}`).delete();
+  revalidateSharePointList(listKey);
+}
+
+/**
  * Returns internal column names for a SharePoint list (Graph columns API).
  * Used for schema health checks (e.g. EventCompany present on Events).
  */

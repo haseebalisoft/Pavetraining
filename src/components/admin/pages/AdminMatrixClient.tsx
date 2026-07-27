@@ -14,6 +14,7 @@ import { ExpiryDateBadge } from "@/components/ui/ExpiryDateBadge";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { readPublicApiError } from "@/lib/errors/publicMessages";
 import type { AdminMatrixRecord } from "@/lib/services/adminCrudService";
+import { CLIENT_MATRIX_DISPLAY_HEADERS } from "@/lib/services/bulkUpload/clientTemplateHeaders";
 import type { MatrixSyncResult } from "@/types/matrixSync";
 import {
   getExpiryStatus,
@@ -22,19 +23,48 @@ import {
 } from "@/lib/training/expiryFilters";
 import type { Company } from "@/types/models";
 
+function formatDateCell(value: string | null | undefined): string {
+  if (!value?.trim()) return "—";
+  if (/^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10);
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toISOString().slice(0, 10);
+}
+
+function matrixCell(
+  row: AdminMatrixRecord,
+  header: string,
+): string {
+  if (header === "Name") return row.candidateName || "—";
+  if (header === "DOB") return formatDateCell(row.dateOfBirth);
+  const fromColumns = row.columnValues?.[header];
+  if (fromColumns?.trim()) return formatDateCell(fromColumns);
+  return "—";
+}
+
+/** Match Training matrix example.xlsx column order. */
 const columns: AdminColumn<AdminMatrixRecord>[] = [
-  { key: "name", header: "Candidate name", render: (row) => row.candidateName },
-  { key: "company", header: "Company", render: (row) => row.companyName ?? "—" },
-  { key: "department", header: "Department", render: (row) => row.department ?? "—" },
+  {
+    key: "company",
+    header: "Company",
+    render: (row) => row.companyName ?? "—",
+  },
+  ...CLIENT_MATRIX_DISPLAY_HEADERS.map((header) => ({
+    key: header,
+    header,
+    render: (row: AdminMatrixRecord) => matrixCell(row, header),
+  })),
   {
     key: "next",
     header: "Next expiry",
-    render: (row) => <ExpiryDateBadge date={row.nextExpiryDate} />,
+    render: (row: AdminMatrixRecord) => (
+      <ExpiryDateBadge date={row.nextExpiryDate} />
+    ),
   },
   {
     key: "review",
     header: "Records to Review",
-    render: (row) => (
+    render: (row: AdminMatrixRecord) => (
       <StatusBadge
         label={row.needsReview ? "Review" : "Clear"}
         tone={row.needsReview ? "warn" : "ok"}
@@ -44,7 +74,7 @@ const columns: AdminColumn<AdminMatrixRecord>[] = [
   {
     key: "status",
     header: "Overall status",
-    render: (row) => row.overallStatus ?? "—",
+    render: (row: AdminMatrixRecord) => row.overallStatus ?? "—",
   },
 ];
 
@@ -210,13 +240,14 @@ export function AdminMatrixClient({
       <AdminCrudPage<AdminMatrixRecord>
         key={reloadToken}
         title="Training Matrix"
-        description="Review matrix rows and sync expiry/status from NPORS, EUSR, NRSWA, and In-House registers."
+        description="Columns match Training matrix example.xlsx. Scroll horizontally to see all N-code expiries. Sync still updates from registers."
         columns={columns}
         fields={fields}
         companies={companies}
         initialRows={initialRows}
         enableCompanyFilter
         getCompanyName={(row) => row.companyName}
+        drawerWide
         listUrl="/api/admin/training-matrix"
         createUrl="/api/admin/training-matrix"
         updateUrl={(id) => `/api/admin/training-matrix/${id}`}

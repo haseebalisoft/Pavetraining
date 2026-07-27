@@ -23,6 +23,7 @@ import {
   toSharePointRoleType,
 } from "@/lib/services/permissionService";
 import { mapCompanyFields, getCompanyById } from "@/lib/services/companyService";
+import { CLIENT_MATRIX_CATEGORY_COLUMNS } from "@/lib/services/bulkUpload/clientTemplateHeaders";
 import { stripSharePointHtml } from "@/lib/text/stripSharePointHtml";
 import type { Company, RoleType } from "@/types/models";
 import type {
@@ -212,20 +213,60 @@ export async function updateAdminCompany(
   return mapped;
 }
 
+export async function deleteAdminCompany(id: string) {
+  const {
+    deleteCompanyWithRelatedData,
+  } = await import("@/lib/services/companyCascadeDeleteService");
+  const result = await deleteCompanyWithRelatedData(id);
+  if (!result.companyDeleted) {
+    throw new Error(
+      result.errors.join(" | ") || "Company could not be deleted.",
+    );
+  }
+  return result;
+}
+
+export async function bulkDeleteAdminCompanies(ids: string[]) {
+  const unique = Array.from(
+    new Set(ids.map((id) => String(id).trim()).filter(Boolean)),
+  );
+  if (unique.length === 0) {
+    throw new Error("No company ids provided.");
+  }
+  const {
+    deleteCompaniesWithRelatedData,
+  } = await import("@/lib/services/companyCascadeDeleteService");
+  return deleteCompaniesWithRelatedData(unique);
+}
+
 /* ───────────────── Workforce ───────────────── */
 
 const workforceFields = getSharePointFields("workforce");
 
 export interface AdminWorkforceRecord {
   id: string;
+  workforceNumber: string | null;
   candidateName: string;
   companyName: string;
-  workforceNumber: string | null;
-  dateOfBirth: string | null;
-  department: string | null;
-  status: string | null;
+  companyNumber: string | null;
   trainingManager: string | null;
   supervisor: string | null;
+  candidateAddress: string | null;
+  email: string | null;
+  contactNumber: string | null;
+  dateOfBirth: string | null;
+  niNumber: string | null;
+  nporsNumbers: string | null;
+  cscsNumber: string | null;
+  cscsExpiry: string | null;
+  swqrNumber: string | null;
+  swqrExpiry: string | null;
+  eusrNumber: string | null;
+  eusrExpiry: string | null;
+  inHouseCertificationNumber: string | null;
+  department: string | null;
+  status: string | null;
+  notes: string | null;
 }
 
 function mapWorkforceDepartment(value: unknown): string | null {
@@ -247,9 +288,200 @@ function mapWorkforceDepartment(value: unknown): string | null {
   return asLookupOrString(value) ?? asNullableString(value);
 }
 
+/** Permissions List rows used to resolve Workforce Training manager / Supervisor lookups. */
+export type PermissionPersonRef = {
+  id: string;
+  name: string | null;
+  userEmail: string;
+  roleType: RoleType;
+  companyId: string | null;
+  status: string;
+};
+
+function permissionPersonKey(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+export async function loadPermissionPeople(): Promise<PermissionPersonRef[]> {
+  const fields = getSharePointFields("permissions");
+  const items = await getListItemsByKey("permissions", { top: 5000 });
+  const rows: PermissionPersonRef[] = [];
+  for (const item of items) {
+    const userEmail = asString(item.fields[fields.userEmail]);
+    const roleType = normalizePermissionRoleType(item.fields[fields.roleType]);
+    if (!userEmail || !roleType) continue;
+    const companyId =
+      asString(item.fields[fields.companyLookupId]) ??
+      extractLookupId(item.fields, fields.company) ??
+      null;
+    rows.push({
+      id: item.id,
+      name: asNullableString(item.fields[fields.name]),
+      userEmail: userEmail.toLowerCase(),
+      roleType,
+      companyId,
+      status: asNullableString(item.fields[fields.status]) ?? "Inactive",
+    });
+  }
+  return rows;
+}
+
+function permissionNameByIdMap(
+  people: PermissionPersonRef[],
+): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const person of people) {
+    const label = person.name?.trim() || person.userEmail;
+    if (label) map.set(person.id, label);
+  }
+  return map;
+}
+
+export function findPermissionPerson(
+  people: PermissionPersonRef[],
+  displayNameOrEmail: string | null | undefined,
+): PermissionPersonRef | null {
+  const raw = displayNameOrEmail?.trim();
+  if (!raw) return null;
+  const key = permissionPersonKey(raw);
+  return (
+    people.find((row) => permissionPersonKey(row.name ?? "") === key) ??
+    people.find((row) => row.userEmail === key) ??
+    null
+  );
+}
+
+/**
+ * Resolve or create a Permissions List row for Workforce TM/Supervisor lookups.
+ * SharePoint scheme: these columns are Lookups to Permissions.Name.
+ */
+export async function ensurePermissionPerson(input: {
+  displayName: string;
+  roleType: RoleType;
+  companyId?: string | null;
+  people?: PermissionPersonRef[];
+}): Promise<{ person: PermissionPersonRef; people: PermissionPersonRef[]; created: boolean }> {
+  const displayName = input.displayName.trim();
+  if (!displayName) {
+    throw new ValidationError("Display name is required for permission person.");
+  }
+
+  let people = input.people ?? (await loadPermissionPeople());
+  const existing = findPermissionPerson(people, displayName);
+  if (existing) {
+    return { person: existing, people, created: false };
+  }
+
+  const slug = displayName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ".")
+    .replace(/^\.+|\.+$/g, "")
+    .slice(0, 40);
+  const userEmail = `import.${slug || "person"}.${Date.now()}@pave.local`;
+  const fields = getSharePointFields("permissions");
+  const payload: SharePointFields = toSharePointFields("permissions", {
+    userEmail,
+    roleType: toSharePointRoleType(input.roleType),
+    status: "Active",
+    accessScope: "Company",
+    canView: true,
+    canDownload: false,
+    canEdit: false,
+    name: displayName,
+  });
+  if (input.companyId) {
+    payload[fields.companyLookupId] = Number.isNaN(Number(input.companyId))
+      ? input.companyId
+      : Number(input.companyId);
+  }
+
+  const item = await createListItemByKey("permissions", payload);
+  const person: PermissionPersonRef = {
+    id: item.id,
+    name: displayName,
+    userEmail,
+    roleType: input.roleType,
+    companyId: input.companyId ?? null,
+    status: "Active",
+  };
+  people = [...people, person];
+  return { person, people, created: true };
+}
+
+async function applyWorkforcePersonLookups(
+  payload: SharePointFields,
+  input: Record<string, unknown>,
+  options?: {
+    companyId?: string | null;
+    createIfMissing?: boolean;
+    people?: PermissionPersonRef[];
+  },
+): Promise<{
+  people: PermissionPersonRef[];
+  trainingManagerName: string | null;
+  supervisorName: string | null;
+}> {
+  // Never write free text into Lookup columns — SharePoint rejects / ignores it.
+  delete payload[workforceFields.trainingManager];
+  delete payload[workforceFields.supervisor];
+
+  let people = options?.people ?? (await loadPermissionPeople());
+  let trainingManagerName: string | null = null;
+  let supervisorName: string | null = null;
+
+  const resolveOne = async (
+    value: string | null | undefined,
+    roleType: RoleType,
+    lookupIdField: string,
+  ): Promise<string | null> => {
+    const text = value?.trim();
+    if (!text) {
+      payload[lookupIdField] = null;
+      return null;
+    }
+    let hit = findPermissionPerson(people, text);
+    if (!hit && options?.createIfMissing) {
+      const ensured = await ensurePermissionPerson({
+        displayName: text,
+        roleType,
+        companyId: options.companyId,
+        people,
+      });
+      people = ensured.people;
+      hit = ensured.person;
+    }
+    if (!hit) {
+      throw new ValidationError(
+        `"${text}" was not found in Permissions. Add them under Permissions (Name) or re-import to auto-create.`,
+      );
+    }
+    payload[lookupIdField] = Number(hit.id);
+    return hit.name?.trim() || hit.userEmail;
+  };
+
+  if (input.trainingManager !== undefined) {
+    trainingManagerName = await resolveOne(
+      optionalText(input.trainingManager),
+      "Admin",
+      `${workforceFields.trainingManager}LookupId`,
+    );
+  }
+  if (input.supervisor !== undefined) {
+    supervisorName = await resolveOne(
+      optionalText(input.supervisor),
+      "Customer",
+      `${workforceFields.supervisor}LookupId`,
+    );
+  }
+
+  return { people, trainingManagerName, supervisorName };
+}
+
 function mapWorkforce(
   item: SharePointListItem,
   companyNameById?: Map<string, string>,
+  companyNumberById?: Map<string, string | null>,
+  permissionNameById?: Map<string, string>,
 ): AdminWorkforceRecord | null {
   // Candidate Name is text; Company Name is a Lookup (Graph often returns LookupId only).
   const candidateName =
@@ -266,35 +498,84 @@ function mapWorkforce(
       ? (companyNameById.get(companyLookupId) ?? null)
       : null);
   if (!candidateName || !companyName) return null;
+
+  const companyNumber =
+    asNullableString(item.fields.Company_x0020_Name_x003a__x0020_) ??
+    (companyLookupId && companyNumberById
+      ? (companyNumberById.get(companyLookupId) ?? null)
+      : null);
+
+  const trainingManagerLookupId = extractLookupId(
+    item.fields,
+    workforceFields.trainingManager,
+  );
+  const supervisorLookupId = extractLookupId(
+    item.fields,
+    workforceFields.supervisor,
+  );
+
   return {
     id: item.id,
-    candidateName,
-    companyName,
     workforceNumber: asNullableString(
       item.fields[workforceFields.workforceNumber],
     ),
-    dateOfBirth: asNullableString(item.fields[workforceFields.dateOfBirth]),
-    department: mapWorkforceDepartment(item.fields[workforceFields.department]),
-    status: asNullableString(item.fields[workforceFields.status]),
+    candidateName,
+    companyName,
+    companyNumber,
     trainingManager:
       asLookupOrString(item.fields[workforceFields.trainingManager]) ??
-      asNullableString(item.fields[workforceFields.trainingManager]),
+      asNullableString(item.fields[workforceFields.trainingManager]) ??
+      (trainingManagerLookupId && permissionNameById
+        ? (permissionNameById.get(trainingManagerLookupId) ?? null)
+        : null),
     supervisor:
       asLookupOrString(item.fields[workforceFields.supervisor]) ??
-      asNullableString(item.fields[workforceFields.supervisor]),
+      asNullableString(item.fields[workforceFields.supervisor]) ??
+      (supervisorLookupId && permissionNameById
+        ? (permissionNameById.get(supervisorLookupId) ?? null)
+        : null),
+    candidateAddress: asNullableString(
+      item.fields[workforceFields.candidateAddress],
+    ),
+    email: asNullableString(item.fields[workforceFields.email]),
+    contactNumber: asNullableString(item.fields[workforceFields.contactNumber]),
+    dateOfBirth: asNullableString(item.fields[workforceFields.dateOfBirth]),
+    niNumber: asNullableString(item.fields[workforceFields.niNumber]),
+    nporsNumbers: asNullableString(item.fields[workforceFields.nporsNumbers]),
+    cscsNumber: asNullableString(item.fields[workforceFields.cscsNumber]),
+    cscsExpiry: asNullableString(item.fields[workforceFields.cscsExpiry]),
+    swqrNumber: asNullableString(item.fields[workforceFields.swqrNumber]),
+    swqrExpiry: asNullableString(item.fields[workforceFields.swqrExpiry]),
+    eusrNumber: asNullableString(item.fields[workforceFields.eusrNumber]),
+    eusrExpiry: asNullableString(item.fields[workforceFields.eusrExpiry]),
+    inHouseCertificationNumber: asNullableString(
+      item.fields[workforceFields.inHouseCertificationNumber],
+    ),
+    department:
+      mapWorkforceDepartment(item.fields[workforceFields.departmentText]) ??
+      mapWorkforceDepartment(item.fields[workforceFields.department]),
+    status: asNullableString(item.fields[workforceFields.status]),
+    notes: asNullableString(item.fields[workforceFields.notes]),
   };
 }
 
 export async function listAdminWorkforce(companyName?: string | null) {
-  const [items, companies] = await Promise.all([
+  const [items, companies, people] = await Promise.all([
     getListItemsByKey("workforce", { top: 5000 }),
     listAdminCompanies(),
+    loadPermissionPeople(),
   ]);
   const companyNameById = new Map(
     companies.map((row) => [row.id, row.companyName] as const),
   );
+  const companyNumberById = new Map(
+    companies.map((row) => [row.id, row.companyNumber] as const),
+  );
+  const permissionNameById = permissionNameByIdMap(people);
   return items
-    .map((item) => mapWorkforce(item, companyNameById))
+    .map((item) =>
+      mapWorkforce(item, companyNameById, companyNumberById, permissionNameById),
+    )
     .filter((row): row is AdminWorkforceRecord => {
       if (!row) return false;
       return matchesCompany(row.companyName, companyName);
@@ -332,31 +613,85 @@ export async function createAdminWorkforce(input: Record<string, unknown>) {
   }
 
   // CompanyName is a Lookup — write LookupId, not free text.
+  // Training manager / Supervisor are Lookups → Permissions (SharePoint scheme).
+  const departmentText =
+    optionalText(input.departmentText) ?? optionalText(input.department);
   const payload = toSharePointFields("workforce", {
     candidateName,
     workforceNumber,
     dateOfBirth: asDateInput(input.dateOfBirth),
-    department: optionalText(input.department),
+    departmentText,
     status: optionalText(input.status) ?? "Active",
+    email: optionalText(input.email),
+    candidateAddress: optionalText(input.candidateAddress),
+    contactNumber: optionalText(input.contactNumber),
+    niNumber: optionalText(input.niNumber),
+    cscsNumber: optionalText(input.cscsNumber),
+    swqrNumber: optionalText(input.swqrNumber),
+    eusrNumber: optionalText(input.eusrNumber),
+    nporsNumbers: optionalText(input.nporsNumbers),
+    inHouseCertificationNumber: optionalText(
+      input.inHouseCertificationNumber,
+    ),
+    cscsExpiry: asDateInput(input.cscsExpiry),
+    swqrExpiry: asDateInput(input.swqrExpiry),
+    eusrExpiry: asDateInput(input.eusrExpiry),
+    notes: optionalText(input.notes),
   });
   payload.CompanyNameLookupId = Number(company.id);
+
+  const createIfMissing =
+    input.createMissingPermissionPeople !== false &&
+    input.createMissingPermissionPeople !== "false";
+  const personLookups = await applyWorkforcePersonLookups(payload, input, {
+    companyId: company.id,
+    createIfMissing,
+  });
 
   const item = await createListItemByKey("workforce", payload);
   const mapped =
     mapWorkforce(
       item,
       new Map([[company.id, company.companyName]]),
+      new Map([[company.id, company.companyNumber]]),
+      permissionNameByIdMap(personLookups.people),
     ) ??
     ({
       id: item.id,
+      workforceNumber,
       candidateName,
       companyName: company.companyName,
-      workforceNumber,
+      companyNumber: company.companyNumber,
+      trainingManager:
+        personLookups.trainingManagerName ??
+        optionalText(input.trainingManager),
+      supervisor:
+        personLookups.supervisorName ?? optionalText(input.supervisor),
+      candidateAddress: optionalText(input.candidateAddress),
+      email: optionalText(input.email),
+      contactNumber: optionalText(input.contactNumber),
       dateOfBirth: asNullableString(payload[workforceFields.dateOfBirth]),
-      department: optionalText(input.department),
+      niNumber: optionalText(input.niNumber),
+      nporsNumbers: optionalText(input.nporsNumbers),
+      cscsNumber: optionalText(input.cscsNumber),
+      cscsExpiry: asNullableString(
+        asDateInput(input.cscsExpiry) ?? null,
+      ),
+      swqrNumber: optionalText(input.swqrNumber),
+      swqrExpiry: asNullableString(
+        asDateInput(input.swqrExpiry) ?? null,
+      ),
+      eusrNumber: optionalText(input.eusrNumber),
+      eusrExpiry: asNullableString(
+        asDateInput(input.eusrExpiry) ?? null,
+      ),
+      inHouseCertificationNumber: optionalText(
+        input.inHouseCertificationNumber,
+      ),
+      department:
+        optionalText(input.departmentText) ?? optionalText(input.department),
       status: optionalText(input.status) ?? "Active",
-      trainingManager: null,
-      supervisor: null,
+      notes: optionalText(input.notes),
     } satisfies AdminWorkforceRecord);
 
   const { ensureCandidateDocumentFolders } = await import(
@@ -392,12 +727,60 @@ export async function updateAdminWorkforce(
       input.dateOfBirth === undefined
         ? undefined
         : asDateInput(input.dateOfBirth),
-    department:
-      input.department === undefined
+    departmentText:
+      input.departmentText === undefined && input.department === undefined
         ? undefined
-        : optionalText(input.department),
+        : optionalText(input.departmentText) ??
+          optionalText(input.department),
     status: optionalText(input.status) ?? undefined,
+    email: input.email === undefined ? undefined : optionalText(input.email),
+    candidateAddress:
+      input.candidateAddress === undefined
+        ? undefined
+        : optionalText(input.candidateAddress),
+    contactNumber:
+      input.contactNumber === undefined
+        ? undefined
+        : optionalText(input.contactNumber),
+    niNumber:
+      input.niNumber === undefined ? undefined : optionalText(input.niNumber),
+    cscsNumber:
+      input.cscsNumber === undefined
+        ? undefined
+        : optionalText(input.cscsNumber),
+    swqrNumber:
+      input.swqrNumber === undefined
+        ? undefined
+        : optionalText(input.swqrNumber),
+    eusrNumber:
+      input.eusrNumber === undefined
+        ? undefined
+        : optionalText(input.eusrNumber),
+    nporsNumbers:
+      input.nporsNumbers === undefined
+        ? undefined
+        : optionalText(input.nporsNumbers),
+    inHouseCertificationNumber:
+      input.inHouseCertificationNumber === undefined
+        ? undefined
+        : optionalText(input.inHouseCertificationNumber),
+    cscsExpiry:
+      input.cscsExpiry === undefined
+        ? undefined
+        : asDateInput(input.cscsExpiry),
+    swqrExpiry:
+      input.swqrExpiry === undefined
+        ? undefined
+        : asDateInput(input.swqrExpiry),
+    eusrExpiry:
+      input.eusrExpiry === undefined
+        ? undefined
+        : asDateInput(input.eusrExpiry),
+    notes: input.notes === undefined ? undefined : optionalText(input.notes),
   });
+
+  let companyIdForPeople: string | null =
+    extractLookupId(existing.fields, workforceFields.companyName) ?? null;
 
   if (input.companyName !== undefined) {
     const companyName = optionalText(input.companyName);
@@ -412,15 +795,32 @@ export async function updateAdminWorkforce(
         throw new ValidationError(`Company "${companyName}" was not found.`);
       }
       payload.CompanyNameLookupId = Number(company.id);
+      companyIdForPeople = company.id;
     }
   }
+
+  const createIfMissing =
+    input.createMissingPermissionPeople !== false &&
+    input.createMissingPermissionPeople !== "false";
+  const personLookups = await applyWorkforcePersonLookups(payload, input, {
+    companyId: companyIdForPeople,
+    createIfMissing,
+  });
 
   const item = await updateListItemFieldsByKey("workforce", id, payload);
   const companies = await listAdminCompanies();
   const companyNameById = new Map(
     companies.map((row) => [row.id, row.companyName] as const),
   );
-  const mapped = mapWorkforce(item, companyNameById);
+  const companyNumberById = new Map(
+    companies.map((row) => [row.id, row.companyNumber] as const),
+  );
+  const mapped = mapWorkforce(
+    item,
+    companyNameById,
+    companyNumberById,
+    permissionNameByIdMap(personLookups.people),
+  );
   if (!mapped) throw new Error("Updated candidate could not be mapped.");
   return mapped;
 }
@@ -434,6 +834,7 @@ export interface AdminMatrixRecord {
   candidateName: string;
   companyName: string | null;
   department: string | null;
+  dateOfBirth: string | null;
   overallStatus: string | null;
   needsReview: boolean;
   matrixNotes: string | null;
@@ -446,6 +847,11 @@ export interface AdminMatrixRecord {
   n021Expiry: string | null;
   n027Expiry: string | null;
   n100Expiry: string | null;
+  /**
+   * Values keyed by exact Training matrix example.xlsx headers
+   * (Name, DOB, CSCS Expiry, N001 - Ind FLT, …).
+   */
+  columnValues: Record<string, string | null>;
 }
 
 function mapMatrix(
@@ -491,6 +897,7 @@ function mapMatrix(
     candidateName,
     companyName,
     department: asNullableString(item.fields[matrixFields.department]),
+    dateOfBirth: workforceHit?.dateOfBirth ?? null,
     overallStatus: asNullableString(item.fields[matrixFields.overallStatus]),
     needsReview: asBoolean(item.fields[matrixFields.needsReview]),
     matrixNotes: asNullableString(item.fields[matrixFields.matrixNotes]),
@@ -503,14 +910,97 @@ function mapMatrix(
     n021Expiry: asNullableString(item.fields[matrixFields.n021Expiry]),
     n027Expiry: asNullableString(item.fields[matrixFields.n027Expiry]),
     n100Expiry: asNullableString(item.fields[matrixFields.n100Expiry]),
+    columnValues: {},
   };
 }
 
+function asDateOnly(value: string | null | undefined): string | null {
+  if (!value?.trim()) return null;
+  if (/^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10);
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value.trim();
+  return parsed.toISOString().slice(0, 10);
+}
+
+function matrixRowKey(candidate: string, company: string | null): string {
+  return `${(candidate ?? "").trim().toLowerCase()}|${(company ?? "")
+    .trim()
+    .toLowerCase()}`;
+}
+
+async function loadMatrixCategoryExpiryIndex(): Promise<
+  Map<string, Map<string, string>>
+> {
+  const index = new Map<string, Map<string, string>>();
+  try {
+    const items = await getListItemsByKey("trainingMatrixCategoryRecords", {
+      top: 5000,
+    });
+    const catFields = getSharePointFields("trainingMatrixCategoryRecords");
+    for (const item of items) {
+      const candidate = asNullableString(item.fields[catFields.candidateName]);
+      const company = asNullableString(item.fields[catFields.companyName]);
+      const code = asNullableString(item.fields[catFields.categoryCode]);
+      const expiry = asDateOnly(
+        asNullableString(item.fields[catFields.expiryDate]),
+      );
+      if (!candidate || !code || !expiry) continue;
+      const key = matrixRowKey(candidate, company);
+      const bucket = index.get(key) ?? new Map<string, string>();
+      bucket.set(code.trim().toUpperCase(), expiry);
+      index.set(key, bucket);
+    }
+  } catch {
+    // Category list may be unset in some environments — matrix page still works.
+  }
+  return index;
+}
+
+function buildMatrixColumnValues(
+  row: AdminMatrixRecord,
+  byCode: Map<string, string> | undefined,
+  workforce?: AdminWorkforceRecord | null,
+): Record<string, string | null> {
+  const values: Record<string, string | null> = {
+    Name: row.candidateName,
+    DOB: asDateOnly(row.dateOfBirth ?? workforce?.dateOfBirth),
+    "CSCS Expiry":
+      byCode?.get("CSCS") ?? asDateOnly(workforce?.cscsExpiry) ?? null,
+    "SSSTS Expiry": byCode?.get("SSSTS") ?? null,
+    "SMSTS Expiry": byCode?.get("SMSTS") ?? null,
+    "NRSWA Expiry": byCode?.get("NRSWA") ?? null,
+    "EUSR Expiry":
+      byCode?.get("EUSR") ?? asDateOnly(workforce?.eusrExpiry) ?? null,
+    "Face ift": byCode?.get("FACEFIT") ?? null,
+  };
+
+  const matrixFieldByCode: Record<string, string | null> = {
+    N001: asDateOnly(row.n001Expiry),
+    N003: asDateOnly(row.n003Expiry),
+    N004: asDateOnly(row.n004Expiry),
+    N010: asDateOnly(row.n010Expiry),
+    N020: asDateOnly(row.n020Expiry),
+    N021: asDateOnly(row.n021Expiry),
+    N027: asDateOnly(row.n027Expiry),
+    N100: asDateOnly(row.n100Expiry),
+  };
+
+  for (const column of CLIENT_MATRIX_CATEGORY_COLUMNS) {
+    values[column.header] =
+      byCode?.get(column.code.toUpperCase()) ??
+      matrixFieldByCode[column.code.toUpperCase()] ??
+      null;
+  }
+
+  return values;
+}
+
 export async function listAdminMatrix(companyName?: string | null) {
-  const [items, companies, workforce] = await Promise.all([
+  const [items, companies, workforce, categoryIndex] = await Promise.all([
     getListItemsByKey("trainingMatrix", { top: 5000 }),
     listAdminCompanies(),
     listAdminWorkforce(),
+    loadMatrixCategoryExpiryIndex(),
   ]);
   const companyNameById = new Map(
     companies.map((row) => [row.id, row.companyName] as const),
@@ -518,8 +1008,30 @@ export async function listAdminMatrix(companyName?: string | null) {
   const workforceById = new Map(
     workforce.map((row) => [row.id, row] as const),
   );
+  const workforceByNameCompany = new Map(
+    workforce.map((row) => [
+      matrixRowKey(row.candidateName, row.companyName),
+      row,
+    ] as const),
+  );
+
   return items
-    .map((item) => mapMatrix(item, { companyNameById, workforceById }))
+    .map((item) => {
+      const mapped = mapMatrix(item, { companyNameById, workforceById });
+      if (!mapped) return null;
+      const wf =
+        workforceByNameCompany.get(
+          matrixRowKey(mapped.candidateName, mapped.companyName),
+        ) ?? null;
+      const byCode = categoryIndex.get(
+        matrixRowKey(mapped.candidateName, mapped.companyName),
+      );
+      return {
+        ...mapped,
+        dateOfBirth: mapped.dateOfBirth ?? wf?.dateOfBirth ?? null,
+        columnValues: buildMatrixColumnValues(mapped, byCode, wf),
+      } satisfies AdminMatrixRecord;
+    })
     .filter((row): row is AdminMatrixRecord => {
       if (!row) return false;
       return matchesCompany(row.companyName, companyName);
@@ -594,6 +1106,7 @@ export async function createAdminMatrix(input: Record<string, unknown>) {
       candidateName: candidate.candidateName,
       companyName: company.companyName,
       department: optionalText(input.department) ?? candidate.department,
+      dateOfBirth: candidate.dateOfBirth,
       overallStatus: optionalText(input.overallStatus),
       needsReview: optionalBool(input.needsReview) ?? false,
       matrixNotes: optionalText(input.matrixNotes),
@@ -608,8 +1121,13 @@ export async function createAdminMatrix(input: Record<string, unknown>) {
       n021Expiry: asNullableString(asDateInput(input.n021Expiry) ?? null),
       n027Expiry: asNullableString(asDateInput(input.n027Expiry) ?? null),
       n100Expiry: asNullableString(asDateInput(input.n100Expiry) ?? null),
+      columnValues: {},
     } satisfies AdminMatrixRecord);
-  return mapped;
+  return {
+    ...mapped,
+    dateOfBirth: mapped.dateOfBirth ?? candidate.dateOfBirth,
+    columnValues: buildMatrixColumnValues(mapped, undefined, candidate),
+  };
 }
 
 export async function updateAdminMatrix(
@@ -750,10 +1268,30 @@ export async function updateAdminMatrix(
   const item = await updateListItemFieldsByKey("trainingMatrix", id, payload);
   const mapped = mapMatrix(item, { companyNameById, workforceById });
   if (!mapped) throw new Error("Updated matrix row could not be mapped.");
-  return mapped;
+  const wf =
+    (mapped.companyName
+      ? workforce.find(
+          (row) =>
+            matrixRowKey(row.candidateName, row.companyName) ===
+            matrixRowKey(mapped.candidateName, mapped.companyName),
+        )
+      : null) ??
+    workforce.find(
+      (row) =>
+        row.candidateName.trim().toLowerCase() ===
+        mapped.candidateName.trim().toLowerCase(),
+    ) ??
+    null;
+  const expiryByPerson = await loadMatrixCategoryExpiryIndex();
+  const expiryByCode = expiryByPerson.get(
+    matrixRowKey(mapped.candidateName, mapped.companyName),
+  );
+  return {
+    ...mapped,
+    dateOfBirth: mapped.dateOfBirth ?? wf?.dateOfBirth ?? null,
+    columnValues: buildMatrixColumnValues(mapped, expiryByCode, wf),
+  };
 }
-
-/* ───────────────── Training registers ───────────────── */
 
 export type AdminRegisterKey =
   | "nporsRegister"
@@ -2325,6 +2863,8 @@ const permissionFields = getSharePointFields("permissions");
 export interface AdminPermissionRecord {
   id: string;
   userEmail: string;
+  /** Permissions List Name — used by Workforce Training manager / Supervisor lookups. */
+  name: string | null;
   roleType: RoleType;
   status: string;
   companyId: string | null;
@@ -2353,6 +2893,7 @@ function mapPermission(item: SharePointListItem): AdminPermissionRecord | null {
   return {
     id: item.id,
     userEmail: userEmail.toLowerCase(),
+    name: asNullableString(item.fields[permissionFields.name]),
     roleType,
     status: asNullableString(item.fields[permissionFields.status]) ?? "Inactive",
     companyId,
@@ -2394,6 +2935,10 @@ export async function createAdminPermission(input: Record<string, unknown>) {
     canView: optionalBool(input.canView) ?? true,
     canDownload: optionalBool(input.canDownload) ?? false,
     canEdit: optionalBool(input.canEdit) ?? false,
+    name:
+      optionalText(input.name) ??
+      userEmail.split("@")[0]?.replace(/[._]/g, " ") ??
+      null,
   });
 
   if (companyId) {
@@ -2442,6 +2987,7 @@ export async function updateAdminPermission(
     canView: optionalBool(input.canView),
     canDownload: optionalBool(input.canDownload),
     canEdit: optionalBool(input.canEdit),
+    name: input.name === undefined ? undefined : optionalText(input.name),
   });
 
   if (input.companyId !== undefined) {

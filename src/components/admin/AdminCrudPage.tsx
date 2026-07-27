@@ -49,6 +49,13 @@ interface AdminCrudPageProps<T extends { id: string }> {
   listUrl: string;
   createUrl?: string;
   updateUrl: (id: string) => string;
+  /** When set, shows per-row Delete. */
+  deleteUrl?: (id: string) => string;
+  /** When set with enableBulkDelete, posts `{ ids: string[] }`. */
+  bulkDeleteUrl?: string;
+  enableBulkDelete?: boolean;
+  /** Extra confirm text for destructive deletes (e.g. company cascade). */
+  deleteConfirmExtra?: string;
   initialRows: T[];
   mapResponse: (payload: unknown) => T[];
   companies?: Company[];
@@ -70,6 +77,8 @@ interface AdminCrudPageProps<T extends { id: string }> {
     helpers: { reload: () => Promise<void> },
   ) => ReactNode;
   breadcrumbs?: Array<{ label: string; href?: string }>;
+  /** Horizontal scroll for many columns (Company List / Excel-width tables). */
+  wideTable?: boolean;
 }
 
 type FormState = Record<string, string | boolean>;
@@ -127,6 +136,10 @@ export function AdminCrudPage<T extends { id: string }>({
   listUrl,
   createUrl,
   updateUrl,
+  deleteUrl,
+  bulkDeleteUrl,
+  enableBulkDelete = false,
+  deleteConfirmExtra,
   initialRows,
   mapResponse,
   companies = [],
@@ -144,6 +157,7 @@ export function AdminCrudPage<T extends { id: string }>({
   warnings = [],
   extraActions,
   breadcrumbs,
+  wideTable = false,
 }: AdminCrudPageProps<T>) {
   const { pushToast } = useAdminToast();
   const router = useRouter();
@@ -160,6 +174,8 @@ export function AdminCrudPage<T extends { id: string }>({
   const [saving, setSaving] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [pendingSave, setPendingSave] = useState<FormState | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState(false);
 
   function openCreate() {
     setEditing(null);
@@ -234,6 +250,95 @@ export function AdminCrudPage<T extends { id: string }>({
     getCompanyName,
     rowFilter,
   ]);
+
+  const allFilteredSelected =
+    filtered.length > 0 && filtered.every((row) => selectedIds.has(row.id));
+
+  function toggleSelect(id: string) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAllFiltered() {
+    if (allFilteredSelected) {
+      setSelectedIds(new Set());
+      return;
+    }
+    setSelectedIds(new Set(filtered.map((row) => row.id)));
+  }
+
+  async function deleteOne(id: string) {
+    if (!deleteUrl) return;
+    const ok = window.confirm(
+      `Delete this record?${deleteConfirmExtra ? `\n\n${deleteConfirmExtra}` : "\n\nThis cannot be undone."}`,
+    );
+    if (!ok) return;
+    setDeleting(true);
+    try {
+      const response = await fetch(deleteUrl(id), { method: "DELETE" });
+      if (!response.ok) throw new Error(await readError(response));
+      pushToast("Record deleted", "success");
+      setSelectedIds((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+      await load();
+    } catch (error) {
+      pushToast(
+        error instanceof Error ? error.message : "Delete failed",
+        "error",
+      );
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  async function deleteSelected() {
+    if (!enableBulkDelete || !bulkDeleteUrl || selectedIds.size === 0) return;
+    const ids = Array.from(selectedIds);
+    const ok = window.confirm(
+      `Delete ${ids.length} selected record(s)?${
+        deleteConfirmExtra
+          ? `\n\n${deleteConfirmExtra}`
+          : "\n\nThis cannot be undone."
+      }`,
+    );
+    if (!ok) return;
+    setDeleting(true);
+    try {
+      const response = await fetch(bulkDeleteUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      if (!response.ok) throw new Error(await readError(response));
+      const payload = (await response.json()) as {
+        companiesDeleted?: number;
+        relatedDeleted?: number;
+      };
+      pushToast(
+        `Deleted ${payload.companiesDeleted ?? ids.length} record(s)` +
+          (payload.relatedDeleted
+            ? ` and ${payload.relatedDeleted} related item(s)`
+            : ""),
+        "success",
+      );
+      setSelectedIds(new Set());
+      await load();
+    } catch (error) {
+      pushToast(
+        error instanceof Error ? error.message : "Bulk delete failed",
+        "error",
+      );
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   function openEdit(row: T) {
     setEditing(row);
@@ -394,6 +499,30 @@ export function AdminCrudPage<T extends { id: string }>({
           </label>
         ) : null}
         {toolbarExtra}
+        {enableBulkDelete ? (
+          <>
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              disabled={filtered.length === 0 || deleting}
+              onClick={toggleSelectAllFiltered}
+            >
+              {allFilteredSelected ? "Clear selection" : "Select all"}
+            </button>
+            <button
+              type="button"
+              className={styles.dangerButton}
+              disabled={selectedIds.size === 0 || deleting}
+              onClick={() => {
+                void deleteSelected();
+              }}
+            >
+              {deleting
+                ? "Deleting…"
+                : `Delete selected (${selectedIds.size})`}
+            </button>
+          </>
+        ) : null}
       </div>
 
       {loading ? (
@@ -405,9 +534,26 @@ export function AdminCrudPage<T extends { id: string }>({
         </div>
       ) : (
         <div className={styles.tableWrap}>
-          <table className={styles.dataTable}>
+          <table
+            className={`${styles.dataTable}${
+              wideTable ? ` ${styles.companiesWideTable}` : ""
+            }`}
+          >
             <thead>
               <tr>
+                {enableBulkDelete || deleteUrl ? (
+                  <th scope="col" className={styles.selectCol}>
+                    {enableBulkDelete ? (
+                      <input
+                        type="checkbox"
+                        checked={allFilteredSelected}
+                        onChange={toggleSelectAllFiltered}
+                        aria-label="Select all"
+                        disabled={deleting}
+                      />
+                    ) : null}
+                  </th>
+                ) : null}
                 {columns.map((column) => (
                   <th key={column.key} scope="col">
                     {column.header}
@@ -419,6 +565,19 @@ export function AdminCrudPage<T extends { id: string }>({
             <tbody>
               {filtered.map((row) => (
                 <tr key={row.id} className={rowClassName?.(row)}>
+                  {enableBulkDelete || deleteUrl ? (
+                    <td className={styles.selectCol}>
+                      {enableBulkDelete ? (
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(row.id)}
+                          onChange={() => toggleSelect(row.id)}
+                          aria-label={`Select ${row.id}`}
+                          disabled={deleting}
+                        />
+                      ) : null}
+                    </td>
+                  ) : null}
                   {columns.map((column) => (
                     <td key={column.key}>{column.render(row)}</td>
                   ))}
@@ -430,6 +589,21 @@ export function AdminCrudPage<T extends { id: string }>({
                     >
                       {editLabel}
                     </button>
+                    {deleteUrl ? (
+                      <>
+                        {" · "}
+                        <button
+                          type="button"
+                          className={styles.linkButtonDanger}
+                          disabled={deleting}
+                          onClick={() => {
+                            void deleteOne(row.id);
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </>
+                    ) : null}
                     {extraActions ? (
                       <> · {extraActions(row, { reload: load })}</>
                     ) : null}

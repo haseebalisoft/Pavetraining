@@ -3,18 +3,39 @@ import type {
   BulkImportTemplate,
   BulkImportType,
 } from "@/types/bulkUpload";
+import {
+  CLIENT_COMPANY_HEADERS,
+  CLIENT_MATRIX_CATEGORY_COLUMNS,
+  CLIENT_MATRIX_META_HEADERS,
+  CLIENT_WORKFORCE_HEADERS,
+} from "@/lib/services/bulkUpload/clientTemplateHeaders";
 
-const WORKFORCE_COLUMNS: BulkImportColumn[] = [
-  { key: "workforceNumber", label: "Workforce Number" },
-  { key: "candidateName", label: "Candidate Name", required: true },
-  { key: "company", label: "Company Name", required: true },
-  { key: "companyNumber", label: "Company Number" },
-  { key: "trainingManager", label: "Training manager" },
-  { key: "supervisor", label: "Supervisor" },
-  { key: "department", label: "Department" },
-  { key: "dateOfBirth", label: "Date of birth" },
-  { key: "email", label: "Email" },
-  { key: "status", label: "Status" },
+const COMPANY_COLUMNS: BulkImportColumn[] = CLIENT_COMPANY_HEADERS.map(
+  (label) => ({
+    key: label,
+    label,
+    required: label === "Company Number" || label === "Company Name",
+  }),
+);
+
+const WORKFORCE_COLUMNS: BulkImportColumn[] = CLIENT_WORKFORCE_HEADERS.map(
+  (label) => ({
+    key: label,
+    label,
+    required: label === "Candidate Name" || label === "Company Name",
+  }),
+);
+
+const MATRIX_COLUMNS: BulkImportColumn[] = [
+  ...CLIENT_MATRIX_META_HEADERS.map((label) => ({
+    key: label,
+    label,
+    required: label === "Name",
+  })),
+  ...CLIENT_MATRIX_CATEGORY_COLUMNS.map((column) => ({
+    key: column.code,
+    label: column.header,
+  })),
 ];
 
 const NPORS_COLUMNS: BulkImportColumn[] = [
@@ -70,39 +91,31 @@ const NVQ_COLUMNS: BulkImportColumn[] = [
   { key: "notes", label: "Notes" },
 ];
 
-const MATRIX_COLUMNS: BulkImportColumn[] = [
-  { key: "candidateName", label: "Candidate Name", required: true },
-  { key: "workforceNumber", label: "Workforce Number" },
-  { key: "dateOfBirth", label: "Date of birth" },
-  { key: "n001Expiry", label: "N001 Expiry" },
-  { key: "n003Expiry", label: "N003 Expiry" },
-  { key: "n004Expiry", label: "N004 Expiry" },
-  { key: "n010Expiry", label: "N010 Expiry" },
-  { key: "n020Expiry", label: "N020 Expiry" },
-  { key: "n021Expiry", label: "N021 Expiry" },
-  { key: "n027Expiry", label: "N027 Expiry" },
-  { key: "n100Expiry", label: "N100 Expiry" },
-  { key: "overallStatus", label: "Overall Status" },
-  { key: "needsReview", label: "Needs Review" },
-  { key: "matrixNotes", label: "Matrix Notes" },
-];
-
 export const BULK_IMPORT_TEMPLATES: BulkImportTemplate[] = [
+  {
+    importType: "company",
+    label: "Companies",
+    description:
+      "Use the exact client Company list.xlsx headers. Creates or updates SharePoint Company List rows.",
+    fileName: "Company-list-template.xlsx",
+    columns: COMPANY_COLUMNS,
+    implemented: true,
+  },
   {
     importType: "workforce",
     label: "Workforce / Candidates",
     description:
-      "Import candidate records. Duplicates are detected by workforce number or name + DOB + company.",
-    fileName: "pave-workforce-template.csv",
+      "Use the exact client Workforce list.xlsx headers. Missing companies are created automatically on import.",
+    fileName: "Workforce-list-template.xlsx",
     columns: WORKFORCE_COLUMNS,
     implemented: true,
   },
   {
     importType: "trainingMatrix",
-    label: "Training Matrix rows",
+    label: "Training Matrix",
     description:
-      "Import matrix expiry/status rows. Candidates must already exist in Workforce (match by Workforce Number or name).",
-    fileName: "pave-training-matrix-template.csv",
+      "Use the exact client Training matrix example.xlsx headers. N-code dates write to Training Matrix + Category Records. Import Workforce first.",
+    fileName: "Training-matrix-template.xlsx",
     columns: MATRIX_COLUMNS,
     implemented: true,
   },
@@ -156,26 +169,28 @@ export function getBulkImportTemplate(
   );
 }
 
+export function getClientExcelTemplatePath(
+  importType: BulkImportType,
+): string | null {
+  if (importType === "company") {
+    return "bulk-templates/Company-list-template.xlsx";
+  }
+  if (importType === "workforce") {
+    return "bulk-templates/Workforce-list-template.xlsx";
+  }
+  if (importType === "trainingMatrix") {
+    return "bulk-templates/Training-matrix-template.xlsx";
+  }
+  return null;
+}
+
 export function buildTemplateCsv(importType: BulkImportType): string {
   const template = getBulkImportTemplate(importType);
   if (!template) {
     throw new Error(`Unknown import type: ${importType}`);
   }
   const header = template.columns.map((c) => escapeCsv(c.label)).join(",");
-  const example = template.columns
-    .map((c) => {
-      if (c.key === "candidateName") return escapeCsv("Jane Example");
-      if (c.key === "company") return escapeCsv("Example Company Ltd");
-      if (c.key === "department") return escapeCsv("Operations");
-      if (c.key === "dateOfBirth" || c.key === "DOB" || c.key === "dob") {
-        return escapeCsv("1990-01-15");
-      }
-      if (c.key === "workforceNumber") return escapeCsv("WF-1001");
-      if (c.key === "status") return escapeCsv("Active");
-      return "";
-    })
-    .join(",");
-  return `${header}\r\n${example}\r\n`;
+  return `${header}\r\n`;
 }
 
 function escapeCsv(value: string): string {

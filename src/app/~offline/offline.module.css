@@ -1,0 +1,46 @@
+.page {
+  min-height: 100dvh;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 1rem;
+  padding: 2rem;
+  background:
+    radial-gradient(circle at top, #f1f8e7 0%, transparent 45%),
+    #f7f7f7;
+  color: #4a4a4a;
+  text-align: center;
+  font-family: var(--pave-font-family, "Segoe UI", system-ui, sans-serif);
+}
+
+.title {
+  margin: 0;
+  font-size: clamp(1.4rem, 3vw, 1.85rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.copy {
+  margin: 0;
+  max-width: 28rem;
+  line-height: 1.5;
+  color: #6b6b6b;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 0.5rem;
+  min-height: 2.75rem;
+  padding: 0.65rem 1.25rem;
+  border-radius: 0.65rem;
+  background: #8dc63f;
+  color: #1f2a10;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.button:hover {
+  background: #7ab536;
+}

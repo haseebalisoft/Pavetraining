@@ -151,6 +151,7 @@ async function loadMatrixRowsWithLookups(): Promise<MatrixRowWithLookups[]> {
         asLookupOrString(item.fields[f.companyName]) ??
         asLookupOrString(item.fields[f.matrixCompany]),
       department: asNullableString(item.fields[f.department]),
+      dateOfBirth: null,
       overallStatus: asNullableString(item.fields[f.overallStatus]),
       needsReview: asBoolean(item.fields[f.needsReview]),
       matrixNotes: asNullableString(item.fields[f.matrixNotes]),
@@ -163,6 +164,7 @@ async function loadMatrixRowsWithLookups(): Promise<MatrixRowWithLookups[]> {
       n021Expiry: asNullableString(item.fields[f.n021Expiry]),
       n027Expiry: asNullableString(item.fields[f.n027Expiry]),
       n100Expiry: asNullableString(item.fields[f.n100Expiry]),
+      columnValues: {},
       candidateLookupId:
         extractLookupIdFromFields(item.fields, f.candidateName) ??
         extractLookupIdFromFields(item.fields, "CandidateName"),
@@ -522,6 +524,7 @@ async function syncOneCandidate(
         candidateName: workforce.candidateName,
         companyName: company.companyName,
         department: workforce.department,
+        dateOfBirth: workforce.dateOfBirth ?? null,
         overallStatus: null,
         needsReview: true,
         matrixNotes: null,
@@ -534,6 +537,7 @@ async function syncOneCandidate(
         n021Expiry: null,
         n027Expiry: null,
         n100Expiry: null,
+        columnValues: {},
       };
 
   const patch: Record<string, unknown> = {};

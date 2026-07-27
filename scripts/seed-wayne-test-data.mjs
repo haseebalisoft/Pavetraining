@@ -217,7 +217,7 @@ async function findPermission(client, email) {
 
 async function ensurePermission(client, row) {
   const existing = await findPermission(client, row.userEmail);
-  const fields = {
+  const baseFields = {
     Title: row.userEmail,
     UserEmail: row.userEmail,
     RoleType: row.roleType,
@@ -228,23 +228,39 @@ async function ensurePermission(client, row) {
     CanEdit: row.canEdit,
   };
   if (row.companyId) {
-    fields.CompanyLookupId = Number(row.companyId);
+    baseFields.CompanyLookupId = Number(row.companyId);
   }
   if (row.name) {
-    fields.Name = row.name;
-  }
-  if (row.departments?.length) {
-    fields.Departments = row.departments;
+    baseFields.Name = row.name;
   }
 
-  if (existing) {
-    await updateItemFields(client, LISTS.permissions, existing.id, fields);
-    console.log(`  permission updated: ${row.userEmail} (${row.roleType})`);
-    return String(existing.id);
+  const withDepartments =
+    row.departments?.length > 0
+      ? { ...baseFields, Departments: row.departments }
+      : null;
+
+  async function write(fields) {
+    if (existing) {
+      await updateItemFields(client, LISTS.permissions, existing.id, fields);
+      console.log(`  permission updated: ${row.userEmail} (${row.roleType})`);
+      return String(existing.id);
+    }
+    const created = await createItem(client, LISTS.permissions, fields);
+    console.log(`  permission created: ${row.userEmail} (${row.roleType})`);
+    return created.id;
   }
-  const created = await createItem(client, LISTS.permissions, fields);
-  console.log(`  permission created: ${row.userEmail} (${row.roleType})`);
-  return created.id;
+
+  if (withDepartments) {
+    try {
+      return await write(withDepartments);
+    } catch (error) {
+      console.warn(
+        `  Departments write failed for ${row.userEmail}; retrying without:`,
+        error?.message ?? error,
+      );
+    }
+  }
+  return write(baseFields);
 }
 
 async function findByCandidateLookup(client, listId, candidateId) {
@@ -551,34 +567,39 @@ async function main() {
   summary.workforce.fastCandidate = fastCandidate;
 
   console.log("\n=== Step 3: Permissions ===");
+  // SharePoint RoleType choices: Training Manager | Supervisor
+  // SharePoint AccessScope choices: Full Company | Department Only | Candidate Only
   summary.permissions.admin = await ensurePermission(client, {
     userEmail: "haseeb@pavetraining.co.uk",
-    roleType: "Admin",
-    accessScope: "All",
+    roleType: "Training Manager",
+    accessScope: "Full Company",
     canDownload: true,
     canEdit: true,
-    companyId: null,
+    companyId: murphy.id,
+    name: "Haseeb Admin",
   });
   summary.permissions.manager = await ensurePermission(client, {
     userEmail: "manager-test@murphyplant.com",
     roleType: "Training Manager",
-    accessScope: "Company",
+    accessScope: "Full Company",
     canDownload: true,
     canEdit: false,
     companyId: murphy.id,
+    name: "Murphy Training Manager",
   });
   try {
     summary.permissions.supervisor = await ensurePermission(client, {
       userEmail: "supervisor-test@murphyplant.com",
       roleType: "Supervisor",
-      accessScope: "Department",
+      accessScope: "Department Only",
       canDownload: false,
       canEdit: false,
       companyId: murphy.id,
       name: "supervisor test user",
+      departments: ["Groundworks"],
     });
     summary.notes.push(
-      "Set Permissions.Departments = Groundworks manually for supervisor-test@murphyplant.com if choice values allow it.",
+      "Supervisor Departments set to Groundworks when multi-choice allows it.",
     );
   } catch (error) {
     console.warn("  supervisor permission failed:", error?.message ?? error);
@@ -586,30 +607,18 @@ async function main() {
   try {
     summary.permissions.candidate = await ensurePermission(client, {
       userEmail: "candidate-test@email.com",
-      roleType: "Candidate",
-      accessScope: "CandidateOnly",
-      canDownload: true,
-      canEdit: false,
-      companyId: murphy.id,
-      name: "John Murphy Test",
-    });
-  } catch (error) {
-    console.warn(
-      "  Candidate role failed; writing Supervisor + CandidateOnly:",
-      error?.message ?? error,
-    );
-    summary.permissions.candidate = await ensurePermission(client, {
-      userEmail: "candidate-test@email.com",
       roleType: "Supervisor",
-      accessScope: "CandidateOnly",
+      accessScope: "Candidate Only",
       canDownload: true,
       canEdit: false,
       companyId: murphy.id,
       name: "John Murphy Test",
     });
     summary.notes.push(
-      "RoleType=Candidate may not exist yet — used Supervisor + CandidateOnly + Name=John Murphy Test.",
+      "Candidate uses Supervisor + Candidate Only + Name=John Murphy Test (RoleType Candidate may not exist yet).",
     );
+  } catch (error) {
+    console.warn("  candidate permission failed:", error?.message ?? error);
   }
 
   console.log("\n=== Step 4: Documents ===");

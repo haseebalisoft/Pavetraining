@@ -10,6 +10,11 @@ import type { Company } from "@/types/models";
 
 const columns: AdminColumn<AdminPermissionRecord>[] = [
   { key: "email", header: "User email", render: (row) => row.userEmail },
+  {
+    key: "name",
+    header: "Name",
+    render: (row) => row.name?.trim() || "—",
+  },
   { key: "role", header: "Role", render: (row) => row.roleType },
   { key: "company", header: "Company", render: (row) => row.companyName ?? "—" },
   { key: "status", header: "Status", render: (row) => row.status },
@@ -29,6 +34,12 @@ const columns: AdminColumn<AdminPermissionRecord>[] = [
 
 const fields: AdminFieldConfig[] = [
   { name: "userEmail", label: "User email", type: "email", required: true },
+  {
+    name: "name",
+    label: "Name",
+    type: "text",
+    required: false,
+  },
   {
     name: "roleType",
     label: "Role",
@@ -71,7 +82,7 @@ export function AdminPermissionsClient({
   return (
     <AdminCrudPage<AdminPermissionRecord>
       title="Permissions"
-      description="Assign portal roles, companies, and access flags."
+      description="Assign portal roles, companies, and access flags. Name is used by Workforce Training manager / Supervisor lookups."
       columns={columns}
       fields={fields}
       companies={companies}

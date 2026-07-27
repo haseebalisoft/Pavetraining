@@ -41,6 +41,7 @@ function mapWorkforceItem(
   id: string,
   fields: SharePointFields,
   companyNameById?: Map<string, string>,
+  permissionNameById?: Map<string, string>,
 ): WorkforceCandidate | null {
   const candidateName = asString(fields[workforceFields.candidateName]);
   const companyLookupId = extractLookupId(fields, workforceFields.companyName);
@@ -55,6 +56,15 @@ function mapWorkforceItem(
     return null;
   }
 
+  const trainingManagerLookupId = extractLookupId(
+    fields,
+    workforceFields.trainingManager,
+  );
+  const supervisorLookupId = extractLookupId(
+    fields,
+    workforceFields.supervisor,
+  );
+
   return {
     id,
     candidateName,
@@ -65,10 +75,16 @@ function mapWorkforceItem(
     status: asNullableString(fields[workforceFields.status]),
     trainingManager:
       asLookupOrString(fields[workforceFields.trainingManager]) ??
-      asNullableString(fields[workforceFields.trainingManager]),
+      asNullableString(fields[workforceFields.trainingManager]) ??
+      (trainingManagerLookupId && permissionNameById
+        ? (permissionNameById.get(trainingManagerLookupId) ?? null)
+        : null),
     supervisor:
       asLookupOrString(fields[workforceFields.supervisor]) ??
-      asNullableString(fields[workforceFields.supervisor]),
+      asNullableString(fields[workforceFields.supervisor]) ??
+      (supervisorLookupId && permissionNameById
+        ? (permissionNameById.get(supervisorLookupId) ?? null)
+        : null),
     email: asNullableString(fields[workforceFields.email])?.toLowerCase() ?? null,
     cscsNumber: asNullableString(fields[workforceFields.cscsNumber]),
     swqrNumber: asNullableString(fields[workforceFields.swqrNumber]),
@@ -88,6 +104,19 @@ async function companyNameLookupMap(): Promise<Map<string, string>> {
   return new Map(companies.map((row) => [row.id, row.companyName] as const));
 }
 
+async function permissionNameLookupMap(): Promise<Map<string, string>> {
+  const permissionFields = getSharePointFields("permissions");
+  const items = await getListItemsByKey("permissions", { top: 5000 });
+  const map = new Map<string, string>();
+  for (const item of items) {
+    const name =
+      asNullableString(item.fields[permissionFields.name]) ??
+      asNullableString(item.fields[permissionFields.userEmail]);
+    if (name) map.set(item.id, name);
+  }
+  return map;
+}
+
 export async function getWorkforceById(
   candidateId: string,
 ): Promise<WorkforceCandidate | null> {
@@ -96,14 +125,25 @@ export async function getWorkforceById(
     return null;
   }
 
-  const companyNameById = await companyNameLookupMap();
-  return mapWorkforceItem(item.id, item.fields, companyNameById);
+  const [companyNameById, permissionNameById] = await Promise.all([
+    companyNameLookupMap(),
+    permissionNameLookupMap(),
+  ]);
+  return mapWorkforceItem(
+    item.id,
+    item.fields,
+    companyNameById,
+    permissionNameById,
+  );
 }
 
 /** Deduped per request so name-map + scope filters share one Graph read. */
 export const getWorkforceByCompanyName = cache(
   async (companyName: string): Promise<WorkforceCandidate[]> => {
-    const companies = await getAllCompanies();
+    const [companies, permissionNameById] = await Promise.all([
+      getAllCompanies(),
+      permissionNameLookupMap(),
+    ]);
     const companyNameById = new Map(
       companies.map((row) => [row.id, row.companyName] as const),
     );
@@ -122,7 +162,14 @@ export const getWorkforceByCompanyName = cache(
     });
 
     return items
-      .map((item) => mapWorkforceItem(item.id, item.fields, companyNameById))
+      .map((item) =>
+        mapWorkforceItem(
+          item.id,
+          item.fields,
+          companyNameById,
+          permissionNameById,
+        ),
+      )
       .filter((row): row is WorkforceCandidate => row !== null)
       .filter(
         (row) =>

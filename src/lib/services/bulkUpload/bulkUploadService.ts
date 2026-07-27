@@ -7,6 +7,10 @@ import {
   summarizeBulkRows,
 } from "@/lib/services/bulkUpload/candidateImporter";
 import {
+  commitCompanyImport,
+  previewCompanyImport,
+} from "@/lib/services/bulkUpload/companyImporter";
+import {
   commitMatrixImport,
   previewMatrixImport,
 } from "@/lib/services/bulkUpload/matrixImporter";
@@ -31,6 +35,7 @@ export { BULK_IMPORT_TEMPLATES, buildTemplateCsv, buildValidationReportCsv };
 
 function parseImportType(value: string | null | undefined): BulkImportType {
   const allowed: BulkImportType[] = [
+    "company",
     "workforce",
     "trainingMatrix",
     "npors",
@@ -107,6 +112,7 @@ export async function previewBulkUpload(input: {
     return {
       importType,
       fileName,
+      headers: template?.columns.map((c) => c.label) ?? [],
       rows: [],
       summary: {
         totalRows: 0,
@@ -125,11 +131,26 @@ export async function previewBulkUpload(input: {
 
   const spreadsheet = parseSpreadsheetBuffer(bytes, fileName);
 
+  if (importType === "company") {
+    const rows = await previewCompanyImport(spreadsheet);
+    return {
+      importType,
+      fileName,
+      headers: spreadsheet.headers,
+      rows,
+      summary: summarizeBulkRows(rows),
+      suppressNotifications,
+      implemented: true,
+      message: null,
+    };
+  }
+
   if (importType === "workforce") {
     const rows = await previewCandidateImport(spreadsheet);
     return {
       importType,
       fileName,
+      headers: spreadsheet.headers,
       rows,
       summary: summarizeBulkRows(rows),
       suppressNotifications,
@@ -143,6 +164,7 @@ export async function previewBulkUpload(input: {
     return {
       importType,
       fileName,
+      headers: spreadsheet.headers,
       rows,
       summary: summarizeBulkRows(rows),
       suppressNotifications,
@@ -175,6 +197,23 @@ export async function commitBulkUpload(input: {
 
   if (!Array.isArray(input.rows) || input.rows.length === 0) {
     throw new ValidationError("No rows provided for import.");
+  }
+
+  if (importType === "company") {
+    const rows = await commitCompanyImport({
+      rows: input.rows,
+      duplicateMode,
+    });
+    const summary = summarizeBulkRows(rows);
+    return {
+      importType,
+      fileName,
+      duplicateMode,
+      suppressNotifications,
+      rows,
+      summary,
+      message: "Company import completed.",
+    };
   }
 
   if (importType === "workforce") {

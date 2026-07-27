@@ -64,21 +64,34 @@ const workforceFields = {
   companyName: "CompanyName",
   workforceNumber: "WorkforceNumber",
   dateOfBirth: "Dateofbirth",
+  /** Multi-lookup / choice department (legacy). Prefer departmentText for imports. */
   department: "Department",
+  /** Plain text department column titled " Department" in SharePoint. */
+  departmentText: "Department0",
   status: "Status",
-  /** Live internal name is Trainingmanager (lowercase m). */
+  /**
+   * Lookup → Permissions List (Name). Live type is Lookup — write
+   * `TrainingmanagerLookupId`, never free text (SharePoint scheme).
+   */
   trainingManager: "Trainingmanager",
+  /**
+   * Lookup → Permissions List (Name). Live type is Lookup — write
+   * `SupervisorLookupId`, never free text (SharePoint scheme).
+   */
   supervisor: "Supervisor",
   email: "Email",
+  candidateAddress: "CandidateAddress",
+  contactNumber: "Contactnumber",
+  niNumber: "NiNumber",
   cscsNumber: "CSCSNumber",
   swqrNumber: "SWQRNumber",
   eusrNumber: "EUSRNumber",
   nporsNumbers: "NPORSNumbers",
   inHouseCertificationNumber: "InHouseCertificationNumber",
-  /** Existing Workforce columns — mapped for display only; SharePoint schema unchanged. */
   cscsExpiry: "CscsExpiry",
   swqrExpiry: "SwqrExpiry",
   eusrExpiry: "EusrExpiry",
+  notes: "Notes",
 } as const;
 
 const trainingMatrixFields = {
@@ -286,6 +299,22 @@ const trainingCourseCategoriesFields = {
   notes: "Notes",
 } as const;
 
+/** Per-candidate category expiry rows (wide matrix N-codes land here). */
+const trainingMatrixCategoryRecordsFields = {
+  id: "ID",
+  title: "Title",
+  candidateName: "Candidate_x0020_Name",
+  companyName: "Company_x0020_Name",
+  categoryCode: "Category_x0020_Code",
+  categoryName: "Category_x0020_Name",
+  expiryDate: "Expiry_x0020_Date",
+  cardNumber: "Card_x0020_Number",
+  status: "Status",
+  needsReview: "Needs_x0020_Review",
+  customerVisible: "Customer_x0020_Visible",
+  notes: "Notes",
+} as const;
+
 const trainingManagerLogsFields = {
   id: "ID",
   title: "Title",
@@ -342,10 +371,14 @@ export const SHAREPOINT_LISTS = {
       workforceNumber: "Workforce number",
       dateOfBirth: "Date of birth",
       department: "Department",
+      departmentText: "Department (text)",
       status: "Status",
       trainingManager: "Training manager",
       supervisor: "Supervisor",
       email: "Email",
+      candidateAddress: "Candidate address",
+      contactNumber: "Contact number",
+      niNumber: "NI number",
       cscsNumber: "CSCS number",
       swqrNumber: "SWQR number",
       eusrNumber: "EUSR number",
@@ -354,6 +387,7 @@ export const SHAREPOINT_LISTS = {
       cscsExpiry: "CSCS expiry",
       swqrExpiry: "SWQR expiry",
       eusrExpiry: "EUSR expiry",
+      notes: "Notes",
     },
   } satisfies SharePointListDefinition<typeof workforceFields>,
 
@@ -627,6 +661,30 @@ export const SHAREPOINT_LISTS = {
       notes: "Notes",
     },
   } satisfies SharePointListDefinition<typeof trainingCourseCategoriesFields>,
+
+  trainingMatrixCategoryRecords: {
+    key: "trainingMatrixCategoryRecords",
+    listName: "Training Matrix Category Records",
+    displayName: "Training Matrix Category Records",
+    listIdEnvVar: "SHAREPOINT_TRAINING_MATRIX_CATEGORY_RECORDS_LIST_ID",
+    fields: trainingMatrixCategoryRecordsFields,
+    labels: {
+      id: "ID",
+      title: "Title",
+      candidateName: "Candidate name",
+      companyName: "Company name",
+      categoryCode: "Category code",
+      categoryName: "Category name",
+      expiryDate: "Expiry date",
+      cardNumber: "Card number",
+      status: "Status",
+      needsReview: "Needs review",
+      customerVisible: "Customer visible",
+      notes: "Notes",
+    },
+  } satisfies SharePointListDefinition<
+    typeof trainingMatrixCategoryRecordsFields
+  >,
 
   trainingManagerLogs: {
     key: "trainingManagerLogs",

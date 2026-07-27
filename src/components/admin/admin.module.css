@@ -798,7 +798,8 @@
 }
 
 .primaryButton,
-.secondaryButton {
+.secondaryButton,
+.dangerButton {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -838,8 +839,24 @@
 }
 
 .secondaryButton:hover {
-  border-color: var(--pave-border-strong);
-  background: var(--pave-lime-tint);
+  border-color: var(--pave-lime-hover);
+  background: var(--pave-lime-soft, #f1f8e7);
+}
+
+.dangerButton {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #b91c1c;
+}
+
+.dangerButton:hover {
+  background: #fee2e2;
+  border-color: #f87171;
+}
+
+.dangerButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .tableWrap {
@@ -850,10 +867,45 @@
   box-shadow: var(--shadow-sm);
 }
 
+.bulkPreviewTableWrap {
+  max-height: min(70vh, 42rem);
+}
+
+.bulkPreviewTable {
+  min-width: max-content;
+}
+
+.bulkPreviewTable th,
+.bulkPreviewTable td {
+  white-space: nowrap;
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bulkPreviewTable .bulkMessageCell {
+  max-width: 22rem;
+  white-space: normal;
+}
+
 .dataTable {
   width: 100%;
   border-collapse: collapse;
   min-width: 48rem;
+}
+
+.bulkPreviewTable,
+.workforceWideTable,
+.companiesWideTable {
+  min-width: max-content;
+}
+
+.companiesWideTable th,
+.companiesWideTable td {
+  white-space: nowrap;
+  max-width: 18rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .dataTable th {
@@ -905,6 +957,31 @@
 .linkButton:hover {
   color: var(--pave-lime-dark);
   text-decoration: underline;
+}
+
+.linkButtonDanger {
+  border: 0;
+  background: none;
+  color: #b91c1c;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0;
+}
+
+.linkButtonDanger:hover {
+  text-decoration: underline;
+}
+
+.linkButtonDanger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.selectCol {
+  width: 2.25rem;
+  text-align: center;
+  vertical-align: middle;
 }
 
 .muted {
