@@ -37,7 +37,7 @@ import type { Company } from "@/types/models";
 
 export type { MatrixSyncResult, MatrixSyncResultItem };
 
-/** NPORS category code → Excel / Training matrix example column header. */
+/** NPORS category code → Excel / Training Matrix column header. */
 const NPORS_HEADER_BY_CODE: Record<string, string> = Object.fromEntries(
   MATRIX_CATEGORY_EXPIRY_COLUMNS.map((column) => [
     column.code.toUpperCase(),
@@ -115,7 +115,7 @@ type MatrixRowWithLookups = AdminMatrixRecord & {
   candidateLookupId: string | null;
   companyLookupId: string | null;
   workforceNumber: string | null;
-  /** Raw SharePoint item id on Training matrix example (no `example:` prefix). */
+  /** Raw SharePoint item id on Training Matrix Update (no `example:` prefix). */
   exampleItemId: string | null;
 };
 
@@ -530,7 +530,7 @@ async function syncOneCandidate(
         const header = NPORS_HEADER_BY_CODE[code.toUpperCase()];
         if (!header) {
           warnings.push(
-            `NPORS #${record.id}: category ${code} has no Training matrix example column.`,
+            `NPORS #${record.id}: category ${code} has no Training Matrix column.`,
           );
           continue;
         }
@@ -683,7 +683,7 @@ async function syncOneCandidate(
       errors.push(
         error instanceof Error
           ? error.message
-          : "Failed to update Training matrix example row.",
+          : "Failed to update Training Matrix row.",
       );
     }
   } else if (ctx.dryRun && willCreate) {

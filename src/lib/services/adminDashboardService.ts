@@ -18,6 +18,7 @@ import {
   type SharePointFields,
   type SharePointListItem,
 } from "@/lib/services/sharePointListService";
+import { listAdminMatrix } from "@/lib/services/adminCrudService";
 import { getExpiryStatus } from "@/lib/training/expiryFilters";
 import type {
   AdminDashboardActivityRow,
@@ -31,7 +32,6 @@ import type {
 } from "@/types/models";
 
 const workforceFields = getSharePointFields("workforce");
-const matrixFields = getSharePointFields("trainingMatrix");
 const nporsFields = getSharePointFields("nporsRegister");
 const eusrFields = getSharePointFields("eusrRegister");
 const streetworksFields = getSharePointFields("nrswaRegister");
@@ -249,7 +249,7 @@ export async function getAdminDashboard(
     auditLogs,
   ] = await Promise.all([
     getListItemsByKey("workforce", { top: 5000 }),
-    getListItemsByKey("trainingMatrix", { top: 5000 }),
+    listAdminMatrix(companyName),
     getListItemsByKey("nporsRegister", { top: 5000 }),
     getListItemsByKey("eusrRegister", { top: 5000 }),
     getListItemsByKey("nrswaRegister", { top: 5000 }),
@@ -262,19 +262,12 @@ export async function getAdminDashboard(
   ]);
 
   const workforceNameById = new Map<string, string>();
-  const workforceCompanyById = new Map<string, string>();
   for (const item of workforce) {
     const name =
       asString(item.fields[workforceFields.candidateName]) ??
       asLookupOrString(item.fields[workforceFields.candidateName]);
     if (!name) continue;
     workforceNameById.set(item.id, name);
-    const company = companyFromFields(
-      item.fields,
-      companyNameById,
-      workforceFields.companyName,
-    );
-    if (company) workforceCompanyById.set(item.id, company);
   }
 
   const filteredWorkforce = workforce.filter((item) =>
@@ -295,17 +288,7 @@ export async function getAdminDashboard(
     return !status || status === "active";
   }).length;
 
-  const filteredMatrix = matrix.filter((item) => {
-    const candidateId = extractLookupId(item.fields, matrixFields.candidateName);
-    const rowCompany =
-      companyFromFields(
-        item.fields,
-        companyNameById,
-        matrixFields.matrixCompany,
-        matrixFields.companyName,
-      ) ?? (candidateId ? (workforceCompanyById.get(candidateId) ?? null) : null);
-    return matchesCompanyFilter(rowCompany, companyName);
-  });
+  const filteredMatrix = matrix;
 
   let expiredTraining = 0;
   let expiringWithin3Months = 0;
@@ -314,7 +297,7 @@ export async function getAdminDashboard(
   const upcomingExpiries: AdminDashboardExpiryRow[] = [];
 
   for (const item of filteredMatrix) {
-    const nextExpiry = asNullableString(item.fields[matrixFields.nextExpiryDate]);
+    const nextExpiry = item.nextExpiryDate;
     const expiry = getExpiryStatus(nextExpiry);
     if (expiry.status === "expired") {
       expiredTraining += 1;
@@ -325,7 +308,7 @@ export async function getAdminDashboard(
     if (expiry.status === "upcoming") {
       expiringWithin6Months += 1;
     }
-    if (asBoolean(item.fields[matrixFields.needsReview])) {
+    if (item.needsReview) {
       recordsToReview += 1;
     }
     if (
@@ -333,31 +316,10 @@ export async function getAdminDashboard(
       expiry.status === "urgent" ||
       expiry.status === "upcoming"
     ) {
-      const candidateId = extractLookupId(
-        item.fields,
-        matrixFields.candidateName,
-      );
-      const candidateName = candidateFromFields(
-        item.fields,
-        workforceNameById,
-        matrixFields.candidateName,
-      );
-      // Skip unresolved rows — never show "Unknown" placeholders.
-      if (!candidateName) continue;
-
       upcomingExpiries.push({
         id: item.id,
-        candidateName,
-        companyName:
-          companyFromFields(
-            item.fields,
-            companyNameById,
-            matrixFields.matrixCompany,
-            matrixFields.companyName,
-          ) ??
-          (candidateId
-            ? (workforceCompanyById.get(candidateId) ?? null)
-            : null),
+        candidateName: item.candidateName,
+        companyName: item.companyName,
         nextExpiryDate: nextExpiry,
         statusLabel: expiry.label,
         statusTone: expiryTone(expiry.status),
@@ -607,25 +569,13 @@ export async function getAdminDashboard(
 
   for (const item of filteredMatrix) {
     const issues: AdminWarningIssue[] = [];
-    const candidateId = extractLookupId(item.fields, matrixFields.candidateName);
-    const rowCompany =
-      companyFromFields(
-        item.fields,
-        companyNameById,
-        matrixFields.matrixCompany,
-        matrixFields.companyName,
-      ) ?? (candidateId ? (workforceCompanyById.get(candidateId) ?? null) : null);
-    if (!rowCompany) {
+    if (!item.companyName) {
       issues.push("CompanyName");
     }
     pushWarning(warnings, {
       id: item.id,
       source: "Training Matrix",
-      candidateName: candidateFromFields(
-        item.fields,
-        workforceNameById,
-        matrixFields.candidateName,
-      ),
+      candidateName: item.candidateName,
       issues,
     });
   }

@@ -42,6 +42,11 @@ npm run dev
 
 Backend services must import list/field names from the schema file. Do not scatter SharePoint names across components.
 
+
+## Active Training Matrix
+
+The portal uses the SharePoint list **Training Matrix Update** through `SHAREPOINT_TRAINING_MATRIX_EXAMPLE_LIST_ID`. The older narrow `SHAREPOINT_TRAINING_MATRIX_LIST_ID` is retained only for legacy reference and is not used for portal matrix reads or direct matrix CRUD.
+
 ## Server services
 
 - `src/lib/graph/graphClient.ts`

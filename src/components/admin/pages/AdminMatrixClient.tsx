@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useState, type ReactNode } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import {
   AdminCrudPage,
@@ -53,7 +53,7 @@ function rowExpiryDates(row: AdminMatrixRecord): Array<string | null> {
   return [row.nextExpiryDate, ...values];
 }
 
-/** Match Training matrix example.xlsx column order. */
+/** Match Training matrix example.xlsx column order (same as SharePoint list display names). */
 const columns: AdminColumn<AdminMatrixRecord>[] = [
   {
     key: "company",
@@ -199,10 +199,10 @@ export function AdminMatrixClient({
 }) {
   const searchParams = useSearchParams();
   const filter = searchParams.get("filter");
+  const router = useRouter();
   const { pushToast } = useAdminToast();
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<MatrixSyncResult | null>(null);
-  const [reloadToken, setReloadToken] = useState(0);
   const [syncCompanyId, setSyncCompanyId] = useState("");
 
   const runSync = useCallback(
@@ -232,7 +232,7 @@ export function AdminMatrixClient({
           );
         }
         if (!body.dryRun) {
-          setReloadToken((value) => value + 1);
+          router.refresh();
         }
       } catch (error) {
         pushToast(
@@ -243,7 +243,7 @@ export function AdminMatrixClient({
         setSyncing(false);
       }
     },
-    [pushToast],
+    [pushToast, router],
   );
 
   return (
@@ -258,9 +258,8 @@ export function AdminMatrixClient({
         ))}
       </div>
       <AdminCrudPage<AdminMatrixRecord>
-        key={reloadToken}
         title="Training Matrix"
-        description="Synced from NPORS / EUSR / Streetworks / In-House into SharePoint ‘Training matrix example’. Pass updates expiry when newer; Fail never extends. Use Sync Matrix / Sync company / Sync candidate; Dry run previews without writing."
+        description="Synced from NPORS / EUSR / Streetworks / In-House into SharePoint ‘Training Matrix Update’. Pass updates expiry when newer; Fail never extends. Use Sync Matrix / Sync company / Sync candidate; Dry run previews without writing."
         columns={columns}
         fields={fields}
         companies={companies}
