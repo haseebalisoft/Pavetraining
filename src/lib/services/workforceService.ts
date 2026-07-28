@@ -128,16 +128,24 @@ async function permissionNameLookupMap(): Promise<Map<string, string>> {
 }
 
 async function departmentNameLookupMap(): Promise<Map<string, string>> {
-  const departmentFields = getSharePointFields("departments");
-  const items = await getListItemsByKey("departments", { top: 5000 });
-  const map = new Map<string, string>();
-  for (const item of items) {
-    const name =
-      asNullableString(item.fields[departmentFields.name]) ??
-      asNullableString(item.fields[departmentFields.title]);
-    if (name) map.set(item.id, name);
+  try {
+    if (!process.env.SHAREPOINT_DEPARTMENTS_LIST_ID?.trim()) {
+      return new Map();
+    }
+    const departmentFields = getSharePointFields("departments");
+    const items = await getListItemsByKey("departments", { top: 5000 });
+    const map = new Map<string, string>();
+    for (const item of items) {
+      const name =
+        asNullableString(item.fields[departmentFields.name]) ??
+        asNullableString(item.fields[departmentFields.title]);
+      if (name) map.set(item.id, name);
+    }
+    return map;
+  } catch {
+    // Departments list is optional for customer matrix; don't fail the page.
+    return new Map();
   }
-  return map;
 }
 
 export async function getWorkforceById(
