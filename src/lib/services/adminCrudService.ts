@@ -9,6 +9,7 @@ import {
   asNullableString,
   asString,
   createListItemByKey,
+  deleteListItemByKey,
   extractLookupId,
   getListItemByKey,
   getListItemsByKey,
@@ -27,6 +28,8 @@ import { CLIENT_MATRIX_CATEGORY_COLUMNS } from "@/lib/services/bulkUpload/client
 import {
   earliestDateFromColumns,
   listTrainingMatrixExampleRows,
+  stripExampleMatrixId,
+  upsertTrainingMatrixExampleRow,
 } from "@/lib/services/bulkUpload/trainingMatrixExampleService";
 
 import { stripSharePointHtml } from "@/lib/text/stripSharePointHtml";
@@ -1403,15 +1406,75 @@ export async function createAdminMatrix(input: Record<string, unknown>) {
   };
 }
 
+export async function deleteAdminMatrix(id: string) {
+  if (id.startsWith("example:")) {
+    const exampleId = stripExampleMatrixId(id);
+    if (!exampleId) throw new NotFoundError("Matrix record not found.");
+    await deleteListItemByKey("trainingMatrixExample", exampleId);
+    return;
+  }
+
+  const existing = await getListItemByKey("trainingMatrix", id);
+  if (!existing) throw new NotFoundError("Matrix record not found.");
+  await deleteListItemByKey("trainingMatrix", id);
+}
+
 export async function updateAdminMatrix(
   id: string,
   input: Record<string, unknown>,
 ) {
   if (id.startsWith("example:")) {
-    throw new ValidationError(
-      "Rows from the Excel ‘Training matrix example’ list are read-only here. Edit them in SharePoint or import into the live Training Matrix list.",
-    );
+    const exampleId = stripExampleMatrixId(id);
+    if (!exampleId) throw new NotFoundError("Matrix record not found.");
+
+    const source: Record<string, string | null> = {
+      Name:
+        optionalText(input.candidateName) ??
+        optionalText(input.Name) ??
+        null,
+      DOB: asDateInput(input.dateOfBirth) ?? asDateInput(input.DOB),
+      "CSCS Expiry": asDateInput(input.cscsExpiry),
+      "N001 - Ind FLT": asDateInput(input.n001Expiry),
+      "N003 - Reach Lift Truck": asDateInput(input.n003Expiry),
+      "N004 - Lorry Mounted Lift Truck": asDateInput(input.n004Expiry),
+      "N010 - Telescopic Handler": asDateInput(input.n010Expiry),
+      "N020 - Tiltrotator System": asDateInput(input.n020Expiry),
+      "N021 - Suction Excavator": asDateInput(input.n021Expiry),
+      "N027 - Excavation Marshal - Banksperson": asDateInput(input.n027Expiry),
+      "N100 - Exc Crane": asDateInput(input.n100Expiry),
+    };
+
+    if (input.columnValues && typeof input.columnValues === "object") {
+      for (const [key, value] of Object.entries(
+        input.columnValues as Record<string, unknown>,
+      )) {
+        source[key] =
+          value == null || value === ""
+            ? null
+            : asDateInput(value) ?? String(value);
+      }
+    }
+
+    const name =
+      source.Name?.trim() || optionalText(input.candidateName) || "";
+    if (!name) {
+      throw new ValidationError("Candidate name is required.");
+    }
+
+    await upsertTrainingMatrixExampleRow({
+      candidateName: name,
+      existingItemId: exampleId,
+      source: { ...source, Name: name },
+    });
+
+    const rows = await listAdminMatrix();
+    const updated = rows.find((row) => row.id === `example:${exampleId}`);
+    if (!updated) {
+      throw new NotFoundError("Matrix record not found after update.");
+    }
+    return updated;
   }
+
   const existing = await getListItemByKey("trainingMatrix", id);
   if (!existing) throw new NotFoundError("Matrix record not found.");
 
