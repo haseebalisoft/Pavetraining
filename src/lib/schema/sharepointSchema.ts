@@ -722,14 +722,15 @@ export const SHAREPOINT_LISTS = {
   } satisfies SharePointListDefinition<typeof nporsCategoriesFields>,
 
   /**
-   * Wide Excel-imported list ("Training matrix example") with all template columns.
-   * Coexists with legacy `trainingMatrix` — do not replace that list.
-   * Column internals are mostly field_1…field_N (Excel import); Title = Name.
+   * Wide matrix list with DateTime columns ("Training Matrix Update").
+   * Replaces the old Excel-import "Training matrix example" (Number/serial dates).
+   * Env: SHAREPOINT_TRAINING_MATRIX_EXAMPLE_LIST_ID
+   * Title = Name.
    */
   trainingMatrixExample: {
     key: "trainingMatrixExample",
-    listName: "Training matrix example",
-    displayName: "Training matrix example",
+    listName: "Training Matrix Update",
+    displayName: "Training Matrix Update",
     listIdEnvVar: "SHAREPOINT_TRAINING_MATRIX_EXAMPLE_LIST_ID",
     fields: {
       id: "ID",

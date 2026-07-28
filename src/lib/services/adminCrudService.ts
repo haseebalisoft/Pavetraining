@@ -1265,7 +1265,7 @@ function buildMatrixColumnValues(
 }
 
 export async function listAdminMatrix(companyName?: string | null) {
-  // Portal matrix UI + register sync both use SharePoint "Training matrix example".
+  // Portal matrix UI + register sync both use SharePoint "Training Matrix Update".
   const [workforce, exampleRows] = await Promise.all([
     listAdminWorkforce(),
     listTrainingMatrixExampleRows(),

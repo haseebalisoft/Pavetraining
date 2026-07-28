@@ -30,7 +30,7 @@ const EXAMPLE_LIST_DISPLAY_NAME =
   SHAREPOINT_LISTS.trainingMatrixExample.displayName;
 
 /**
- * Resolve Training matrix example list GUID from env, or look it up on SharePoint
+ * Resolve Training Matrix Update list GUID from env, or look it up on SharePoint
  * by display name and cache onto process.env for later getSharePointListId calls.
  */
 export async function resolveTrainingMatrixExampleListId(): Promise<
@@ -120,30 +120,55 @@ export function earliestDateFromColumns(
   );
 }
 
-async function getExampleColumnMap(): Promise<Map<string, string>> {
-  const listId = getSharePointListId("trainingMatrixExample");
+type ExampleColumnInfo = {
+  name: string;
+  /** SharePoint Number columns store Excel serials; DateTime columns store ISO. */
+  storage: "number" | "dateTime" | "other";
+};
+
+async function getExampleColumnMap(): Promise<Map<string, ExampleColumnInfo>> {
+  const listId =
+    process.env[EXAMPLE_LIST_ENV]?.trim() ??
+    (await resolveTrainingMatrixExampleListId());
+  if (!listId) {
+    return new Map();
+  }
   const siteRoot = getSharePointSiteApiRoot();
 
   return cachedSharePointRead(
-    ["sp-matrix-example-columns", listId],
+    ["sp-matrix-example-columns-v2", listId],
     [sharePointListTag("trainingMatrixExample")],
     async () => {
       const client = getGraphClient();
-      const map = new Map<string, string>();
+      const map = new Map<string, ExampleColumnInfo>();
       let url = `${siteRoot}/lists/${listId}/columns?$top=200`;
       while (url) {
         const page = (await client.api(url).get()) as {
-          value?: Array<{ name?: string; displayName?: string; readOnly?: boolean }>;
+          value?: Array<{
+            name?: string;
+            displayName?: string;
+            readOnly?: boolean;
+            number?: unknown;
+            dateTime?: unknown;
+          }>;
           "@odata.nextLink"?: string;
         };
         for (const col of page.value ?? []) {
           if (col.readOnly || !col.name || !col.displayName) continue;
           if (col.name === "ContentType" || col.name === "Attachments") continue;
           const display = normalizeHeader(col.displayName);
-          map.set(display.toLowerCase(), col.name);
+          const info: ExampleColumnInfo = {
+            name: col.name,
+            storage: col.dateTime
+              ? "dateTime"
+              : col.number
+                ? "number"
+                : "other",
+          };
+          map.set(display.toLowerCase(), info);
           // Title holds candidate Name in Excel import
           if (col.name === "Title") {
-            map.set("name", col.name);
+            map.set("name", info);
           }
         }
         url = page["@odata.nextLink"]
@@ -161,33 +186,31 @@ async function getExampleColumnMap(): Promise<Map<string, string>> {
 
 function mapItemToRow(
   item: SharePointListItem,
-  columnMap: Map<string, string>,
+  columnMap: Map<string, ExampleColumnInfo>,
 ): TrainingMatrixExampleRow | null {
   const fields = item.fields ?? {};
+  const nameInternal = columnMap.get("name")?.name;
   const title =
     typeof fields.Title === "string"
       ? fields.Title.trim()
       : typeof fields.LinkTitle === "string"
         ? fields.LinkTitle.trim()
-        : "";
+        : nameInternal && typeof fields[nameInternal] === "string"
+          ? String(fields[nameInternal]).trim()
+          : "";
   if (!title) return null;
 
   const columnValues: Record<string, string | null> = { Name: title };
 
   for (const header of CLIENT_MATRIX_DISPLAY_HEADERS) {
     if (header === "Name") continue;
-    const internal =
-      columnMap.get(normalizeHeader(header).toLowerCase()) ?? null;
-    if (!internal) {
+    const col = columnMap.get(normalizeHeader(header).toLowerCase()) ?? null;
+    if (!col) {
       columnValues[header] = null;
       continue;
     }
-    const raw = fields[internal];
-    if (header === "DOB") {
-      columnValues[header] = excelSerialToIsoDate(raw);
-    } else {
-      columnValues[header] = excelSerialToIsoDate(raw);
-    }
+    const raw = fields[col.name];
+    columnValues[header] = excelSerialToIsoDate(raw);
   }
 
   const dateOfBirth = columnValues.DOB ?? null;
@@ -219,10 +242,8 @@ export async function listTrainingMatrixExampleRows(): Promise<
   }
 
   try {
-    const [items, columnMap] = await Promise.all([
-      getListItemsByKey("trainingMatrixExample", { top: 5000 }),
-      getExampleColumnMap(),
-    ]);
+    const items = await getListItemsByKey("trainingMatrixExample", { top: 5000 });
+    const columnMap = await getExampleColumnMap().catch(() => new Map());
     return items
       .map((item) => mapItemToRow(item, columnMap))
       .filter((row): row is TrainingMatrixExampleRow => Boolean(row));
@@ -244,7 +265,17 @@ export function mergeExampleColumnValues(
   return merged;
 }
 
-/** ISO date → Excel serial day number (matches SharePoint From-Excel import). */
+/** ISO date → SharePoint DateTime payload (`YYYY-MM-DDT00:00:00Z`). */
+export function isoToSharePointDateTime(
+  iso: string | null | undefined,
+): string | null {
+  if (!iso?.trim()) return null;
+  const text = iso.trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+  return `${text}T00:00:00Z`;
+}
+
+/** ISO date → Excel serial day number (for Number columns from Excel import). */
 export function isoToExcelSerial(iso: string | null | undefined): number | null {
   if (!iso?.trim()) return null;
   const text = iso.trim().slice(0, 10);
@@ -257,7 +288,7 @@ export function isoToExcelSerial(iso: string | null | undefined): number | null 
 
 /**
  * Create or update a row on the Excel-imported Training matrix example list.
- * Writes Excel serial numbers into field_N columns so SharePoint + portal stay aligned.
+ * Number columns (Excel import) get serials; DateTime columns get ISO dates.
  */
 export async function upsertTrainingMatrixExampleRow(input: {
   candidateName: string;
@@ -281,8 +312,8 @@ export async function upsertTrainingMatrixExampleRow(input: {
 
   for (const header of CLIENT_MATRIX_DISPLAY_HEADERS) {
     if (header === "Name") continue;
-    const internal = columnMap.get(normalizeHeader(header).toLowerCase());
-    if (!internal) continue;
+    const col = columnMap.get(normalizeHeader(header).toLowerCase());
+    if (!col) continue;
 
     const raw =
       input.source[header] ??
@@ -292,8 +323,13 @@ export async function upsertTrainingMatrixExampleRow(input: {
       raw == null ? null : typeof raw === "string" ? raw : String(raw);
     const iso =
       normalizeDateValue(asText) ?? excelSerialToIsoDate(raw);
-    const serial = isoToExcelSerial(iso);
-    fields[internal] = serial ?? 0;
+
+    if (col.storage === "dateTime") {
+      fields[col.name] = isoToSharePointDateTime(iso);
+    } else {
+      // Excel-imported Number columns must receive serial day numbers.
+      fields[col.name] = isoToExcelSerial(iso) ?? 0;
+    }
   }
 
   if (input.existingItemId?.trim()) {
