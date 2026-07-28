@@ -1432,16 +1432,18 @@ export async function updateAdminMatrix(
         optionalText(input.candidateName) ??
         optionalText(input.Name) ??
         null,
-      DOB: asDateInput(input.dateOfBirth) ?? asDateInput(input.DOB),
-      "CSCS Expiry": asDateInput(input.cscsExpiry),
-      "N001 - Ind FLT": asDateInput(input.n001Expiry),
-      "N003 - Reach Lift Truck": asDateInput(input.n003Expiry),
-      "N004 - Lorry Mounted Lift Truck": asDateInput(input.n004Expiry),
-      "N010 - Telescopic Handler": asDateInput(input.n010Expiry),
-      "N020 - Tiltrotator System": asDateInput(input.n020Expiry),
-      "N021 - Suction Excavator": asDateInput(input.n021Expiry),
-      "N027 - Excavation Marshal - Banksperson": asDateInput(input.n027Expiry),
-      "N100 - Exc Crane": asDateInput(input.n100Expiry),
+      DOB:
+        asDateInput(input.dateOfBirth) ?? asDateInput(input.DOB) ?? null,
+      "CSCS Expiry": asDateInput(input.cscsExpiry) ?? null,
+      "N001 - Ind FLT": asDateInput(input.n001Expiry) ?? null,
+      "N003 - Reach Lift Truck": asDateInput(input.n003Expiry) ?? null,
+      "N004 - Lorry Mounted Lift Truck": asDateInput(input.n004Expiry) ?? null,
+      "N010 - Telescopic Handler": asDateInput(input.n010Expiry) ?? null,
+      "N020 - Tiltrotator System": asDateInput(input.n020Expiry) ?? null,
+      "N021 - Suction Excavator": asDateInput(input.n021Expiry) ?? null,
+      "N027 - Excavation Marshal - Banksperson":
+        asDateInput(input.n027Expiry) ?? null,
+      "N100 - Exc Crane": asDateInput(input.n100Expiry) ?? null,
     };
 
     if (input.columnValues && typeof input.columnValues === "object") {
