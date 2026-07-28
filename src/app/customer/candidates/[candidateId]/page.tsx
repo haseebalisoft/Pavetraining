@@ -5,11 +5,37 @@ import { auth } from "@/auth";
 import { assertCandidateAccess } from "@/lib/services/customerAccessService";
 import { getCustomerContext } from "@/lib/services/customerContextService";
 import { getCustomerMatrixRecords } from "@/lib/services/customerDashboardService";
+import {
+  getCustomerDocumentRecords,
+  getCustomerNvqRecords,
+} from "@/lib/services/customerPortalService";
+import {
+  getCustomerEusrRecords,
+  getCustomerInHouseRecords,
+  getCustomerNporsRecords,
+  getCustomerStreetworksRecords,
+} from "@/lib/services/customerTrainingRecordsService";
 import { assertCompanyMatch } from "@/lib/services/securityService";
 import { getWorkforceById } from "@/lib/services/workforceService";
 import type { CustomerContext } from "@/types/models";
 
 export const dynamic = "force-dynamic";
+
+function nameKey(value: string | null | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function matchesCandidate(
+  row: { candidateName?: string | null; workforceId?: string | null; candidate?: string | null },
+  candidateId: string,
+  candidateName: string,
+): boolean {
+  if (row.workforceId && row.workforceId === candidateId) return true;
+  const key = nameKey(candidateName);
+  if (key && nameKey(row.candidateName) === key) return true;
+  if (key && nameKey(row.candidate) === key) return true;
+  return false;
+}
 
 export default async function CustomerCandidateProfilePage({
   params,
@@ -81,22 +107,53 @@ export default async function CustomerCandidateProfilePage({
     success: true,
   });
 
-  const matrixRows = await getCustomerMatrixRecords(
-    context.companyName,
-    context,
-  );
+  const [
+    matrixRows,
+    npors,
+    eusr,
+    streetworks,
+    inHouse,
+    nvq,
+    documents,
+  ] = await Promise.all([
+    getCustomerMatrixRecords(context.companyName, context),
+    getCustomerNporsRecords(context.companyId, context),
+    getCustomerEusrRecords(context.companyId, context),
+    getCustomerStreetworksRecords(context.companyId, context),
+    getCustomerInHouseRecords(context.companyId, context),
+    getCustomerNvqRecords(context.companyId, context),
+    getCustomerDocumentRecords(
+      context.companyId,
+      context.canDownload,
+      context,
+    ),
+  ]);
+
   const matrixRow =
     matrixRows.find(
       (row) =>
-        row.candidateName.trim().toLowerCase() ===
-        candidate.candidateName.trim().toLowerCase(),
+        row.candidateId === candidateId ||
+        nameKey(row.candidateName) === nameKey(candidate.candidateName),
     ) ?? null;
+
+  const filterRows = <T extends { candidateName?: string | null; workforceId?: string | null; candidate?: string | null }>(
+    rows: T[],
+  ) =>
+    rows.filter((row) =>
+      matchesCandidate(row, candidateId, candidate.candidateName),
+    );
 
   return (
     <CandidateProfileView
       candidate={candidate}
       matrixRow={matrixRow}
       matrixReturnHref={returnRaw}
+      nporsRecords={filterRows(npors)}
+      eusrRecords={filterRows(eusr)}
+      streetworksRecords={filterRows(streetworks)}
+      inHouseRecords={filterRows(inHouse)}
+      nvqRecords={filterRows(nvq)}
+      documents={filterRows(documents)}
     />
   );
 }

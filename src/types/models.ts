@@ -405,6 +405,7 @@ export interface CustomerMatrixRecord {
   /** Workforce list item id when resolved; used for profile links. */
   candidateId: string | null;
   candidateName: string;
+  companyName: string | null;
   dateOfBirth: string | null;
   department: string | null;
   trainingManager: string | null;
@@ -416,9 +417,14 @@ export interface CustomerMatrixRecord {
   nporsCategories: string | null;
   /** Earliest NPORS-related expiry (matrix N* columns and/or register). */
   nporsExpiry: string | null;
+  nporsNumber: string | null;
+  cscsNumber: string | null;
   cscsExpiry: string | null;
+  swqrNumber: string | null;
   swqrExpiry: string | null;
+  eusrNumber: string | null;
   eusrExpiry: string | null;
+  inHouseCourse: string | null;
   inHouseExpiry: string | null;
   n001Expiry: string | null;
   n003Expiry: string | null;

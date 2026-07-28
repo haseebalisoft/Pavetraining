@@ -667,6 +667,23 @@
   gap: 0.85rem;
 }
 
+.profileSection {
+  margin-top: 1.75rem;
+}
+
+.profileSectionTitle {
+  margin: 0 0 0.35rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--cust-ink);
+}
+
+.profileSectionMeta {
+  margin: 0 0 0.75rem;
+  color: var(--cust-muted);
+  font-size: var(--pave-font-size-caption);
+}
+
 .profileCard {
   padding: 1rem 1.05rem;
   background: var(--pave-surface);
@@ -1017,6 +1034,43 @@
   font-size: 1.05rem;
   font-weight: 700;
   color: var(--cust-ink);
+}
+
+.candidateNameCell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 9rem;
+}
+
+.dobSecondary {
+  display: block;
+  margin: 0.15rem 0 0;
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--cust-muted);
+  letter-spacing: 0.01em;
+}
+
+.certCell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 6.5rem;
+}
+
+.certNumber {
+  font-size: 0.82rem;
+  line-height: 1.25;
+  color: var(--cust-ink);
+  word-break: break-word;
+}
+
+.matrixActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 0 0 1rem;
 }
 
 .matrixCardMeta {

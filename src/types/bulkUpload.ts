@@ -95,4 +95,6 @@ export type BulkCommitResult = {
 export type BulkCommitRowInput = {
   rowNumber: number;
   fields: Record<string, string | null>;
+  /** Original spreadsheet cells — required for Training Matrix N-code columns. */
+  source?: Record<string, string | null>;
 };

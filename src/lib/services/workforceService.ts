@@ -42,6 +42,7 @@ function mapWorkforceItem(
   fields: SharePointFields,
   companyNameById?: Map<string, string>,
   permissionNameById?: Map<string, string>,
+  departmentNameById?: Map<string, string>,
 ): WorkforceCandidate | null {
   const candidateName = asString(fields[workforceFields.candidateName]);
   const companyLookupId = extractLookupId(fields, workforceFields.companyName);
@@ -64,6 +65,10 @@ function mapWorkforceItem(
     fields,
     workforceFields.supervisor,
   );
+  const departmentLookupId = extractLookupId(
+    fields,
+    workforceFields.departmentText,
+  );
 
   return {
     id,
@@ -71,7 +76,12 @@ function mapWorkforceItem(
     companyName,
     workforceNumber: asNullableString(fields[workforceFields.workforceNumber]),
     dateOfBirth: asNullableString(fields[workforceFields.dateOfBirth]),
-    department: asDepartment(fields[workforceFields.department]),
+    department:
+      asDepartment(fields[workforceFields.departmentText]) ??
+      (departmentLookupId && departmentNameById
+        ? (departmentNameById.get(departmentLookupId) ?? null)
+        : null) ??
+      asDepartment(fields[workforceFields.department]),
     status: asNullableString(fields[workforceFields.status]),
     trainingManager:
       asLookupOrString(fields[workforceFields.trainingManager]) ??
@@ -117,6 +127,19 @@ async function permissionNameLookupMap(): Promise<Map<string, string>> {
   return map;
 }
 
+async function departmentNameLookupMap(): Promise<Map<string, string>> {
+  const departmentFields = getSharePointFields("departments");
+  const items = await getListItemsByKey("departments", { top: 5000 });
+  const map = new Map<string, string>();
+  for (const item of items) {
+    const name =
+      asNullableString(item.fields[departmentFields.name]) ??
+      asNullableString(item.fields[departmentFields.title]);
+    if (name) map.set(item.id, name);
+  }
+  return map;
+}
+
 export async function getWorkforceById(
   candidateId: string,
 ): Promise<WorkforceCandidate | null> {
@@ -125,25 +148,30 @@ export async function getWorkforceById(
     return null;
   }
 
-  const [companyNameById, permissionNameById] = await Promise.all([
-    companyNameLookupMap(),
-    permissionNameLookupMap(),
-  ]);
+  const [companyNameById, permissionNameById, departmentNameById] =
+    await Promise.all([
+      companyNameLookupMap(),
+      permissionNameLookupMap(),
+      departmentNameLookupMap(),
+    ]);
   return mapWorkforceItem(
     item.id,
     item.fields,
     companyNameById,
     permissionNameById,
+    departmentNameById,
   );
 }
 
 /** Deduped per request so name-map + scope filters share one Graph read. */
 export const getWorkforceByCompanyName = cache(
   async (companyName: string): Promise<WorkforceCandidate[]> => {
-    const [companies, permissionNameById] = await Promise.all([
-      getAllCompanies(),
-      permissionNameLookupMap(),
-    ]);
+    const [companies, permissionNameById, departmentNameById] =
+      await Promise.all([
+        getAllCompanies(),
+        permissionNameLookupMap(),
+        departmentNameLookupMap(),
+      ]);
     const companyNameById = new Map(
       companies.map((row) => [row.id, row.companyName] as const),
     );
@@ -168,6 +196,7 @@ export const getWorkforceByCompanyName = cache(
           item.fields,
           companyNameById,
           permissionNameById,
+          departmentNameById,
         ),
       )
       .filter((row): row is WorkforceCandidate => row !== null)

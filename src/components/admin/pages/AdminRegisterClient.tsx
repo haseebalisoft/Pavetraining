@@ -6,6 +6,7 @@ import {
   type AdminFieldConfig,
 } from "@/components/admin/AdminCrudPage";
 import { ExpiryDateBadge } from "@/components/ui/ExpiryDateBadge";
+import { getInHouseCourseOptions } from "@/lib/training/inHouseCourseOptions";
 import type { AdminTrainingRecord } from "@/lib/services/adminCrudService";
 import type { Company } from "@/types/models";
 
@@ -60,14 +61,27 @@ function fieldsFor(kind: RegisterKind): AdminFieldConfig[] {
     return [
       ...sharedStart,
       { name: "swqrNumber", label: "SWQR number", type: "text" },
-      { name: "course", label: "Course", type: "text" },
+      {
+        name: "course",
+        label: "Course",
+        type: "select",
+        options: [
+          { value: "Operative", label: "Operative" },
+          { value: "Supervisor", label: "Supervisor" },
+        ],
+      },
       { name: "streetworksCategory", label: "Streetworks category", type: "text" },
       ...sharedEnd,
     ];
   }
   return [
     ...sharedStart,
-    { name: "course", label: "Course", type: "text" },
+    {
+      name: "course",
+      label: "Course",
+      type: "select",
+      options: getInHouseCourseOptions(),
+    },
     ...sharedEnd,
   ];
 }

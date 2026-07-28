@@ -60,13 +60,17 @@ const companyFields = {
 
 const workforceFields = {
   id: "ID",
+  title: "Title",
   candidateName: "CandidateName",
   companyName: "CompanyName",
   workforceNumber: "WorkforceNumber",
   dateOfBirth: "Dateofbirth",
-  /** Multi-lookup / choice department (legacy). Prefer departmentText for imports. */
+  /** Legacy MultiChoice — do not write free text from Excel imports. */
   department: "Department",
-  /** Plain text department column titled " Department" in SharePoint. */
+  /**
+   * Column titled " Department" in SharePoint. Live type is Lookup →
+   * Departments list (Name). Write `Department0LookupId`, never free text.
+   */
   departmentText: "Department0",
   status: "Status",
   /**
@@ -94,6 +98,14 @@ const workforceFields = {
   notes: "Notes",
 } as const;
 
+/** Departments list — target of Workforce ` Department` (Department0) lookup. */
+const departmentsFields = {
+  id: "ID",
+  title: "Title",
+  name: "Name",
+  company: "Company",
+} as const;
+
 const trainingMatrixFields = {
   id: "ID",
   candidateName: "CandidateName",
@@ -108,10 +120,10 @@ const trainingMatrixFields = {
   n003Expiry: "N003Expiry",
   n004Expiry: "N004Expiry",
   n010Expiry: "N010Expiry",
+  n100Expiry: "N100Expiry",
   n020Expiry: "N020Expiry",
   n021Expiry: "N021Expiry",
   n027Expiry: "N027Expiry",
-  n100Expiry: "N100Expiry",
 } as const;
 
 const nporsRegisterFields = {
@@ -299,6 +311,19 @@ const trainingCourseCategoriesFields = {
   notes: "Notes",
 } as const;
 
+/** NPORS Categories — target of Training Matrix Category Records `Category Code` lookup. */
+const nporsCategoriesFields = {
+  id: "ID",
+  title: "Title",
+  categoryCode: "Category_x0020_Code",
+  machineType: "Machine_x0020_Type",
+  categoryGroup: "Category_x0020_Group",
+  active: "Active",
+  customerVisible: "Customer_x0020_Visible",
+  displayOrder: "Display_x0020_Order",
+  notes: "Notes",
+} as const;
+
 /** Per-candidate category expiry rows (wide matrix N-codes land here). */
 const trainingMatrixCategoryRecordsFields = {
   id: "ID",
@@ -366,12 +391,13 @@ export const SHAREPOINT_LISTS = {
     fields: workforceFields,
     labels: {
       id: "ID",
+      title: "Title",
       candidateName: "Candidate name",
       companyName: "Company name",
       workforceNumber: "Workforce number",
       dateOfBirth: "Date of birth",
       department: "Department",
-      departmentText: "Department (text)",
+      departmentText: "Department (lookup)",
       status: "Status",
       trainingManager: "Training manager",
       supervisor: "Supervisor",
@@ -391,6 +417,20 @@ export const SHAREPOINT_LISTS = {
     },
   } satisfies SharePointListDefinition<typeof workforceFields>,
 
+  departments: {
+    key: "departments",
+    listName: "Departments",
+    displayName: "Departments",
+    listIdEnvVar: "SHAREPOINT_DEPARTMENTS_LIST_ID",
+    fields: departmentsFields,
+    labels: {
+      id: "ID",
+      title: "Title",
+      name: "Name",
+      company: "Company",
+    },
+  } satisfies SharePointListDefinition<typeof departmentsFields>,
+
   trainingMatrix: {
     key: "trainingMatrix",
     listName: "Training Matrix",
@@ -407,14 +447,14 @@ export const SHAREPOINT_LISTS = {
       needsReview: "Needs review",
       matrixNotes: "Matrix notes",
       nextExpiryDate: "Next expiry date",
-      n001Expiry: "N001 expiry",
-      n003Expiry: "N003 expiry",
-      n004Expiry: "N004 expiry",
-      n010Expiry: "N010 expiry",
-      n020Expiry: "N020 expiry",
-      n021Expiry: "N021 expiry",
-      n027Expiry: "N027 expiry",
-      n100Expiry: "N100 expiry",
+      n001Expiry: "N001 - Ind FLT",
+      n003Expiry: "N003 - Reach Lift Truck",
+      n004Expiry: "N004 - Lorry Mounted Lift Truck",
+      n010Expiry: "N010 - Telescopic Handler",
+      n100Expiry: "N100 - Exc Crane",
+      n020Expiry: "N020 - Tiltrotator System",
+      n021Expiry: "N021 - Suction Excavator",
+      n027Expiry: "N027 - Excavation Marshal - Banksperson",
     },
   } satisfies SharePointListDefinition<typeof trainingMatrixFields>,
 
@@ -661,6 +701,45 @@ export const SHAREPOINT_LISTS = {
       notes: "Notes",
     },
   } satisfies SharePointListDefinition<typeof trainingCourseCategoriesFields>,
+
+  nporsCategories: {
+    key: "nporsCategories",
+    listName: "NPORS Categories",
+    displayName: "NPORS Categories",
+    listIdEnvVar: "SHAREPOINT_NPORS_CATEGORIES_LIST_ID",
+    fields: nporsCategoriesFields,
+    labels: {
+      id: "ID",
+      title: "Title",
+      categoryCode: "Category code",
+      machineType: "Machine type",
+      categoryGroup: "Category group",
+      active: "Active",
+      customerVisible: "Customer visible",
+      displayOrder: "Display order",
+      notes: "Notes",
+    },
+  } satisfies SharePointListDefinition<typeof nporsCategoriesFields>,
+
+  /**
+   * Wide Excel-imported list ("Training matrix example") with all template columns.
+   * Coexists with legacy `trainingMatrix` — do not replace that list.
+   * Column internals are mostly field_1…field_N (Excel import); Title = Name.
+   */
+  trainingMatrixExample: {
+    key: "trainingMatrixExample",
+    listName: "Training matrix example",
+    displayName: "Training matrix example",
+    listIdEnvVar: "SHAREPOINT_TRAINING_MATRIX_EXAMPLE_LIST_ID",
+    fields: {
+      id: "ID",
+      title: "Title",
+    } as const,
+    labels: {
+      id: "ID",
+      title: "Name",
+    },
+  } satisfies SharePointListDefinition<{ id: string; title: string }>,
 
   trainingMatrixCategoryRecords: {
     key: "trainingMatrixCategoryRecords",

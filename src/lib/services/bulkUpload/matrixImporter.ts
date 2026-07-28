@@ -1,18 +1,22 @@
 import "server-only";
 
 import {
-  createAdminMatrix,
   listAdminMatrix,
   listAdminWorkforce,
-  updateAdminMatrix,
+  updateAdminWorkforce,
   type AdminMatrixRecord,
   type AdminWorkforceRecord,
 } from "@/lib/services/adminCrudService";
 import { CLIENT_MATRIX_CATEGORY_COLUMNS } from "@/lib/services/bulkUpload/clientTemplateHeaders";
 import {
   extractCategoryWritesFromRow,
+  loadMatrixCategoryLookupCaches,
   upsertMatrixCategoryRecords,
 } from "@/lib/services/bulkUpload/matrixCategoryService";
+import {
+  stripExampleMatrixId,
+  upsertTrainingMatrixExampleRow,
+} from "@/lib/services/bulkUpload/trainingMatrixExampleService";
 import { nameKey, normalizeCompanyKey } from "@/lib/services/bulkUpload/matching";
 import {
   normalizeDateValue,
@@ -204,7 +208,7 @@ function validateMatrixRow(
   const categoryCount = Number(fields._categoryCount ?? "0");
   if (categoryCount > 0) {
     messages.push(
-      `${categoryCount} category expiry value(s) will be written to Training Matrix Category Records.`,
+      `${categoryCount} expiry value(s) will be written to Training matrix example (+ category records backup).`,
     );
   }
 
@@ -237,36 +241,59 @@ function validateMatrixRow(
   };
 }
 
-function buildMatrixWritePayload(fields: Record<string, string | null>) {
-  const payload: Record<string, unknown> = {
-    candidateName: fields.candidateName,
-    companyName: fields.company,
+async function syncWorkforceMetaExpiries(
+  candidate: AdminWorkforceRecord,
+  fields: Record<string, string | null>,
+): Promise<string[]> {
+  // Matrix list shows CSCS/EUSR/NRSWA via Workforce lookup columns — keep them in sync.
+  const patch: Record<string, string> = {};
+  if (fields.cscsExpiry?.trim()) patch.cscsExpiry = fields.cscsExpiry.trim();
+  if (fields.eusrExpiry?.trim()) patch.eusrExpiry = fields.eusrExpiry.trim();
+  if (fields.nrswaExpiry?.trim()) patch.swqrExpiry = fields.nrswaExpiry.trim();
+  if (!Object.keys(patch).length) return [];
+  await updateAdminWorkforce(candidate.id, patch);
+  return [
+    `Workforce meta expiries updated (${Object.keys(patch).join(", ")}).`,
+  ];
+}
+
+async function writeExampleListForRow(
+  fields: Record<string, string | null>,
+  source: Record<string, string | null>,
+  existingMatrixId: string | null,
+): Promise<{ id: string; messages: string[] }> {
+  const mergedSource: Record<string, string | null> = {
+    ...source,
+    Name: fields.candidateName,
+    DOB: fields.dateOfBirth ?? source.DOB ?? null,
+    "CSCS Expiry": fields.cscsExpiry ?? source["CSCS Expiry"] ?? null,
+    "SSSTS Expiry": fields.ssstsExpiry ?? source["SSSTS Expiry"] ?? null,
+    "SMSTS Expiry": fields.smstsExpiry ?? source["SMSTS Expiry"] ?? null,
+    "NRSWA Expiry": fields.nrswaExpiry ?? source["NRSWA Expiry"] ?? null,
+    "EUSR Expiry": fields.eusrExpiry ?? source["EUSR Expiry"] ?? null,
+    "Face ift": fields.faceFitExpiry ?? source["Face ift"] ?? null,
   };
-  if (fields.department?.trim()) payload.department = fields.department.trim();
-  if (fields.overallStatus?.trim()) {
-    payload.overallStatus = fields.overallStatus.trim();
-  }
-  if (fields.matrixNotes?.trim()) payload.matrixNotes = fields.matrixNotes.trim();
-  const next = fields.nextExpiryDate ?? earliestExpiry(fields);
-  if (next) payload.nextExpiryDate = next;
-  for (const key of [
-    "n001Expiry",
-    "n003Expiry",
-    "n004Expiry",
-    "n010Expiry",
-    "n020Expiry",
-    "n021Expiry",
-    "n027Expiry",
-    "n100Expiry",
-  ] as const) {
-    if (fields[key]?.trim()) payload[key] = fields[key]!.trim();
-  }
-  return payload;
+
+  const result = await upsertTrainingMatrixExampleRow({
+    candidateName: fields.candidateName ?? "",
+    existingItemId: stripExampleMatrixId(existingMatrixId),
+    source: mergedSource,
+  });
+
+  return {
+    id: `example:${result.id}`,
+    messages: [
+      result.created
+        ? `Training matrix example: created row #${result.id}.`
+        : `Training matrix example: updated row #${result.id}.`,
+    ],
+  };
 }
 
 async function writeCategoriesForRow(
   fields: Record<string, string | null>,
   raw: Record<string, string | null>,
+  caches?: Awaited<ReturnType<typeof loadMatrixCategoryLookupCaches>>,
 ): Promise<string[]> {
   const categories = extractCategoryWritesFromRow({ ...raw, ...fields });
   if (!categories.length) return [];
@@ -274,6 +301,7 @@ async function writeCategoriesForRow(
     candidateName: fields.candidateName ?? "",
     companyName: fields.company ?? "",
     categories,
+    caches,
   });
   const messages = [
     `Category records: ${result.written} written` +
@@ -307,15 +335,17 @@ export async function commitMatrixImport(input: {
   rows: BulkCommitRowInput[];
   duplicateMode: BulkDuplicateMode;
 }): Promise<BulkPreviewRow[]> {
-  const [workforce, matrix] = await Promise.all([
+  const [workforce, matrix, categoryCaches] = await Promise.all([
     listAdminWorkforce(),
     listAdminMatrix(),
+    loadMatrixCategoryLookupCaches(),
   ]);
   const liveMatrix = [...matrix];
   const results: BulkPreviewRow[] = [];
 
   for (const row of input.rows) {
-    const fields = mapMatrixFields(row.fields);
+    const source = row.source ?? row.fields;
+    const fields = mapMatrixFields(source);
     for (const [key, value] of Object.entries(row.fields)) {
       if (value && !fields[key]) fields[key] = value;
       if (
@@ -333,6 +363,8 @@ export async function commitMatrixImport(input: {
         fields[key] = normalizeDateValue(fields[key]);
       }
     }
+    // Keep category count accurate for messaging after remap.
+    fields._categoryCount = String(extractCategoryWritesFromRow(source).length);
 
     const validated = validateMatrixRow(
       row.rowNumber,
@@ -347,6 +379,8 @@ export async function commitMatrixImport(input: {
     }
 
     try {
+      const candidate = findWorkforceForMatrix(workforce, validated.fields);
+
       if (validated.status === "Duplicate") {
         if (input.duplicateMode === "skip") {
           results.push({
@@ -358,45 +392,78 @@ export async function commitMatrixImport(input: {
         }
 
         if (input.duplicateMode === "update" && validated.matchedEntityId) {
-          const updated = await updateAdminMatrix(
+          const exampleWrite = await writeExampleListForRow(
+            validated.fields,
+            source,
             validated.matchedEntityId,
-            buildMatrixWritePayload(validated.fields),
           );
-          const idx = liveMatrix.findIndex((m) => m.id === updated.id);
-          if (idx >= 0) liveMatrix[idx] = updated;
           const catMessages = await writeCategoriesForRow(
             validated.fields,
-            row.fields,
+            source,
+            categoryCaches,
           );
+          const wfMessages = candidate
+            ? await syncWorkforceMetaExpiries(candidate, validated.fields)
+            : [];
           results.push({
             ...validated,
             status: "Imported",
+            matchedEntityId: exampleWrite.id,
             messages: [
               ...validated.messages,
-              "Updated existing matrix row.",
+              "Updated Training matrix example row.",
+              ...exampleWrite.messages,
               ...catMessages,
+              ...wfMessages,
             ],
           });
           continue;
         }
 
         if (input.duplicateMode === "create") {
-          const created = await createAdminMatrix(
-            buildMatrixWritePayload(validated.fields),
+          const exampleWrite = await writeExampleListForRow(
+            validated.fields,
+            source,
+            null,
           );
-          liveMatrix.push(created);
+          liveMatrix.push({
+            id: exampleWrite.id,
+            candidateName: validated.fields.candidateName ?? "",
+            companyName: validated.fields.company,
+            department: validated.fields.department,
+            dateOfBirth: validated.fields.dateOfBirth,
+            overallStatus: null,
+            needsReview: false,
+            matrixNotes: null,
+            nextExpiryDate: validated.fields.nextExpiryDate,
+            n001Expiry: null,
+            n003Expiry: null,
+            n004Expiry: null,
+            n010Expiry: null,
+            n020Expiry: null,
+            n021Expiry: null,
+            n027Expiry: null,
+            n100Expiry: null,
+            columnValues: {},
+          });
           const catMessages = await writeCategoriesForRow(
             validated.fields,
-            row.fields,
+            source,
+            categoryCaches,
           );
+          const wfMessages = candidate
+            ? await syncWorkforceMetaExpiries(candidate, validated.fields)
+            : [];
           results.push({
             ...validated,
             status: "Imported",
-            matchedEntityId: created.id,
+            matchedEntityId: exampleWrite.id,
             messages: [
               ...validated.messages,
-              "Created new matrix row (admin confirmed create despite duplicate).",
+              "Created Training matrix example row (admin confirmed create despite duplicate).",
+              ...exampleWrite.messages,
               ...catMessages,
+              ...wfMessages,
             ],
           });
           continue;
@@ -410,22 +477,49 @@ export async function commitMatrixImport(input: {
         continue;
       }
 
-      const created = await createAdminMatrix(
-        buildMatrixWritePayload(validated.fields),
+      const exampleWrite = await writeExampleListForRow(
+        validated.fields,
+        source,
+        null,
       );
-      liveMatrix.push(created);
+      liveMatrix.push({
+        id: exampleWrite.id,
+        candidateName: validated.fields.candidateName ?? "",
+        companyName: validated.fields.company,
+        department: validated.fields.department,
+        dateOfBirth: validated.fields.dateOfBirth,
+        overallStatus: null,
+        needsReview: false,
+        matrixNotes: null,
+        nextExpiryDate: validated.fields.nextExpiryDate,
+        n001Expiry: null,
+        n003Expiry: null,
+        n004Expiry: null,
+        n010Expiry: null,
+        n020Expiry: null,
+        n021Expiry: null,
+        n027Expiry: null,
+        n100Expiry: null,
+        columnValues: {},
+      });
       const catMessages = await writeCategoriesForRow(
         validated.fields,
-        row.fields,
+        source,
+        categoryCaches,
       );
+      const wfMessages = candidate
+        ? await syncWorkforceMetaExpiries(candidate, validated.fields)
+        : [];
       results.push({
         ...validated,
         status: "Imported",
-        matchedEntityId: created.id,
+        matchedEntityId: exampleWrite.id,
         messages: [
           ...validated.messages,
-          "Imported successfully.",
+          "Imported into Training matrix example.",
+          ...exampleWrite.messages,
           ...catMessages,
+          ...wfMessages,
         ],
       });
     } catch (error) {

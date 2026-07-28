@@ -86,8 +86,6 @@ const NOTES_ALIASES = [
 const LOGO_ALIASES = ["Company Logo", "CompanyLogo", "Logo"];
 const STATUS_ALIASES = ["Status", "Company Status"];
 
-const ALLOWED_SIZES = new Set(["small", "medium", "large", "enterprise"]);
-
 function mapCompanyFields(
   raw: Record<string, string | null>,
 ): Record<string, string | null> {
@@ -132,17 +130,34 @@ function normalizeStatus(value: string | null | undefined): {
   };
 }
 
+function normalizeCompanySize(value: string | null | undefined): {
+  size: string | null;
+  warning?: string;
+} {
+  const raw = value?.trim() ?? "";
+  if (!raw) return { size: null };
+  const lower = raw.toLowerCase();
+  if (lower === "small") return { size: "Small" };
+  if (lower === "medium") return { size: "Medium" };
+  if (lower === "large") return { size: "Large" };
+  if (lower === "enterprise") return { size: "Enterprise" };
+  return {
+    size: raw,
+    warning: `Company Size "${raw}" is unusual — expected Small, Medium, Large, or Enterprise.`,
+  };
+}
+
 function normalizeLogo(value: string | null | undefined): string | null {
-  const text = value?.trim() ?? "";
-  if (!text) return null;
-  if (/^logo\s*placeholder$/i.test(text)) return null;
-  return text;
+  // Thumbnail column — spreadsheet text/placeholders are never written to SharePoint.
+  void value;
+  return null;
 }
 
 function companyWritePayload(
   fields: Record<string, string | null>,
 ): Record<string, unknown> {
   const statusInfo = normalizeStatus(fields.status);
+  const sizeInfo = normalizeCompanySize(fields.companySize);
   const payload: Record<string, unknown> = {
     companyName: fields.companyName?.trim(),
     companyNumber: fields.companyNumber?.trim(),
@@ -151,7 +166,7 @@ function companyWritePayload(
   const assign = (key: string, value: string | null | undefined) => {
     if (value?.trim()) payload[key] = value.trim();
   };
-  assign("companySize", fields.companySize);
+  if (sizeInfo.size) payload.companySize = sizeInfo.size;
   assign("registeredAddress", fields.registeredAddress);
   assign("companyRegNumber", fields.companyRegNumber);
   assign("vatNo", fields.vatNo);
@@ -197,6 +212,21 @@ function validateCompanyRow(
 
   if (!companyName) messages.push("Company Name is required.");
   if (!companyNumber) messages.push("Company Number is required.");
+  if (!fields.email?.trim()) {
+    messages.push(
+      "Email is required in SharePoint Company List — row will fail without it.",
+    );
+  }
+  if (!fields.registeredAddress?.trim()) {
+    messages.push(
+      "Registered Address is required in SharePoint Company List — row will fail without it.",
+    );
+  }
+  if (!fields.companySize?.trim()) {
+    messages.push(
+      "Company Size is required in SharePoint Company List — row will fail without it.",
+    );
+  }
 
   if (companyNumber) {
     const key = nameKey(companyNumber);
@@ -220,22 +250,30 @@ function validateCompanyRow(
     }
   }
 
-  const size = fields.companySize?.trim();
-  if (size && !ALLOWED_SIZES.has(size.toLowerCase())) {
-    messages.push(
-      `Company Size "${size}" is unusual — expected Small, Medium, Large, or Enterprise.`,
-    );
-  }
+  const sizeInfo = normalizeCompanySize(fields.companySize);
+  if (sizeInfo.warning) messages.push(sizeInfo.warning);
 
   const statusInfo = normalizeStatus(fields.status);
   if (statusInfo.warning) messages.push(statusInfo.warning);
 
-  if (!companyName || !companyNumber) {
+  const normalizedFields = {
+    ...fields,
+    status: statusInfo.status,
+    companySize: sizeInfo.size,
+  };
+
+  if (
+    !companyName ||
+    !companyNumber ||
+    !fields.email?.trim() ||
+    !fields.registeredAddress?.trim() ||
+    !fields.companySize?.trim()
+  ) {
     return {
       rowNumber,
       status: "Error",
       messages,
-      fields: { ...fields, status: statusInfo.status },
+      fields: normalizedFields,
       matchedEntityId: null,
       matchedEntityName: null,
       duplicateMatch: null,
@@ -253,7 +291,7 @@ function validateCompanyRow(
           ? `Matches existing company by Company Number (#${duplicate.record.id}).`
           : `Matches existing company by Company Name (#${duplicate.record.id}).`,
       ],
-      fields: { ...fields, status: statusInfo.status },
+      fields: normalizedFields,
       matchedEntityId: duplicate.record.id,
       matchedEntityName: duplicate.record.companyName,
       duplicateMatch: null,
@@ -265,7 +303,7 @@ function validateCompanyRow(
     rowNumber,
     status: hasWarnings ? "Warning" : "Ready",
     messages,
-    fields: { ...fields, status: statusInfo.status },
+    fields: normalizedFields,
     matchedEntityId: null,
     matchedEntityName: null,
     duplicateMatch: null,

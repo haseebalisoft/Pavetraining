@@ -29,7 +29,20 @@ export interface SharePointListItem {
 }
 
 function escapeODataString(value: string): string {
-  return value.replace(/'/g, "''");
+  // OData string literals use ASCII single quotes; double them to escape.
+  // Also normalise typographic apostrophes so they cannot confuse parsers.
+  return value
+    .replace(/[\u2018\u2019\u02BC]/g, "'")
+    .replace(/'/g, "''");
+}
+
+/**
+ * Microsoft Graph JS SDK concatenates $filter values without URL-encoding.
+ * Unencoded `&` (e.g. "Harbour & Hill…") splits the query string and yields
+ * errors like: unterminated string literal in `fields/CompanyName eq 'Harbour`.
+ */
+export function encodeODataFilter(filter: string): string {
+  return encodeURIComponent(filter);
 }
 
 type ListQueryOptions = {
@@ -47,7 +60,10 @@ async function fetchListItemsUncached(
 ): Promise<SharePointListItem[]> {
   const siteRoot = getSharePointSiteApiRoot();
   const client = getGraphClient();
+  const pageSize = options?.top && options.top > 0 ? Math.min(options.top, 200) : 200;
+  const hardCap = options?.top && options.top > 200 ? options.top : undefined;
 
+  const items: SharePointListItem[] = [];
   let request = client
     .api(`${siteRoot}/lists/${listId}/items`)
     .expand(
@@ -55,31 +71,48 @@ async function fetchListItemsUncached(
         ? `fields($select=${options.selectFields.join(",")})`
         : "fields",
     )
+    .top(pageSize)
     .header("Prefer", "HonorNonIndexedQueriesWarningMayFailRandomly");
 
   if (options?.filter) {
-    request = request.filter(options.filter);
+    // GraphRequest.filter() does not encode; encode here so & and other
+    // reserved URL characters inside literal values stay inside $filter.
+    request = request.filter(encodeODataFilter(options.filter));
   }
 
-  if (options?.top) {
-    request = request.top(options.top);
-  }
-
-  const response = (await request.get()) as {
+  let response = (await request.get()) as {
     value?: Array<{
       id: string;
       createdDateTime?: string;
       lastModifiedDateTime?: string;
       fields?: SharePointFields;
     }>;
+    "@odata.nextLink"?: string;
   };
 
-  return (response.value ?? []).map((item) => ({
-    id: String(item.id),
-    fields: item.fields ?? {},
-    createdDateTime: item.createdDateTime ?? null,
-    lastModifiedDateTime: item.lastModifiedDateTime ?? null,
-  }));
+  for (;;) {
+    for (const item of response.value ?? []) {
+      items.push({
+        id: String(item.id),
+        fields: item.fields ?? {},
+        createdDateTime: item.createdDateTime ?? null,
+        lastModifiedDateTime: item.lastModifiedDateTime ?? null,
+      });
+      if (hardCap && items.length >= hardCap) {
+        return items.slice(0, hardCap);
+      }
+    }
+
+    const nextLink = response["@odata.nextLink"];
+    if (!nextLink) break;
+
+    response = (await client
+      .api(nextLink.replace(/^https:\/\/graph\.microsoft\.com\/v1\.0/i, ""))
+      .header("Prefer", "HonorNonIndexedQueriesWarningMayFailRandomly")
+      .get()) as typeof response;
+  }
+
+  return items;
 }
 
 async function fetchListItemByIdUncached(
@@ -177,6 +210,18 @@ export function buildFieldEqualsFilter(
   value: string,
 ): string {
   return `fields/${fieldName} eq '${escapeODataString(value)}'`;
+}
+
+/** Numeric LookupId equality — preferred over display-name text filters. */
+export function buildFieldLookupIdEqualsFilter(
+  lookupIdFieldName: string,
+  lookupId: string | number,
+): string {
+  const id = Number(lookupId);
+  if (!Number.isFinite(id)) {
+    throw new Error(`Invalid lookup id for filter field ${lookupIdFieldName}.`);
+  }
+  return `fields/${lookupIdFieldName} eq ${id}`;
 }
 
 export function buildSchemaFieldEqualsFilter(

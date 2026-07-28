@@ -10,10 +10,12 @@ import { StatusBadge } from "@/components/ui/StatusBadge";
 import {
   EXPIRY_STATUS_LEGEND,
   formatDisplayDate,
+  getExpiryStatus,
   matchesAnyExpiryFilter,
   type ExpiryFilter,
 } from "@/lib/training/expiryFilters";
 import type { CustomerMatrixRecord } from "@/types/models";
+import type { StatusTone } from "@/lib/ui/status";
 
 import styles from "./customer.module.css";
 
@@ -33,7 +35,7 @@ const TRAINING_CATEGORIES = [
   { value: "", label: "All categories" },
   { value: "npors", label: "NPORS" },
   { value: "cscs", label: "CSCS" },
-  { value: "swqr", label: "SWQR / Streetworks" },
+  { value: "swqr", label: "Streetworks (SWQR)" },
   { value: "eusr", label: "EUSR" },
   { value: "in-house", label: "In-House" },
 ] as const;
@@ -79,12 +81,24 @@ function matchesCategory(
 ): boolean {
   if (!category) return true;
   if (category === "npors") {
-    return Boolean(row.nporsCategories?.trim() || row.nporsExpiry?.trim());
+    return Boolean(
+      row.nporsCategories?.trim() ||
+        row.nporsExpiry?.trim() ||
+        row.nporsNumber?.trim(),
+    );
   }
-  if (category === "cscs") return Boolean(row.cscsExpiry?.trim());
-  if (category === "swqr") return Boolean(row.swqrExpiry?.trim());
-  if (category === "eusr") return Boolean(row.eusrExpiry?.trim());
-  if (category === "in-house") return Boolean(row.inHouseExpiry?.trim());
+  if (category === "cscs") {
+    return Boolean(row.cscsExpiry?.trim() || row.cscsNumber?.trim());
+  }
+  if (category === "swqr") {
+    return Boolean(row.swqrExpiry?.trim() || row.swqrNumber?.trim());
+  }
+  if (category === "eusr") {
+    return Boolean(row.eusrExpiry?.trim() || row.eusrNumber?.trim());
+  }
+  if (category === "in-house") {
+    return Boolean(row.inHouseExpiry?.trim() || row.inHouseCourse?.trim());
+  }
   return true;
 }
 
@@ -95,6 +109,65 @@ function matchesMatrixFilter(
   if (filter === "all") return true;
   if (filter === "review") return row.needsReview;
   return matchesAnyExpiryFilter(rowExpiryDates(row), filter as ExpiryFilter);
+}
+
+function overallTone(row: CustomerMatrixRecord): StatusTone {
+  if (row.needsReview) return "missing";
+  const status = getExpiryStatus(row.nextExpiryDate).status;
+  if (status === "missing") return "missing";
+  if (status === "valid") return "ok";
+  if (status === "upcoming") return "warn";
+  return "danger";
+}
+
+function CertCell({
+  number,
+  expiry,
+}: {
+  number: string | null;
+  expiry: string | null;
+}) {
+  return (
+    <div className={styles.certCell}>
+      {number?.trim() ? (
+        <span className={styles.certNumber}>{number}</span>
+      ) : (
+        <span className={styles.muted}>—</span>
+      )}
+      <ExpiryDateBadge date={expiry} />
+    </div>
+  );
+}
+
+function CandidateNameCell({
+  row,
+  href,
+}: {
+  row: CustomerMatrixRecord;
+  href: string | null;
+}) {
+  const name = href ? (
+    <Link
+      className={styles.link}
+      href={href}
+      onClick={(event) => event.stopPropagation()}
+    >
+      {row.candidateName}
+    </Link>
+  ) : (
+    cell(row.candidateName)
+  );
+
+  return (
+    <div className={styles.candidateNameCell}>
+      {name}
+      {row.dateOfBirth?.trim() ? (
+        <span className={styles.dobSecondary}>
+          DOB {formatDisplayDate(row.dateOfBirth)}
+        </span>
+      ) : null}
+    </div>
+  );
 }
 
 function parseFilter(raw: string | null): MatrixExpiryFilter {
@@ -207,10 +280,16 @@ export function TrainingMatrixView({
       if (!query) return true;
       return [
         row.candidateName,
+        row.companyName,
         row.department,
         row.trainingManager,
         row.supervisor,
         row.nporsCategories,
+        row.nporsNumber,
+        row.cscsNumber,
+        row.swqrNumber,
+        row.eusrNumber,
+        row.inHouseCourse,
         row.overallStatus,
       ]
         .filter(Boolean)
@@ -263,14 +342,25 @@ export function TrainingMatrixView({
         <p className={styles.eyebrow}>Customer</p>
         <h1 className={styles.title}>Training Matrix</h1>
         <p className={styles.subtitle}>
-          Workforce competency overview combining candidate details with NPORS,
-          CSCS, SWQR, EUSR, and In-House expiry information.
+          Workforce competency overview for your company — NPORS, CSCS,
+          Streetworks (SWQR), EUSR, and In-House Training.
         </p>
       </header>
 
       <p className={styles.companyMeta}>
         Showing matrix rows for <strong>{companyName}</strong>
       </p>
+
+      <div className={styles.matrixActions}>
+        <button
+          type="button"
+          className={styles.secondaryButton}
+          disabled
+          title="PDF Snapshot export is coming soon. Spreadsheet export is not available for customers."
+        >
+          PDF Snapshot (coming soon)
+        </button>
+      </div>
 
       <div className={styles.expiryLegend} role="region" aria-label="Expiry colour legend">
         {EXPIRY_STATUS_LEGEND.map((item) => (
@@ -427,17 +517,18 @@ export function TrainingMatrixView({
               <thead>
                 <tr>
                   <th scope="col">Candidate</th>
-                  <th scope="col">Date of birth</th>
-                  <th scope="col">Department</th>
+                  <th scope="col">Company</th>
                   <th scope="col">Training Manager</th>
                   <th scope="col">Supervisor</th>
-                  <th scope="col">NPORS categories</th>
-                  <th scope="col">NPORS expiry</th>
-                  <th scope="col">CSCS expiry</th>
-                  <th scope="col">SWQR expiry</th>
-                  <th scope="col">EUSR expiry</th>
-                  <th scope="col">In-House expiry</th>
+                  <th scope="col">CSCS</th>
+                  <th scope="col">Streetworks (SWQR)</th>
+                  <th scope="col">EUSR</th>
+                  <th scope="col">NPORS</th>
+                  <th scope="col">In-House</th>
                   <th scope="col">Next expiry</th>
+                  <th scope="col">Overall status</th>
+                  <th scope="col">Records to Review</th>
+                  <th scope="col">Profile</th>
                 </tr>
               </thead>
               <tbody>
@@ -465,40 +556,87 @@ export function TrainingMatrixView({
                       }
                     >
                       <td>
+                        <CandidateNameCell row={row} href={href} />
+                      </td>
+                      <td>{cell(row.companyName)}</td>
+                      <td>{cell(row.trainingManager)}</td>
+                      <td>{cell(row.supervisor)}</td>
+                      <td>
+                        <CertCell
+                          number={row.cscsNumber}
+                          expiry={row.cscsExpiry}
+                        />
+                      </td>
+                      <td>
+                        <CertCell
+                          number={row.swqrNumber}
+                          expiry={row.swqrExpiry}
+                        />
+                      </td>
+                      <td>
+                        <CertCell
+                          number={row.eusrNumber}
+                          expiry={row.eusrExpiry}
+                        />
+                      </td>
+                      <td>
+                        <div className={styles.certCell}>
+                          {row.nporsNumber?.trim() ||
+                          row.nporsCategories?.trim() ? (
+                            <span className={styles.certNumber}>
+                              {[row.nporsNumber, row.nporsCategories]
+                                .filter((v) => v?.trim())
+                                .join(" · ")}
+                            </span>
+                          ) : (
+                            <span className={styles.muted}>—</span>
+                          )}
+                          <ExpiryDateBadge date={row.nporsExpiry} />
+                        </div>
+                      </td>
+                      <td>
+                        <div className={styles.certCell}>
+                          {row.inHouseCourse?.trim() ? (
+                            <span className={styles.certNumber}>
+                              {row.inHouseCourse}
+                            </span>
+                          ) : (
+                            <span className={styles.muted}>—</span>
+                          )}
+                          <ExpiryDateBadge date={row.inHouseExpiry} />
+                        </div>
+                      </td>
+                      <td>
+                        <ExpiryDateBadge date={row.nextExpiryDate} />
+                      </td>
+                      <td>
+                        <StatusBadge
+                          label={row.overallStatus ?? "Records to Review"}
+                          tone={overallTone(row)}
+                        />
+                      </td>
+                      <td>
+                        {row.needsReview ? (
+                          <StatusBadge
+                            label="Records to Review"
+                            tone="missing"
+                          />
+                        ) : (
+                          <span className={styles.muted}>—</span>
+                        )}
+                      </td>
+                      <td>
                         {href ? (
                           <Link
                             className={styles.link}
                             href={href}
                             onClick={(event) => event.stopPropagation()}
                           >
-                            {row.candidateName}
+                            View Profile
                           </Link>
                         ) : (
-                          cell(row.candidateName)
+                          <span className={styles.muted}>—</span>
                         )}
-                      </td>
-                      <td>{formatDisplayDate(row.dateOfBirth)}</td>
-                      <td>{cell(row.department)}</td>
-                      <td>{cell(row.trainingManager)}</td>
-                      <td>{cell(row.supervisor)}</td>
-                      <td>{cell(row.nporsCategories)}</td>
-                      <td>
-                        <ExpiryDateBadge date={row.nporsExpiry} />
-                      </td>
-                      <td>
-                        <ExpiryDateBadge date={row.cscsExpiry} />
-                      </td>
-                      <td>
-                        <ExpiryDateBadge date={row.swqrExpiry} />
-                      </td>
-                      <td>
-                        <ExpiryDateBadge date={row.eusrExpiry} />
-                      </td>
-                      <td>
-                        <ExpiryDateBadge date={row.inHouseExpiry} />
-                      </td>
-                      <td>
-                        <ExpiryDateBadge date={row.nextExpiryDate} />
                       </td>
                     </tr>
                   );
@@ -513,49 +651,75 @@ export function TrainingMatrixView({
               const card = (
                 <>
                   <p className={styles.matrixCardTitle}>{row.candidateName}</p>
+                  {row.dateOfBirth?.trim() ? (
+                    <p className={styles.dobSecondary}>
+                      DOB {formatDisplayDate(row.dateOfBirth)}
+                    </p>
+                  ) : null}
                   <p className={styles.matrixCardMeta}>
-                    {row.department?.trim() || "No department"}
+                    {row.companyName?.trim() || companyName}
                     {row.trainingManager
                       ? ` · TM: ${row.trainingManager}`
                       : ""}
+                    {row.supervisor ? ` · Sup: ${row.supervisor}` : ""}
                   </p>
                   <dl className={styles.matrixCardGrid}>
                     <div>
-                      <dt>Date of birth</dt>
-                      <dd>{formatDisplayDate(row.dateOfBirth)}</dd>
-                    </div>
-                    <div>
-                      <dt>Supervisor</dt>
-                      <dd>{row.supervisor?.trim() || "—"}</dd>
-                    </div>
-                    <div>
-                      <dt>NPORS</dt>
+                      <dt>Overall status</dt>
                       <dd>
-                        <ExpiryDateBadge date={row.nporsExpiry} />
+                        <StatusBadge
+                          label={row.overallStatus ?? "Records to Review"}
+                          tone={overallTone(row)}
+                        />
                       </dd>
                     </div>
                     <div>
                       <dt>CSCS</dt>
                       <dd>
-                        <ExpiryDateBadge date={row.cscsExpiry} />
+                        <CertCell
+                          number={row.cscsNumber}
+                          expiry={row.cscsExpiry}
+                        />
                       </dd>
                     </div>
                     <div>
-                      <dt>SWQR</dt>
+                      <dt>Streetworks</dt>
                       <dd>
-                        <ExpiryDateBadge date={row.swqrExpiry} />
+                        <CertCell
+                          number={row.swqrNumber}
+                          expiry={row.swqrExpiry}
+                        />
                       </dd>
                     </div>
                     <div>
                       <dt>EUSR</dt>
                       <dd>
-                        <ExpiryDateBadge date={row.eusrExpiry} />
+                        <CertCell
+                          number={row.eusrNumber}
+                          expiry={row.eusrExpiry}
+                        />
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>NPORS</dt>
+                      <dd>
+                        <CertCell
+                          number={
+                            [row.nporsNumber, row.nporsCategories]
+                              .filter((v) => v?.trim())
+                              .join(" · ") || null
+                          }
+                          expiry={row.nporsExpiry}
+                        />
                       </dd>
                     </div>
                     <div>
                       <dt>In-House</dt>
                       <dd>
-                        <ExpiryDateBadge date={row.inHouseExpiry} />
+                        <CertCell
+                          number={row.inHouseCourse}
+                          expiry={row.inHouseExpiry}
+                        />
                       </dd>
                     </div>
                     <div>
@@ -565,10 +729,8 @@ export function TrainingMatrixView({
                       </dd>
                     </div>
                   </dl>
-                  {row.nporsCategories ? (
-                    <p className={styles.matrixCardCats}>
-                      Categories: {row.nporsCategories}
-                    </p>
+                  {href ? (
+                    <p className={styles.matrixCardCats}>View Profile</p>
                   ) : null}
                 </>
               );

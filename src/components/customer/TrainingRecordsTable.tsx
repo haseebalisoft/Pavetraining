@@ -34,6 +34,10 @@ interface TrainingRecordsTableProps<T extends { id: string }> {
   getOutcome: (row: T) => CustomerOutcome | null;
   getExpiry: (row: T) => string | null;
   getWorkforceId: (row: T) => string | null;
+  /** Compact section for Candidate Profile (no page header / profile column). */
+  embedded?: boolean;
+  /** Preserve matrix filters when opening a profile from training records. */
+  profileReturnHref?: string;
 }
 
 const EXPIRY_OPTIONS: { value: ExpiryFilter; label: string }[] = [
@@ -61,7 +65,7 @@ export function formatExpiryCell(expiry: string | null): ReactNode {
 
 export function formatOutcomeCell(outcome: CustomerOutcome | null): ReactNode {
   if (!outcome) {
-    return <span className={styles.muted}>—</span>;
+    return <span className={styles.muted}>Not recorded</span>;
   }
 
   return (
@@ -93,6 +97,8 @@ export function TrainingRecordsTable<T extends { id: string }>({
   getOutcome,
   getExpiry,
   getWorkforceId,
+  embedded = false,
+  profileReturnHref,
 }: TrainingRecordsTableProps<T>) {
   const [search, setSearch] = useState("");
   const [outcomeFilter, setOutcomeFilter] = useState<OutcomeFilter>("all");
@@ -127,79 +133,101 @@ export function TrainingRecordsTable<T extends { id: string }>({
     getExpiry,
   ]);
 
+  const profileHref = (workforceId: string) => {
+    if (!profileReturnHref) return `/customer/candidates/${workforceId}`;
+    const params = new URLSearchParams();
+    params.set("return", profileReturnHref);
+    return `/customer/candidates/${workforceId}?${params.toString()}`;
+  };
+
   return (
     <div>
-      <CustomerPageHeader
-        breadcrumbs={[
-          { label: "Customer", href: "/customer" },
-          { label: "Training Records", href: "/customer/training-records" },
-          { label: title },
-        ]}
-        eyebrow="Training Records"
-        title={title}
-        subtitle={description}
-      />
-
-      <p className={customerStyles.companyMeta}>
-        Showing records for <strong>{companyName}</strong>
-      </p>
-
-      <div className={styles.toolbar}>
-        <label className={styles.field}>
-          <span className={styles.fieldLabel}>Search</span>
-          <input
-            className={styles.input}
-            type="search"
-            placeholder="Search candidates and details…"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
+      {embedded ? (
+        <div className={styles.embeddedHeader}>
+          <h2 className={styles.embeddedTitle}>{title}</h2>
+          <p className={styles.embeddedSubtitle}>{description}</p>
+        </div>
+      ) : (
+        <>
+          <CustomerPageHeader
+            breadcrumbs={[
+              { label: "Customer", href: "/customer" },
+              { label: "Training Records", href: "/customer/training-records" },
+              { label: title },
+            ]}
+            eyebrow="Training Records"
+            title={title}
+            subtitle={description}
           />
-        </label>
 
-        <label className={styles.field}>
-          <span className={styles.fieldLabel}>Outcome</span>
-          <select
-            className={styles.select}
-            value={outcomeFilter}
-            onChange={(event) =>
-              setOutcomeFilter(event.target.value as OutcomeFilter)
-            }
-          >
-            <option value="all">All outcomes</option>
-            <option value="Pass">Pass</option>
-            <option value="Fail">Fail</option>
-          </select>
-        </label>
+          <p className={customerStyles.companyMeta}>
+            Showing records for <strong>{companyName}</strong>
+          </p>
+        </>
+      )}
 
-        <label className={styles.field}>
-          <span className={styles.fieldLabel}>Expiry</span>
-          <select
-            className={styles.select}
-            value={expiryFilter}
-            onChange={(event) =>
-              setExpiryFilter(event.target.value as ExpiryFilter)
-            }
-          >
-            {EXPIRY_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
+      {!embedded ? (
+        <div className={styles.toolbar}>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Search</span>
+            <input
+              className={styles.input}
+              type="search"
+              placeholder="Search candidates and details…"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </label>
 
-      <p className={styles.resultCount}>
-        {filtered.length} of {records.length} record
-        {records.length === 1 ? "" : "s"}
-      </p>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Outcome</span>
+            <select
+              className={styles.select}
+              value={outcomeFilter}
+              onChange={(event) =>
+                setOutcomeFilter(event.target.value as OutcomeFilter)
+              }
+            >
+              <option value="all">All outcomes</option>
+              <option value="Pass">Pass</option>
+              <option value="Fail">Fail</option>
+            </select>
+          </label>
+
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Expiry</span>
+            <select
+              className={styles.select}
+              value={expiryFilter}
+              onChange={(event) =>
+                setExpiryFilter(event.target.value as ExpiryFilter)
+              }
+            >
+              {EXPIRY_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      ) : null}
+
+      {!embedded ? (
+        <p className={styles.resultCount}>
+          {filtered.length} of {records.length} record
+          {records.length === 1 ? "" : "s"}
+        </p>
+      ) : null}
 
       {filtered.length === 0 ? (
         <div className={styles.empty}>
           <h2>No records found</h2>
           <p>
             {records.length === 0
-              ? "There are no customer-visible records for your company in this register yet."
+              ? embedded
+                ? "No customer-visible records for this candidate in this register yet."
+                : "There are no customer-visible records for your company in this register yet."
               : "Try adjusting search or filters to see matching training records."}
           </p>
         </div>
@@ -213,7 +241,7 @@ export function TrainingRecordsTable<T extends { id: string }>({
                     {column.header}
                   </th>
                 ))}
-                <th scope="col">Profile</th>
+                {!embedded ? <th scope="col">Profile</th> : null}
               </tr>
             </thead>
             <tbody>
@@ -224,20 +252,22 @@ export function TrainingRecordsTable<T extends { id: string }>({
                     {columns.map((column) => (
                       <td key={column.key}>{column.render(row)}</td>
                     ))}
-                    <td>
-                      {workforceId ? (
-                        <Link
-                          className={styles.profileLink}
-                          href={`/customer/candidates/${workforceId}`}
-                        >
-                          View profile
-                        </Link>
-                      ) : (
-                        <span className={styles.profileDisabled}>
-                          Unavailable
-                        </span>
-                      )}
-                    </td>
+                    {!embedded ? (
+                      <td>
+                        {workforceId ? (
+                          <Link
+                            className={styles.profileLink}
+                            href={profileHref(workforceId)}
+                          >
+                            View profile
+                          </Link>
+                        ) : (
+                          <span className={styles.profileDisabled}>
+                            Unavailable
+                          </span>
+                        )}
+                      </td>
+                    ) : null}
                   </tr>
                 );
               })}

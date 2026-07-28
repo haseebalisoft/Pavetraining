@@ -1,0 +1,12 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/sp/v2/column-formatting.schema.json",
+  "elmType": "div",
+  "style": {
+    "padding": "6px 10px",
+    "border-radius": "4px",
+    "font-weight": "600",
+    "color": "#111827",
+    "background-color": "=if(@currentField == 0 || @currentField == '' || @currentField == null, '#9CA3AF', if(addDays('1899-12-30', @currentField) <= addDays(@now, 90), '#EF4444', if(addDays('1899-12-30', @currentField) <= addDays(@now, 270), '#F59E0B', '#22C55E')))"
+  },
+  "txtContent": "=if(@currentField == 0 || @currentField == '' || @currentField == null, '—', toLocaleDateString(addDays('1899-12-30', @currentField), 'en-GB'))"
+}

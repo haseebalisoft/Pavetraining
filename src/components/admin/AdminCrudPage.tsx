@@ -48,7 +48,7 @@ interface AdminCrudPageProps<T extends { id: string }> {
   fields: AdminFieldConfig[];
   listUrl: string;
   createUrl?: string;
-  updateUrl: (id: string) => string;
+  updateUrl?: (id: string) => string;
   /** When set, shows per-row Delete. */
   deleteUrl?: (id: string) => string;
   /** When set with enableBulkDelete, posts `{ ids: string[] }`. */
@@ -382,8 +382,11 @@ export function AdminCrudPage<T extends { id: string }>({
       }
 
       const isCreate = !editing;
+      if (!isCreate && !updateUrl) {
+        throw new Error("Editing is not available for this list.");
+      }
       const response = await fetch(
-        isCreate ? (createUrl ?? listUrl) : updateUrl(editing.id),
+        isCreate ? (createUrl ?? listUrl) : updateUrl!(editing.id),
         {
           method: isCreate ? "POST" : "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -582,16 +585,18 @@ export function AdminCrudPage<T extends { id: string }>({
                     <td key={column.key}>{column.render(row)}</td>
                   ))}
                   <td>
-                    <button
-                      type="button"
-                      className={styles.linkButton}
-                      onClick={() => openEdit(row)}
-                    >
-                      {editLabel}
-                    </button>
+                    {updateUrl ? (
+                      <button
+                        type="button"
+                        className={styles.linkButton}
+                        onClick={() => openEdit(row)}
+                      >
+                        {editLabel}
+                      </button>
+                    ) : null}
                     {deleteUrl ? (
                       <>
-                        {" · "}
+                        {updateUrl ? " · " : null}
                         <button
                           type="button"
                           className={styles.linkButtonDanger}
@@ -605,7 +610,10 @@ export function AdminCrudPage<T extends { id: string }>({
                       </>
                     ) : null}
                     {extraActions ? (
-                      <> · {extraActions(row, { reload: load })}</>
+                      <>
+                        {updateUrl || deleteUrl ? " · " : null}
+                        {extraActions(row, { reload: load })}
+                      </>
                     ) : null}
                   </td>
                 </tr>

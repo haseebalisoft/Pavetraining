@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 
 import {
@@ -17,10 +17,12 @@ import type { AdminMatrixRecord } from "@/lib/services/adminCrudService";
 import { CLIENT_MATRIX_DISPLAY_HEADERS } from "@/lib/services/bulkUpload/clientTemplateHeaders";
 import type { MatrixSyncResult } from "@/types/matrixSync";
 import {
+  EXPIRY_STATUS_LEGEND,
   getExpiryStatus,
-  matchesExpiryFilter,
+  matchesAnyExpiryFilter,
   type ExpiryFilter,
 } from "@/lib/training/expiryFilters";
+import { toneForExpiryStatus } from "@/lib/ui/status";
 import type { Company } from "@/types/models";
 
 function formatDateCell(value: string | null | undefined): string {
@@ -34,12 +36,21 @@ function formatDateCell(value: string | null | undefined): string {
 function matrixCell(
   row: AdminMatrixRecord,
   header: string,
-): string {
+): ReactNode {
   if (header === "Name") return row.candidateName || "—";
-  if (header === "DOB") return formatDateCell(row.dateOfBirth);
+  if (header === "DOB") {
+    const dob = row.columnValues?.DOB ?? row.dateOfBirth;
+    return formatDateCell(dob);
+  }
   const fromColumns = row.columnValues?.[header];
-  if (fromColumns?.trim()) return formatDateCell(fromColumns);
-  return "—";
+  return <ExpiryDateBadge date={fromColumns} />;
+}
+
+function rowExpiryDates(row: AdminMatrixRecord): Array<string | null> {
+  const values = Object.entries(row.columnValues ?? {})
+    .filter(([key]) => key !== "Name" && key !== "DOB")
+    .map(([, value]) => value);
+  return [row.nextExpiryDate, ...values];
 }
 
 /** Match Training matrix example.xlsx column order. */
@@ -86,14 +97,14 @@ const fields: AdminFieldConfig[] = [
   { name: "needsReview", label: "Records to Review", type: "boolean" },
   { name: "matrixNotes", label: "Notes", type: "textarea" },
   { name: "nextExpiryDate", label: "Next expiry date", type: "date" },
-  { name: "n001Expiry", label: "N001 expiry", type: "date" },
-  { name: "n003Expiry", label: "N003 expiry", type: "date" },
-  { name: "n004Expiry", label: "N004 expiry", type: "date" },
-  { name: "n010Expiry", label: "N010 expiry", type: "date" },
-  { name: "n020Expiry", label: "N020 expiry", type: "date" },
-  { name: "n021Expiry", label: "N021 expiry", type: "date" },
-  { name: "n027Expiry", label: "N027 expiry", type: "date" },
-  { name: "n100Expiry", label: "N100 expiry", type: "date" },
+  { name: "n001Expiry", label: "N001 - Ind FLT", type: "date" },
+  { name: "n003Expiry", label: "N003 - Reach Lift Truck", type: "date" },
+  { name: "n004Expiry", label: "N004 - Lorry Mounted Lift Truck", type: "date" },
+  { name: "n010Expiry", label: "N010 - Telescopic Handler", type: "date" },
+  { name: "n020Expiry", label: "N020 - Tiltrotator System", type: "date" },
+  { name: "n021Expiry", label: "N021 - Suction Excavator", type: "date" },
+  { name: "n027Expiry", label: "N027 - Excavation Marshal - Banksperson", type: "date" },
+  { name: "n100Expiry", label: "N100 - Exc Crane", type: "date" },
 ];
 
 function matchesFilter(
@@ -105,7 +116,7 @@ function matchesFilter(
   if (filter === "expiring") {
     return getExpiryStatus(row.nextExpiryDate).status === "urgent";
   }
-  return matchesExpiryFilter(row.nextExpiryDate, filter as ExpiryFilter);
+  return matchesAnyExpiryFilter(rowExpiryDates(row), filter as ExpiryFilter);
 }
 
 function SyncResultsPanel({ result }: { result: MatrixSyncResult }) {
@@ -237,10 +248,19 @@ export function AdminMatrixClient({
 
   return (
     <>
+      <div className={styles.legendRow} aria-label="Expiry colour legend">
+        {EXPIRY_STATUS_LEGEND.map((item) => (
+          <StatusBadge
+            key={item.status}
+            label={item.label}
+            tone={toneForExpiryStatus(item.status)}
+          />
+        ))}
+      </div>
       <AdminCrudPage<AdminMatrixRecord>
         key={reloadToken}
         title="Training Matrix"
-        description="Columns match Training matrix example.xlsx. Scroll horizontally to see all N-code expiries. Sync still updates from registers."
+        description="Synced from NPORS / EUSR / Streetworks / In-House into SharePoint ‘Training matrix example’. Pass updates expiry when newer; Fail never extends. Use Sync Matrix / Sync company / Sync candidate; Dry run previews without writing."
         columns={columns}
         fields={fields}
         companies={companies}
@@ -249,8 +269,7 @@ export function AdminMatrixClient({
         getCompanyName={(row) => row.companyName}
         drawerWide
         listUrl="/api/admin/training-matrix"
-        createUrl="/api/admin/training-matrix"
-        updateUrl={(id) => `/api/admin/training-matrix/${id}`}
+        allowCreate={false}
         mapResponse={(payload) =>
           ((payload as { records?: AdminMatrixRecord[] }).records ?? [])
         }

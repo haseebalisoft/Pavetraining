@@ -85,57 +85,93 @@ function buildEnrichedRow(input: {
   matrix: MatrixSourceRow | null;
   nporsCategories: string[];
   nporsExpiry: string | null;
+  nporsNumber?: string | null;
   swqrExpiry: string | null;
   eusrExpiry: string | null;
   inHouseExpiry: string | null;
+  inHouseCourse?: string | null;
 }): CustomerMatrixRecord {
   const { candidate, matrix } = input;
   const candidateName =
     candidate?.candidateName ?? matrix?.candidateName ?? "Unknown";
   const dates = matrix
     ? {
-        n001Expiry: matrix.n001Expiry,
-        n003Expiry: matrix.n003Expiry,
-        n004Expiry: matrix.n004Expiry,
-        n010Expiry: matrix.n010Expiry,
-        n020Expiry: matrix.n020Expiry,
-        n021Expiry: matrix.n021Expiry,
-        n027Expiry: matrix.n027Expiry,
-        n100Expiry: matrix.n100Expiry,
+        n001Expiry:
+          matrix.columnValues?.["N001 - Ind FLT"] ?? matrix.n001Expiry,
+        n003Expiry:
+          matrix.columnValues?.["N003 - Reach Lift Truck"] ?? matrix.n003Expiry,
+        n004Expiry:
+          matrix.columnValues?.["N004 - Lorry Mounted Lift Truck"] ??
+          matrix.n004Expiry,
+        n010Expiry:
+          matrix.columnValues?.["N010 - Telescopic Handler"] ??
+          matrix.n010Expiry,
+        n020Expiry:
+          matrix.columnValues?.["N020 - Tiltrotator System"] ??
+          matrix.n020Expiry,
+        n021Expiry:
+          matrix.columnValues?.["N021 - Suction Excavator"] ?? matrix.n021Expiry,
+        n027Expiry:
+          matrix.columnValues?.["N027 - Excavation Marshal - Banksperson"] ??
+          matrix.n027Expiry,
+        n100Expiry:
+          matrix.columnValues?.["N100 - Exc Crane"] ?? matrix.n100Expiry,
       }
     : emptyMatrixDates();
 
-  const cscsExpiry = candidate?.cscsExpiry ?? null;
+  const cscsExpiry =
+    matrix?.columnValues?.["CSCS Expiry"] ?? candidate?.cscsExpiry ?? null;
+  const swqrFromMatrix = matrix?.columnValues?.["NRSWA Expiry"] ?? null;
+  const eusrFromMatrix = matrix?.columnValues?.["EUSR Expiry"] ?? null;
   const nextExpiryDate =
     earliestExpiryDate([
       matrix?.nextExpiryDate,
       input.nporsExpiry,
       cscsExpiry,
-      input.swqrExpiry,
-      input.eusrExpiry,
+      input.swqrExpiry ?? swqrFromMatrix,
+      input.eusrExpiry ?? eusrFromMatrix,
       input.inHouseExpiry,
       ...Object.values(dates),
     ]) ?? null;
+
+  const expiryStatus = getExpiryStatus(nextExpiryDate);
+  const needsReview =
+    Boolean(matrix?.needsReview) || expiryStatus.status === "missing";
+  const overallStatus =
+    matrix?.overallStatus?.trim() ||
+    (needsReview ? "Records to Review" : expiryStatus.label);
 
   return {
     id: candidate?.id ?? matrix?.id ?? candidateName,
     candidateId: candidate?.id ?? null,
     candidateName,
-    dateOfBirth: candidate?.dateOfBirth ?? null,
+    companyName:
+      candidate?.companyName ??
+      matrix?.companyName ??
+      null,
+    dateOfBirth:
+      candidate?.dateOfBirth ??
+      matrix?.columnValues?.DOB ??
+      matrix?.dateOfBirth ??
+      null,
     department: candidate?.department ?? matrix?.department ?? null,
     trainingManager: candidate?.trainingManager ?? null,
     supervisor: candidate?.supervisor ?? null,
-    overallStatus: matrix?.overallStatus ?? null,
-    needsReview: Boolean(matrix?.needsReview),
+    overallStatus,
+    needsReview,
     nextExpiryDate,
-    nporsCategories:
-      input.nporsCategories.length > 0
-        ? input.nporsCategories.join(", ")
-        : null,
+    nporsCategories: input.nporsCategories.length
+      ? input.nporsCategories.join(", ")
+      : null,
     nporsExpiry: input.nporsExpiry,
+    nporsNumber: input.nporsNumber ?? candidate?.nporsNumbers ?? null,
+    cscsNumber: candidate?.cscsNumber ?? null,
     cscsExpiry,
-    swqrExpiry: input.swqrExpiry,
-    eusrExpiry: input.eusrExpiry,
+    swqrNumber: candidate?.swqrNumber ?? null,
+    swqrExpiry: input.swqrExpiry ?? swqrFromMatrix,
+    eusrNumber: candidate?.eusrNumber ?? null,
+    eusrExpiry: input.eusrExpiry ?? eusrFromMatrix,
+    inHouseCourse: input.inHouseCourse ?? null,
     inHouseExpiry: input.inHouseExpiry,
     ...dates,
   };
@@ -208,6 +244,7 @@ export async function getCustomerMatrixRecords(
 
   const nporsCatsByName = new Map<string, Set<string>>();
   const nporsExpiryByName = new Map<string, string[]>();
+  const nporsNumberByName = new Map<string, string>();
   for (const row of npors) {
     const key = nameKey(row.candidateName);
     if (!key) continue;
@@ -215,6 +252,9 @@ export async function getCustomerMatrixRecords(
       const set = nporsCatsByName.get(key) ?? new Set<string>();
       set.add(row.nporsCategory.trim());
       nporsCatsByName.set(key, set);
+    }
+    if (row.nporsNumber?.trim() && !nporsNumberByName.has(key)) {
+      nporsNumberByName.set(key, row.nporsNumber.trim());
     }
     if (row.expiry?.trim()) {
       const list = nporsExpiryByName.get(key) ?? [];
@@ -242,9 +282,14 @@ export async function getCustomerMatrixRecords(
   }
 
   const inHouseExpiryByName = new Map<string, string[]>();
+  const inHouseCourseByName = new Map<string, string>();
   for (const row of inHouse) {
     const key = nameKey(row.candidateName);
-    if (!key || !row.expiry?.trim()) continue;
+    if (!key) continue;
+    if (row.course?.trim() && !inHouseCourseByName.has(key)) {
+      inHouseCourseByName.set(key, row.course.trim());
+    }
+    if (!row.expiry?.trim()) continue;
     const list = inHouseExpiryByName.get(key) ?? [];
     list.push(row.expiry);
     inHouseExpiryByName.set(key, list);
@@ -280,6 +325,7 @@ export async function getCustomerMatrixRecords(
         matrix,
         nporsCategories: categories,
         nporsExpiry,
+        nporsNumber: nporsNumberByName.get(key) ?? candidate.nporsNumbers,
         swqrExpiry: earliestExpiryDate([
           candidate.swqrExpiry,
           ...(swqrExpiryByName.get(key) ?? []),
@@ -289,6 +335,7 @@ export async function getCustomerMatrixRecords(
           ...(eusrExpiryByName.get(key) ?? []),
         ]),
         inHouseExpiry: earliestExpiryDate(inHouseExpiryByName.get(key) ?? []),
+        inHouseCourse: inHouseCourseByName.get(key) ?? null,
       }),
     );
   }
@@ -315,9 +362,11 @@ export async function getCustomerMatrixRecords(
           matrix.n027Expiry,
           matrix.n100Expiry,
         ]),
+        nporsNumber: nporsNumberByName.get(key) ?? null,
         swqrExpiry: earliestExpiryDate(swqrExpiryByName.get(key) ?? []),
         eusrExpiry: earliestExpiryDate(eusrExpiryByName.get(key) ?? []),
         inHouseExpiry: earliestExpiryDate(inHouseExpiryByName.get(key) ?? []),
+        inHouseCourse: inHouseCourseByName.get(key) ?? null,
       }),
     );
   }

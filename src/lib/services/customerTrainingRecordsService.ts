@@ -10,12 +10,14 @@ import {
   asBoolean,
   asNullableString,
   asString,
+  buildFieldLookupIdEqualsFilter,
   buildSchemaFieldEqualsFilter,
   getListItemsByKey,
   type SharePointFields,
 } from "@/lib/services/sharePointListService";
 import { getWorkforceIdByCandidateName } from "@/lib/services/workforceService";
 import { toCustomerOutcome } from "@/lib/training/customerOutcome";
+import { stripSharePointHtml } from "@/lib/text/stripSharePointHtml";
 import type {
   CustomerContext,
   CustomerEusrRecord,
@@ -43,13 +45,14 @@ function companyAndVisibleFilter(
     | "eusrRegister"
     | "nrswaRegister"
     | "inHouseCertificates",
+  companyId: string,
   companyName: string,
 ): string {
-  const companyFilter = buildSchemaFieldEqualsFilter(
-    listKey,
-    "companyName",
-    companyName,
-  );
+  // Prefer LookupId — avoids OData breakage on company names with & / quotes.
+  const id = Number(companyId);
+  const companyFilter = Number.isFinite(id)
+    ? buildFieldLookupIdEqualsFilter("CompanyNameLookupId", id)
+    : buildSchemaFieldEqualsFilter(listKey, "companyName", companyName);
   const fields = getSharePointFields(listKey);
   const visibleField = fields.customerVisible;
   return `${companyFilter} and fields/${visibleField} eq true`;
@@ -82,7 +85,9 @@ function mapNpors(
     workforceId: resolveWorkforceId(candidateName, workforceIds),
     nporsNumber: asNullableString(fields[nporsFields.nporsNumber]),
     trainingDate: asNullableString(fields[nporsFields.trainingDate]),
-    trainingAddress: asNullableString(fields[nporsFields.trainingAddress]),
+    trainingAddress: stripSharePointHtml(
+      asNullableString(fields[nporsFields.trainingAddress]),
+    ),
     noviceOrEwt: asNullableString(fields[nporsFields.noviceOrEwt]),
     nporsCategory: asNullableString(fields[nporsFields.nporsCategory]),
     outcome: toCustomerOutcome(
@@ -113,7 +118,9 @@ function mapEusr(
     eusrNumber: asNullableString(fields[eusrFields.eusrNumber]),
     eusrCategory: asNullableString(fields[eusrFields.eusrCategory]),
     trainingDate: asNullableString(fields[eusrFields.trainingDate]),
-    trainingAddress: asNullableString(fields[eusrFields.trainingAddress]),
+    trainingAddress: stripSharePointHtml(
+      asNullableString(fields[eusrFields.trainingAddress]),
+    ),
     outcome: toCustomerOutcome(
       asNullableString(fields[eusrFields.trainingOutcome]),
     ),
@@ -141,8 +148,8 @@ function mapStreetworks(
     workforceId: resolveWorkforceId(candidateName, workforceIds),
     swqrNumber: asNullableString(fields[streetworksFields.swqrNumber]),
     trainingDate: asNullableString(fields[streetworksFields.trainingDate]),
-    trainingAddress: asNullableString(
-      fields[streetworksFields.trainingAddress],
+    trainingAddress: stripSharePointHtml(
+      asNullableString(fields[streetworksFields.trainingAddress]),
     ),
     course: asNullableString(fields[streetworksFields.course]),
     streetworksCategory: asNullableString(
@@ -179,7 +186,9 @@ function mapInHouse(
     workforceId: resolveWorkforceId(candidateName, workforceIds),
     course,
     trainingDate: asNullableString(fields[inHouseFields.courseDate]),
-    trainingAddress: asNullableString(fields[inHouseFields.trainingAddress]),
+    trainingAddress: stripSharePointHtml(
+      asNullableString(fields[inHouseFields.trainingAddress]),
+    ),
     expiry: asNullableString(fields[inHouseFields.expiryDate]),
     outcome: toCustomerOutcome(
       asNullableString(fields[inHouseFields.trainingOutcome]),
@@ -198,7 +207,7 @@ export async function getCustomerNporsRecords(
   const companyName = await resolveCompanyName(companyId);
   const [items, workforceIds] = await Promise.all([
     getListItemsByKey("nporsRegister", {
-      filter: companyAndVisibleFilter("nporsRegister", companyName),
+      filter: companyAndVisibleFilter("nporsRegister", companyId, companyName),
       top: 5000,
     }),
     getWorkforceIdByCandidateName(companyName),
@@ -225,7 +234,7 @@ export async function getCustomerEusrRecords(
   const companyName = await resolveCompanyName(companyId);
   const [items, workforceIds] = await Promise.all([
     getListItemsByKey("eusrRegister", {
-      filter: companyAndVisibleFilter("eusrRegister", companyName),
+      filter: companyAndVisibleFilter("eusrRegister", companyId, companyName),
       top: 5000,
     }),
     getWorkforceIdByCandidateName(companyName),
@@ -256,7 +265,7 @@ export async function getCustomerStreetworksRecords(
   const companyName = await resolveCompanyName(companyId);
   const [items, workforceIds] = await Promise.all([
     getListItemsByKey("nrswaRegister", {
-      filter: companyAndVisibleFilter("nrswaRegister", companyName),
+      filter: companyAndVisibleFilter("nrswaRegister", companyId, companyName),
       top: 5000,
     }),
     getWorkforceIdByCandidateName(companyName),
@@ -283,7 +292,11 @@ export async function getCustomerInHouseRecords(
   const companyName = await resolveCompanyName(companyId);
   const [items, workforceIds] = await Promise.all([
     getListItemsByKey("inHouseCertificates", {
-      filter: companyAndVisibleFilter("inHouseCertificates", companyName),
+      filter: companyAndVisibleFilter(
+        "inHouseCertificates",
+        companyId,
+        companyName,
+      ),
       top: 5000,
     }),
     getWorkforceIdByCandidateName(companyName),

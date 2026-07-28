@@ -1,24 +1,24 @@
 import "server-only";
 
 import {
-  createAdminMatrix,
   listAdminCompanies,
   listAdminWorkforce,
-  updateAdminMatrix,
   type AdminMatrixRecord,
   type AdminRegisterKey,
   type AdminTrainingRecord,
   type AdminWorkforceRecord,
 } from "@/lib/services/adminCrudService";
 import { computeMatrixStatusFromDates } from "@/lib/services/expiryStatusService";
-import { getSharePointFields } from "@/lib/schema/sharepointSchema";
 import {
-  asBoolean,
-  asLookupOrString,
-  asNullableString,
-  asString,
+  MATRIX_CATEGORY_EXPIRY_COLUMNS,
+} from "@/lib/services/bulkUpload/matrixExpiryFieldMap";
+import {
+  listTrainingMatrixExampleRows,
+  stripExampleMatrixId,
+  upsertTrainingMatrixExampleRow,
+} from "@/lib/services/bulkUpload/trainingMatrixExampleService";
+import {
   getListItemByKey,
-  getListItemsByKey,
   listHasColumn,
   updateListItemFieldsByKey,
 } from "@/lib/services/sharePointListService";
@@ -37,29 +37,13 @@ import type { Company } from "@/types/models";
 
 export type { MatrixSyncResult, MatrixSyncResultItem };
 
-const NPORS_COLUMN_BY_CODE: Record<
-  string,
-  keyof Pick<
-    AdminMatrixRecord,
-    | "n001Expiry"
-    | "n003Expiry"
-    | "n004Expiry"
-    | "n010Expiry"
-    | "n020Expiry"
-    | "n021Expiry"
-    | "n027Expiry"
-    | "n100Expiry"
-  >
-> = {
-  N001: "n001Expiry",
-  N003: "n003Expiry",
-  N004: "n004Expiry",
-  N010: "n010Expiry",
-  N020: "n020Expiry",
-  N021: "n021Expiry",
-  N027: "n027Expiry",
-  N100: "n100Expiry",
-};
+/** NPORS category code → Excel / Training matrix example column header. */
+const NPORS_HEADER_BY_CODE: Record<string, string> = Object.fromEntries(
+  MATRIX_CATEGORY_EXPIRY_COLUMNS.map((column) => [
+    column.code.toUpperCase(),
+    column.header,
+  ]),
+);
 
 export interface MatrixSyncOptions {
   dryRun?: boolean;
@@ -131,55 +115,68 @@ type MatrixRowWithLookups = AdminMatrixRecord & {
   candidateLookupId: string | null;
   companyLookupId: string | null;
   workforceNumber: string | null;
+  /** Raw SharePoint item id on Training matrix example (no `example:` prefix). */
+  exampleItemId: string | null;
 };
 
-async function loadMatrixRowsWithLookups(): Promise<MatrixRowWithLookups[]> {
-  const f = getSharePointFields("trainingMatrix");
-  const items = await getListItemsByKey("trainingMatrix", { top: 5000 });
-  const rows: MatrixRowWithLookups[] = [];
+function exampleRowToMatrix(
+  example: Awaited<ReturnType<typeof listTrainingMatrixExampleRows>>[number],
+  workforce: AdminWorkforceRecord | null,
+  companyByName: Map<string, Company>,
+): MatrixRowWithLookups {
+  const company =
+    (workforce?.companyName
+      ? companyByName.get(nameKey(workforce.companyName))
+      : null) ?? null;
 
-  for (const item of items) {
-    const candidateName =
-      asLookupOrString(item.fields[f.candidateName]) ??
-      asString(item.fields[f.candidateName]);
-    if (!candidateName) continue;
+  return {
+    id: `example:${example.id}`,
+    candidateName: example.candidateName,
+    companyName: workforce?.companyName ?? company?.companyName ?? null,
+    department: workforce?.department ?? null,
+    dateOfBirth: example.dateOfBirth ?? workforce?.dateOfBirth ?? null,
+    overallStatus: null,
+    needsReview: !example.nextExpiryDate,
+    matrixNotes: null,
+    nextExpiryDate: example.nextExpiryDate,
+    n001Expiry: example.columnValues["N001 - Ind FLT"] ?? null,
+    n003Expiry: example.columnValues["N003 - Reach Lift Truck"] ?? null,
+    n004Expiry: example.columnValues["N004 - Lorry Mounted Lift Truck"] ?? null,
+    n010Expiry: example.columnValues["N010 - Telescopic Handler"] ?? null,
+    n020Expiry: example.columnValues["N020 - Tiltrotator System"] ?? null,
+    n021Expiry: example.columnValues["N021 - Suction Excavator"] ?? null,
+    n027Expiry:
+      example.columnValues["N027 - Excavation Marshal - Banksperson"] ?? null,
+    n100Expiry: example.columnValues["N100 - Exc Crane"] ?? null,
+    columnValues: { ...example.columnValues },
+    candidateLookupId: workforce?.id ?? null,
+    companyLookupId: company?.id ?? null,
+    workforceNumber: workforce?.workforceNumber ?? null,
+    exampleItemId: example.id,
+  };
+}
 
-    rows.push({
-      id: item.id,
-      candidateName,
-      companyName:
-        asLookupOrString(item.fields[f.companyName]) ??
-        asLookupOrString(item.fields[f.matrixCompany]),
-      department: asNullableString(item.fields[f.department]),
-      dateOfBirth: null,
-      overallStatus: asNullableString(item.fields[f.overallStatus]),
-      needsReview: asBoolean(item.fields[f.needsReview]),
-      matrixNotes: asNullableString(item.fields[f.matrixNotes]),
-      nextExpiryDate: asNullableString(item.fields[f.nextExpiryDate]),
-      n001Expiry: asNullableString(item.fields[f.n001Expiry]),
-      n003Expiry: asNullableString(item.fields[f.n003Expiry]),
-      n004Expiry: asNullableString(item.fields[f.n004Expiry]),
-      n010Expiry: asNullableString(item.fields[f.n010Expiry]),
-      n020Expiry: asNullableString(item.fields[f.n020Expiry]),
-      n021Expiry: asNullableString(item.fields[f.n021Expiry]),
-      n027Expiry: asNullableString(item.fields[f.n027Expiry]),
-      n100Expiry: asNullableString(item.fields[f.n100Expiry]),
-      columnValues: {},
-      candidateLookupId:
-        extractLookupIdFromFields(item.fields, f.candidateName) ??
-        extractLookupIdFromFields(item.fields, "CandidateName"),
-      companyLookupId:
-        extractLookupIdFromFields(item.fields, f.matrixCompany) ??
-        extractLookupIdFromFields(item.fields, f.companyName),
-      workforceNumber:
-        asLookupOrString(
-          item.fields.Candidate_x0020_Name_x003a__x002,
-        ) ??
-        asNullableString(item.fields.WorkforceNumber),
-    });
+async function loadMatrixRowsWithLookups(
+  workforce: AdminWorkforceRecord[],
+  companies: Company[],
+): Promise<MatrixRowWithLookups[]> {
+  const exampleRows = await listTrainingMatrixExampleRows();
+  const workforceByName = new Map<string, AdminWorkforceRecord>();
+  for (const row of workforce) {
+    const key = nameKey(row.candidateName);
+    if (key && !workforceByName.has(key)) workforceByName.set(key, row);
   }
+  const companyByName = new Map(
+    companies.map((c) => [nameKey(c.companyName), c] as const),
+  );
 
-  return rows;
+  return exampleRows.map((example) =>
+    exampleRowToMatrix(
+      example,
+      workforceByName.get(nameKey(example.candidateName)) ?? null,
+      companyByName,
+    ),
+  );
 }
 
 type ResolvedCandidate = {
@@ -276,6 +273,24 @@ function findMatrixRow(
   workforce: AdminWorkforceRecord,
   company: Company,
 ) {
+  // Example list is keyed by candidate Title/Name — prefer exact name match first
+  // to avoid creating duplicates when lookup IDs are absent on Excel imports.
+  const byName = rows.filter(
+    (row) => nameKey(row.candidateName) === nameKey(workforce.candidateName),
+  );
+  if (byName.length === 1) return byName[0]!;
+  if (byName.length > 1) {
+    const forCompany = byName.filter(
+      (row) =>
+        row.companyLookupId === company.id ||
+        nameKey(row.companyName) === nameKey(company.companyName) ||
+        normalizeCompanyKey(row.companyName) ===
+          normalizeCompanyKey(company.companyName),
+    );
+    if (forCompany.length >= 1) return forCompany[0]!;
+    return byName[0]!;
+  }
+
   const byCandidateId = rows.filter(
     (row) => row.candidateLookupId && row.candidateLookupId === workforce.id,
   );
@@ -286,8 +301,7 @@ function findMatrixRow(
         row.companyLookupId === company.id ||
         nameKey(row.companyName) === nameKey(company.companyName),
     );
-    if (forCompany.length === 1) return forCompany[0]!;
-    if (forCompany.length > 1) return forCompany[0]!;
+    if (forCompany.length >= 1) return forCompany[0]!;
     return byCandidateId[0]!;
   }
 
@@ -307,14 +321,6 @@ function findMatrixRow(
     }
   }
 
-  const byNameCompany = rows.filter(
-    (row) =>
-      nameKey(row.candidateName) === nameKey(workforce.candidateName) &&
-      (nameKey(row.companyName) === nameKey(company.companyName) ||
-        normalizeCompanyKey(row.companyName) ===
-          normalizeCompanyKey(company.companyName)),
-  );
-  if (byNameCompany.length >= 1) return byNameCompany[0]!;
   return null;
 }
 
@@ -378,18 +384,22 @@ function buildSummary(items: MatrixSyncResultItem[]) {
 async function loadSyncContext(
   options: MatrixSyncOptions,
 ): Promise<SyncContext> {
-  const [companies, workforce, matrixRows, registers] = await Promise.all([
+  const [companies, workforce] = await Promise.all([
     listAdminCompanies(),
     listAdminWorkforce(),
-    loadMatrixRowsWithLookups(),
+  ]);
+  const [matrixRows, registers] = await Promise.all([
+    loadMatrixRowsWithLookups(workforce, companies),
     options.focusRecords?.length
       ? Promise.resolve(options.focusRecords)
       : listAllNormalizedRegisters(),
   ]);
 
   const [matrixSyncedAt, automationStatus] = await Promise.all([
-    listHasColumn("trainingMatrix", "MatrixSyncedAt"),
-    listHasColumn("trainingMatrix", "AutomationStatus"),
+    listHasColumn("trainingMatrixExample", "MatrixSyncedAt").catch(() => false),
+    listHasColumn("trainingMatrixExample", "AutomationStatus").catch(
+      () => false,
+    ),
   ]);
 
   return {
@@ -403,7 +413,7 @@ async function loadSyncContext(
 }
 
 async function writeOptionalSyncMeta(
-  matrixRowId: string,
+  exampleItemId: string,
   optionalColumns: SyncContext["optionalColumns"],
   dryRun: boolean,
 ): Promise<string[]> {
@@ -424,7 +434,11 @@ async function writeOptionalSyncMeta(
     updated.push("AutomationStatus");
   }
   if (Object.keys(payload).length > 0) {
-    await updateListItemFieldsByKey("trainingMatrix", matrixRowId, payload);
+    await updateListItemFieldsByKey(
+      "trainingMatrixExample",
+      exampleItemId,
+      payload,
+    );
   }
   return updated;
 }
@@ -451,98 +465,37 @@ async function syncOneCandidate(
   let matrixRow = findMatrixRow(ctx.matrixRows, workforce, company);
   let matrixRowCreated = false;
 
-  if (!matrixRow) {
-    if (!workforce.candidateName.trim() || !company.companyName.trim()) {
-      return emptyResultItem({
-        candidate: workforce.candidateName,
-        company: company.companyName,
-        candidateId: workforce.id,
-        companyId: company.id,
-        registerSources: sources,
-        skipped: true,
-        skipReason:
-          "Not enough candidate/company information to create matrix row.",
-        warnings: ["Matrix row missing and cannot be created safely."],
-      });
-    }
+  // Merge-safe column map starts from existing example row (or blank Name/DOB).
+  const columnValues: Record<string, string | null> = {
+    ...(matrixRow?.columnValues ?? {}),
+    Name: workforce.candidateName,
+    DOB:
+      matrixRow?.columnValues?.DOB ??
+      matrixRow?.dateOfBirth ??
+      workforce.dateOfBirth ??
+      null,
+  };
 
-    if (ctx.dryRun) {
-      matrixRowCreated = true;
-      fieldsUpdated.push("candidateName", "companyName", "(create)");
-    } else {
-      try {
-        const created = await createAdminMatrix({
-          candidateName: workforce.candidateName,
-          companyName: company.companyName,
-          department: workforce.department,
-          needsReview: true,
-          overallStatus: "Missing Data",
-        });
-        try {
-          await updateListItemFieldsByKey("trainingMatrix", created.id, {
-            CandidateNameLookupId: Number(workforce.id),
-            MatrixCompanyLookupId: Number(company.id),
-          });
-        } catch {
-          warnings.push(
-            "Matrix row created; lookup IDs could not be set (display names kept).",
-          );
-        }
-        matrixRow = {
-          ...created,
-          candidateLookupId: workforce.id,
-          companyLookupId: company.id,
-          workforceNumber: workforce.workforceNumber,
-        };
-        ctx.matrixRows.push(matrixRow);
-        matrixRowCreated = true;
-        fieldsUpdated.push("candidateName", "companyName");
-      } catch (error) {
-        errors.push(
-          error instanceof Error
-            ? error.message
-            : "Failed to create Training Matrix row.",
-        );
-        return emptyResultItem({
-          candidate: workforce.candidateName,
-          company: company.companyName,
-          candidateId: workforce.id,
-          companyId: company.id,
-          registerSources: sources,
-          errors,
-          skipped: true,
-          skipReason: "Create matrix row failed.",
-        });
-      }
-    }
+  if (
+    !matrixRow &&
+    (!workforce.candidateName.trim() || !company.companyName.trim())
+  ) {
+    return emptyResultItem({
+      candidate: workforce.candidateName,
+      company: company.companyName,
+      candidateId: workforce.id,
+      companyId: company.id,
+      registerSources: sources,
+      skipped: true,
+      skipReason:
+        "Not enough candidate/company information to create matrix row.",
+      warnings: ["Matrix row missing and cannot be created safely."],
+    });
   }
 
-  const draft: AdminMatrixRecord = matrixRow
-    ? { ...matrixRow }
-    : {
-        id: "dry-run-new",
-        candidateName: workforce.candidateName,
-        companyName: company.companyName,
-        department: workforce.department,
-        dateOfBirth: workforce.dateOfBirth ?? null,
-        overallStatus: null,
-        needsReview: true,
-        matrixNotes: null,
-        nextExpiryDate: null,
-        n001Expiry: null,
-        n003Expiry: null,
-        n004Expiry: null,
-        n010Expiry: null,
-        n020Expiry: null,
-        n021Expiry: null,
-        n027Expiry: null,
-        n100Expiry: null,
-        columnValues: {},
-      };
-
-  const patch: Record<string, unknown> = {};
   let workforceEusrExpiry: string | null | undefined;
   let workforceSwqrExpiry: string | null | undefined;
+  let inHouseExpiry: string | null | undefined;
   let needsReviewForced = false;
 
   for (const record of registersForMapping) {
@@ -564,7 +517,7 @@ async function syncOneCandidate(
     if (record.source === "NPORS") {
       if (record.nporsCategories.length === 0) {
         warnings.push(
-          `NPORS #${record.id}: Pass but no mapped NPORS category (N001–N100).`,
+          `NPORS #${record.id}: Pass but no mapped NPORS category (N###).`,
         );
         continue;
       }
@@ -574,13 +527,17 @@ async function syncOneCandidate(
         continue;
       }
       for (const code of record.nporsCategories) {
-        const field = NPORS_COLUMN_BY_CODE[code];
-        if (!field) continue;
-        const existing = draft[field];
+        const header = NPORS_HEADER_BY_CODE[code.toUpperCase()];
+        if (!header) {
+          warnings.push(
+            `NPORS #${record.id}: category ${code} has no Training matrix example column.`,
+          );
+          continue;
+        }
+        const existing = columnValues[header];
         if (shouldApplyPassExpiry(existing, record.expiry, "Pass")) {
-          draft[field] = record.expiry;
-          patch[field] = record.expiry;
-          if (!fieldsUpdated.includes(field)) fieldsUpdated.push(field);
+          columnValues[header] = record.expiry;
+          if (!fieldsUpdated.includes(header)) fieldsUpdated.push(header);
         } else if (existing) {
           warnings.push(
             `NPORS ${code}: kept existing matrix date (register not newer).`,
@@ -621,68 +578,140 @@ async function syncOneCandidate(
       if (!record.expiry) {
         needsReviewForced = true;
         warnings.push(`In-House #${record.id}: Pass but missing ExpiryDate.`);
+        continue;
+      }
+      if (
+        inHouseExpiry === undefined ||
+        shouldApplyPassExpiry(inHouseExpiry, record.expiry, "Pass")
+      ) {
+        inHouseExpiry = record.expiry;
       }
     }
   }
 
-  const inHousePassExpiries = registersForMapping
-    .filter(
-      (r) =>
-        r.source === "In-House" && r.trainingOutcome === "Pass" && r.expiry,
-    )
-    .map((r) => r.expiry);
-
-  const status = computeMatrixStatusFromDates([
-    draft.n001Expiry,
-    draft.n003Expiry,
-    draft.n004Expiry,
-    draft.n010Expiry,
-    draft.n020Expiry,
-    draft.n021Expiry,
-    draft.n027Expiry,
-    draft.n100Expiry,
-    workforceEusrExpiry,
-    workforceSwqrExpiry,
-    ...inHousePassExpiries,
-  ]);
-
-  if (draft.nextExpiryDate !== status.nextExpiryDate) {
-    patch.nextExpiryDate = status.nextExpiryDate;
-    fieldsUpdated.push("nextExpiryDate");
-  }
-  if (draft.overallStatus !== status.overallStatus) {
-    patch.overallStatus = status.overallStatus;
-    fieldsUpdated.push("overallStatus");
-  }
-
-  const needsReview = needsReviewForced || status.needsReview;
-  if (draft.needsReview !== needsReview) {
-    patch.needsReview = needsReview;
-    fieldsUpdated.push("needsReview");
-  }
-
-  if (!draft.matrixNotes?.trim() && sources.length > 0) {
-    patch.matrixNotes = `Synced from ${sources.join(", ")} registers.`;
-    fieldsUpdated.push("matrixNotes");
-  }
-
-  if (ctx.dryRun) {
-    for (const key of Object.keys(patch)) {
-      if (!fieldsUpdated.includes(key)) fieldsUpdated.push(key);
+  if (workforceEusrExpiry) {
+    const existing = columnValues["EUSR Expiry"];
+    if (shouldApplyPassExpiry(existing, workforceEusrExpiry, "Pass")) {
+      columnValues["EUSR Expiry"] = workforceEusrExpiry;
+      if (!fieldsUpdated.includes("EUSR Expiry")) {
+        fieldsUpdated.push("EUSR Expiry");
+      }
     }
   }
 
-  if (!ctx.dryRun && matrixRow && Object.keys(patch).length > 0) {
+  if (workforceSwqrExpiry) {
+    const existing = columnValues["NRSWA Expiry"];
+    if (shouldApplyPassExpiry(existing, workforceSwqrExpiry, "Pass")) {
+      columnValues["NRSWA Expiry"] = workforceSwqrExpiry;
+      if (!fieldsUpdated.includes("NRSWA Expiry")) {
+        fieldsUpdated.push("NRSWA Expiry");
+      }
+    }
+  }
+
+  // In-House has no dedicated wide column on the Excel template — status still uses it.
+  const statusDates = [
+    ...Object.entries(columnValues)
+      .filter(([key]) => key !== "Name" && key !== "DOB")
+      .map(([, value]) => value),
+    workforceEusrExpiry,
+    workforceSwqrExpiry,
+    inHouseExpiry,
+  ];
+  const status = computeMatrixStatusFromDates(statusDates);
+  const needsReview = needsReviewForced || status.needsReview;
+
+  if (ctx.dryRun) {
+    if (needsReview) fieldsUpdated.push("needsReview");
+    if (status.nextExpiryDate) fieldsUpdated.push("nextExpiryDate");
+  }
+
+  const willCreate = !matrixRow && fieldsUpdated.length > 0;
+  if (willCreate) {
+    matrixRowCreated = true;
+    if (ctx.dryRun && !fieldsUpdated.includes("(create)")) {
+      fieldsUpdated.push("Name", "(create)");
+    }
+  }
+
+  if (!ctx.dryRun && fieldsUpdated.length > 0) {
     try {
-      const updated = await updateAdminMatrix(matrixRow.id, patch);
-      Object.assign(matrixRow, updated);
+      const upserted = await upsertTrainingMatrixExampleRow({
+        candidateName: workforce.candidateName,
+        existingItemId:
+          matrixRow?.exampleItemId ??
+          stripExampleMatrixId(matrixRow?.id) ??
+          null,
+        source: columnValues,
+      });
+      const nextRow: MatrixRowWithLookups = {
+        id: `example:${upserted.id}`,
+        candidateName: workforce.candidateName,
+        companyName: company.companyName,
+        department: workforce.department,
+        dateOfBirth: workforce.dateOfBirth ?? columnValues.DOB ?? null,
+        overallStatus: status.overallStatus,
+        needsReview,
+        matrixNotes: null,
+        nextExpiryDate: status.nextExpiryDate,
+        n001Expiry: columnValues["N001 - Ind FLT"] ?? null,
+        n003Expiry: columnValues["N003 - Reach Lift Truck"] ?? null,
+        n004Expiry: columnValues["N004 - Lorry Mounted Lift Truck"] ?? null,
+        n010Expiry: columnValues["N010 - Telescopic Handler"] ?? null,
+        n020Expiry: columnValues["N020 - Tiltrotator System"] ?? null,
+        n021Expiry: columnValues["N021 - Suction Excavator"] ?? null,
+        n027Expiry:
+          columnValues["N027 - Excavation Marshal - Banksperson"] ?? null,
+        n100Expiry: columnValues["N100 - Exc Crane"] ?? null,
+        columnValues: { ...columnValues },
+        candidateLookupId: workforce.id,
+        companyLookupId: company.id,
+        workforceNumber: workforce.workforceNumber,
+        exampleItemId: upserted.id,
+      };
+      if (matrixRow) {
+        Object.assign(matrixRow, nextRow);
+      } else {
+        matrixRow = nextRow;
+        ctx.matrixRows.push(matrixRow);
+      }
+      if (upserted.created) {
+        matrixRowCreated = true;
+        if (!fieldsUpdated.includes("Name")) fieldsUpdated.push("Name");
+      }
     } catch (error) {
       errors.push(
         error instanceof Error
           ? error.message
-          : "Failed to update Training Matrix row.",
+          : "Failed to update Training matrix example row.",
       );
     }
+  } else if (ctx.dryRun && willCreate) {
+    matrixRow = {
+      id: "dry-run-new",
+      candidateName: workforce.candidateName,
+      companyName: company.companyName,
+      department: workforce.department,
+      dateOfBirth: workforce.dateOfBirth,
+      overallStatus: status.overallStatus,
+      needsReview,
+      matrixNotes: null,
+      nextExpiryDate: status.nextExpiryDate,
+      n001Expiry: columnValues["N001 - Ind FLT"] ?? null,
+      n003Expiry: columnValues["N003 - Reach Lift Truck"] ?? null,
+      n004Expiry: columnValues["N004 - Lorry Mounted Lift Truck"] ?? null,
+      n010Expiry: columnValues["N010 - Telescopic Handler"] ?? null,
+      n020Expiry: columnValues["N020 - Tiltrotator System"] ?? null,
+      n021Expiry: columnValues["N021 - Suction Excavator"] ?? null,
+      n027Expiry:
+        columnValues["N027 - Excavation Marshal - Banksperson"] ?? null,
+      n100Expiry: columnValues["N100 - Exc Crane"] ?? null,
+      columnValues: { ...columnValues },
+      candidateLookupId: workforce.id,
+      companyLookupId: company.id,
+      workforceNumber: workforce.workforceNumber,
+      exampleItemId: null,
+    };
   }
 
   if (!ctx.dryRun && workforceEusrExpiry) {
@@ -719,10 +748,13 @@ async function syncOneCandidate(
     fieldsUpdated.push("Workforce.SwqrExpiry");
   }
 
-  if (matrixRow && (fieldsUpdated.length > 0 || matrixRowCreated)) {
+  if (
+    matrixRow?.exampleItemId &&
+    (fieldsUpdated.length > 0 || matrixRowCreated)
+  ) {
     try {
       const meta = await writeOptionalSyncMeta(
-        matrixRow.id,
+        matrixRow.exampleItemId,
         ctx.optionalColumns,
         ctx.dryRun,
       );

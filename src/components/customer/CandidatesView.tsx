@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 
 import { Breadcrumbs } from "@/components/ui/Breadcrumbs";
 import { StatusBadge } from "@/components/ui/StatusBadge";
+import { formatDisplayDate } from "@/lib/training/expiryFilters";
 import type { WorkforceCandidate } from "@/types/models";
 
 import styles from "./customer.module.css";
@@ -23,10 +24,12 @@ export function CandidatesView({ companyName, candidates }: Props) {
     return candidates.filter((row) =>
       [
         row.candidateName,
+        row.companyName,
         row.department,
         row.workforceNumber,
         row.status,
         row.trainingManager,
+        row.supervisor,
       ]
         .filter(Boolean)
         .join(" ")
@@ -61,7 +64,7 @@ export function CandidatesView({ companyName, candidates }: Props) {
           <input
             className={styles.input}
             type="search"
-            placeholder="Search name, department, workforce number…"
+            placeholder="Search name, department, manager…"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
@@ -88,27 +91,37 @@ export function CandidatesView({ companyName, candidates }: Props) {
             <thead>
               <tr>
                 <th scope="col">Candidate</th>
-                <th scope="col">Workforce no.</th>
-                <th scope="col">Department</th>
+                <th scope="col">Company</th>
+                <th scope="col">Training Manager</th>
+                <th scope="col">Supervisor</th>
                 <th scope="col">Status</th>
-                <th scope="col">Training manager</th>
                 <th scope="col">Profile</th>
               </tr>
             </thead>
             <tbody>
               {filtered.map((row) => (
                 <tr key={row.id}>
-                  <td>{row.candidateName}</td>
                   <td>
-                    {row.workforceNumber?.trim() ? (
-                      row.workforceNumber
+                    <div className={styles.candidateNameCell}>
+                      <span>{row.candidateName}</span>
+                      {row.dateOfBirth?.trim() ? (
+                        <span className={styles.dobSecondary}>
+                          DOB {formatDisplayDate(row.dateOfBirth)}
+                        </span>
+                      ) : null}
+                    </div>
+                  </td>
+                  <td>{row.companyName?.trim() || companyName}</td>
+                  <td>
+                    {row.trainingManager?.trim() ? (
+                      row.trainingManager
                     ) : (
                       <span className={styles.muted}>—</span>
                     )}
                   </td>
                   <td>
-                    {row.department?.trim() ? (
-                      row.department
+                    {row.supervisor?.trim() ? (
+                      row.supervisor
                     ) : (
                       <span className={styles.muted}>—</span>
                     )}
@@ -124,18 +137,11 @@ export function CandidatesView({ companyName, candidates }: Props) {
                     />
                   </td>
                   <td>
-                    {row.trainingManager?.trim() ? (
-                      row.trainingManager
-                    ) : (
-                      <span className={styles.muted}>—</span>
-                    )}
-                  </td>
-                  <td>
                     <Link
                       className={styles.link}
                       href={`/customer/candidates/${row.id}`}
                     >
-                      View
+                      View Profile
                     </Link>
                   </td>
                 </tr>

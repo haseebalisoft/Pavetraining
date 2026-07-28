@@ -12,7 +12,7 @@ export function stripSharePointHtml(
     return raw;
   }
 
-  let text = raw
+  const text = raw
     .replace(/<\s*br\s*\/?\s*>/gi, "\n")
     .replace(/<\/\s*p\s*>/gi, "\n")
     .replace(/<[^>]+>/g, " ")

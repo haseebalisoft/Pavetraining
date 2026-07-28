@@ -38,7 +38,7 @@ const NAV_ITEMS: NavItem[] = [
       { href: "/admin/training-records/eusr", label: "EUSR Register" },
       {
         href: "/admin/training-records/streetworks",
-        label: "NRSWA / Streetworks",
+        label: "Streetworks Training",
       },
       {
         href: "/admin/training-records/in-house",

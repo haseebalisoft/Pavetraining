@@ -165,6 +165,7 @@ function workforceWritePayload(
   };
   assign("workforceNumber", fields.workforceNumber);
   assign("dateOfBirth", fields.dateOfBirth);
+  // Department is a Lookup → Departments list (resolved in create/update).
   assign("department", fields.department);
   assign("departmentText", fields.department);
   assign("status", fields.status ?? "Active");
@@ -217,6 +218,11 @@ function validateCandidateRow(
   if (!companyInput) {
     messages.push("Company Name is required.");
   }
+  if (!fields.email?.trim()) {
+    messages.push(
+      "Email is required in SharePoint Workforce List — row will fail without it.",
+    );
+  }
 
   const company = findCompanyByName(companies, companyInput);
   if (companyInput && !company) {
@@ -239,6 +245,19 @@ function validateCandidateRow(
   }
 
   if (!candidateName || !companyInput) {
+    return {
+      rowNumber,
+      status: "Error",
+      messages,
+      fields,
+      resolvedCompanyName: company?.companyName ?? null,
+      matchedEntityId: null,
+      matchedEntityName: null,
+      duplicateMatch: null,
+    };
+  }
+
+  if (!fields.email?.trim()) {
     return {
       rowNumber,
       status: "Error",

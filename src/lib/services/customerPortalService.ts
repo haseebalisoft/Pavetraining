@@ -15,6 +15,7 @@ import {
   asLookupOrString,
   asNullableString,
   asString,
+  buildFieldLookupIdEqualsFilter,
   buildSchemaFieldEqualsFilter,
   getListItemByKey,
   getListItemFileContent,
@@ -48,12 +49,20 @@ function companyAndVisibleFilter(
   listKey: "nvqRegister" | "customerDocuments" | "events" | "offersPromotions",
   companyFieldKey: string,
   companyName: string,
+  companyId?: string,
 ): string {
-  const companyFilter = buildSchemaFieldEqualsFilter(
-    listKey,
-    companyFieldKey,
-    companyName,
-  );
+  const id = Number(companyId);
+  let companyFilter: string;
+  if (listKey === "nvqRegister" && Number.isFinite(id)) {
+    // Admin writes NVQCompanyLookupId — prefer that over display-name text.
+    companyFilter = buildFieldLookupIdEqualsFilter("NVQCompanyLookupId", id);
+  } else {
+    companyFilter = buildSchemaFieldEqualsFilter(
+      listKey,
+      companyFieldKey,
+      companyName,
+    );
+  }
   const fields = getSharePointFields(listKey) as Record<string, string>;
   const visibleField = fields.customerVisible;
   return `${companyFilter} and fields/${visibleField} eq true`;
@@ -272,7 +281,12 @@ export async function getCustomerNvqRecords(
 ): Promise<CustomerNvqRecord[]> {
   const companyName = await resolveCompanyName(companyId);
   const items = await getListItemsByKey("nvqRegister", {
-    filter: companyAndVisibleFilter("nvqRegister", "companyName", companyName),
+    filter: companyAndVisibleFilter(
+      "nvqRegister",
+      "companyName",
+      companyName,
+      companyId,
+    ),
     top: 5000,
   });
 

@@ -312,6 +312,7 @@ export function AdminBulkUploadClient() {
           rows: preview.rows.map((row) => ({
             rowNumber: row.rowNumber,
             fields: row.fields,
+            source: row.source,
           })),
         }),
       });

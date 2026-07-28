@@ -176,7 +176,7 @@ const fields: AdminFieldConfig[] = [
     type: "select",
     options: [
       { value: "Active", label: "Active" },
-      { value: "Inactive", label: "Inactive" },
+      { value: "inactive", label: "Inactive" },
     ],
   },
   { name: "notes", label: "Notes", type: "textarea" },

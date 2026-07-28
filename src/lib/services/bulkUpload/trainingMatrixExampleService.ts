@@ -1,0 +1,315 @@
+import "server-only";
+
+import {
+  cachedSharePointRead,
+  sharePointListTag,
+} from "@/lib/cache/sharePointCache";
+import { getSharePointListId, getSharePointSiteApiRoot } from "@/lib/config/sharepoint";
+import { getGraphClient } from "@/lib/graph/graphClient";
+import { SHAREPOINT_LISTS } from "@/lib/schema/sharepointSchema";
+import { CLIENT_MATRIX_DISPLAY_HEADERS } from "@/lib/services/bulkUpload/clientTemplateHeaders";
+import {
+  getListItemsByKey,
+  createListItemByKey,
+  updateListItemFieldsByKey,
+  type SharePointListItem,
+} from "@/lib/services/sharePointListService";
+import { normalizeDateValue } from "@/lib/services/bulkUpload/parseSpreadsheet";
+
+export interface TrainingMatrixExampleRow {
+  id: string;
+  candidateName: string;
+  dateOfBirth: string | null;
+  columnValues: Record<string, string | null>;
+  nextExpiryDate: string | null;
+}
+
+const EXAMPLE_LIST_ENV =
+  SHAREPOINT_LISTS.trainingMatrixExample.listIdEnvVar;
+const EXAMPLE_LIST_DISPLAY_NAME =
+  SHAREPOINT_LISTS.trainingMatrixExample.displayName;
+
+/**
+ * Resolve Training matrix example list GUID from env, or look it up on SharePoint
+ * by display name and cache onto process.env for later getSharePointListId calls.
+ */
+export async function resolveTrainingMatrixExampleListId(): Promise<
+  string | null
+> {
+  const fromEnv = process.env[EXAMPLE_LIST_ENV]?.trim();
+  if (fromEnv) return fromEnv;
+
+  try {
+    const siteRoot = getSharePointSiteApiRoot();
+    const client = getGraphClient();
+    const escaped = EXAMPLE_LIST_DISPLAY_NAME.replace(/'/g, "''");
+    const response = (await client
+      .api(`${siteRoot}/lists`)
+      .filter(`displayName eq '${escaped}'`)
+      .select("id,displayName")
+      .top(5)
+      .get()) as { value?: Array<{ id?: string; displayName?: string }> };
+
+    const match = response.value?.find(
+      (list) =>
+        list.displayName?.trim().toLowerCase() ===
+        EXAMPLE_LIST_DISPLAY_NAME.trim().toLowerCase(),
+    );
+    const id = match?.id?.trim() || null;
+    if (id) {
+      process.env[EXAMPLE_LIST_ENV] = id;
+    }
+    return id;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeHeader(value: string): string {
+  return value.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/** Excel serial day number (SharePoint "From Excel" import) → YYYY-MM-DD. */
+export function excelSerialToIsoDate(value: unknown): string | null {
+  if (value == null || value === "") return null;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed || /^(—|–|-|n\/?a|null|none|0)$/i.test(trimmed)) return null;
+    if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) return trimmed.slice(0, 10);
+    const asNum = Number(trimmed);
+    if (!Number.isNaN(asNum) && asNum > 20000) {
+      return excelSerialToIsoDate(asNum);
+    }
+    const parsed = Date.parse(trimmed);
+    if (!Number.isNaN(parsed)) {
+      return new Date(parsed).toISOString().slice(0, 10);
+    }
+    return null;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value === 0) return null;
+    // Excel epoch 1899-12-30 (Graph/SharePoint Excel import serials)
+    const ms = Date.UTC(1899, 11, 30) + Math.round(value) * 86_400_000;
+    return new Date(ms).toISOString().slice(0, 10);
+  }
+  return null;
+}
+
+function earliestDate(values: Array<string | null | undefined>): string | null {
+  let min: number | null = null;
+  let iso: string | null = null;
+  for (const value of values) {
+    if (!value?.trim()) continue;
+    const t = new Date(value).getTime();
+    if (Number.isNaN(t)) continue;
+    if (min == null || t < min) {
+      min = t;
+      iso = value.slice(0, 10);
+    }
+  }
+  return iso;
+}
+
+export function earliestDateFromColumns(
+  columnValues: Record<string, string | null>,
+): string | null {
+  return earliestDate(
+    Object.entries(columnValues)
+      .filter(([key]) => key !== "Name" && key !== "DOB")
+      .map(([, value]) => value),
+  );
+}
+
+async function getExampleColumnMap(): Promise<Map<string, string>> {
+  const listId = getSharePointListId("trainingMatrixExample");
+  const siteRoot = getSharePointSiteApiRoot();
+
+  return cachedSharePointRead(
+    ["sp-matrix-example-columns", listId],
+    [sharePointListTag("trainingMatrixExample")],
+    async () => {
+      const client = getGraphClient();
+      const map = new Map<string, string>();
+      let url = `${siteRoot}/lists/${listId}/columns?$top=200`;
+      while (url) {
+        const page = (await client.api(url).get()) as {
+          value?: Array<{ name?: string; displayName?: string; readOnly?: boolean }>;
+          "@odata.nextLink"?: string;
+        };
+        for (const col of page.value ?? []) {
+          if (col.readOnly || !col.name || !col.displayName) continue;
+          if (col.name === "ContentType" || col.name === "Attachments") continue;
+          const display = normalizeHeader(col.displayName);
+          map.set(display.toLowerCase(), col.name);
+          // Title holds candidate Name in Excel import
+          if (col.name === "Title") {
+            map.set("name", col.name);
+          }
+        }
+        url = page["@odata.nextLink"]
+          ? page["@odata.nextLink"].replace(
+              /^https:\/\/graph\.microsoft\.com\/v1\.0/i,
+              "",
+            )
+          : "";
+      }
+      return map;
+    },
+    300,
+  );
+}
+
+function mapItemToRow(
+  item: SharePointListItem,
+  columnMap: Map<string, string>,
+): TrainingMatrixExampleRow | null {
+  const fields = item.fields ?? {};
+  const title =
+    typeof fields.Title === "string"
+      ? fields.Title.trim()
+      : typeof fields.LinkTitle === "string"
+        ? fields.LinkTitle.trim()
+        : "";
+  if (!title) return null;
+
+  const columnValues: Record<string, string | null> = { Name: title };
+
+  for (const header of CLIENT_MATRIX_DISPLAY_HEADERS) {
+    if (header === "Name") continue;
+    const internal =
+      columnMap.get(normalizeHeader(header).toLowerCase()) ?? null;
+    if (!internal) {
+      columnValues[header] = null;
+      continue;
+    }
+    const raw = fields[internal];
+    if (header === "DOB") {
+      columnValues[header] = excelSerialToIsoDate(raw);
+    } else {
+      columnValues[header] = excelSerialToIsoDate(raw);
+    }
+  }
+
+  const dateOfBirth = columnValues.DOB ?? null;
+  const nextExpiryDate = earliestDate(
+    CLIENT_MATRIX_DISPLAY_HEADERS.filter((h) => h !== "Name" && h !== "DOB").map(
+      (h) => columnValues[h],
+    ),
+  );
+
+  return {
+    id: item.id,
+    candidateName: title,
+    dateOfBirth,
+    columnValues,
+    nextExpiryDate,
+  };
+}
+
+/**
+ * Reads the Excel-imported "Training matrix example" list.
+ * Returns [] if the list cannot be resolved (env unset and SharePoint lookup fails).
+ */
+export async function listTrainingMatrixExampleRows(): Promise<
+  TrainingMatrixExampleRow[]
+> {
+  const listId = await resolveTrainingMatrixExampleListId();
+  if (!listId) {
+    return [];
+  }
+
+  try {
+    const [items, columnMap] = await Promise.all([
+      getListItemsByKey("trainingMatrixExample", { top: 5000 }),
+      getExampleColumnMap(),
+    ]);
+    return items
+      .map((item) => mapItemToRow(item, columnMap))
+      .filter((row): row is TrainingMatrixExampleRow => Boolean(row));
+  } catch {
+    return [];
+  }
+}
+
+export function mergeExampleColumnValues(
+  base: Record<string, string | null>,
+  example: Record<string, string | null> | undefined,
+): Record<string, string | null> {
+  if (!example) return base;
+  const merged = { ...base };
+  for (const [key, value] of Object.entries(example)) {
+    if (key === "Name") continue;
+    if (value?.trim()) merged[key] = value;
+  }
+  return merged;
+}
+
+/** ISO date → Excel serial day number (matches SharePoint From-Excel import). */
+export function isoToExcelSerial(iso: string | null | undefined): number | null {
+  if (!iso?.trim()) return null;
+  const text = iso.trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+  const [y, m, d] = text.split("-").map(Number);
+  const ms = Date.UTC(y, m - 1, d);
+  if (Number.isNaN(ms)) return null;
+  return Math.round((ms - Date.UTC(1899, 11, 30)) / 86_400_000);
+}
+
+/**
+ * Create or update a row on the Excel-imported Training matrix example list.
+ * Writes Excel serial numbers into field_N columns so SharePoint + portal stay aligned.
+ */
+export async function upsertTrainingMatrixExampleRow(input: {
+  candidateName: string;
+  /** Existing SharePoint item id (without `example:` prefix), if updating. */
+  existingItemId?: string | null;
+  /** Spreadsheet cells keyed by template headers (Name, DOB, CSCS Expiry, N001 - …). */
+  source: Record<string, string | null>;
+}): Promise<{ id: string; created: boolean }> {
+  const name = input.candidateName.trim();
+  if (!name) throw new Error("Candidate name is required for matrix example upsert.");
+
+  const listId = await resolveTrainingMatrixExampleListId();
+  if (!listId) {
+    throw new Error(
+      `SharePoint list "${EXAMPLE_LIST_DISPLAY_NAME}" not found. Set ${EXAMPLE_LIST_ENV} or create the list.`,
+    );
+  }
+
+  const columnMap = await getExampleColumnMap();
+  const fields: Record<string, unknown> = { Title: name };
+
+  for (const header of CLIENT_MATRIX_DISPLAY_HEADERS) {
+    if (header === "Name") continue;
+    const internal = columnMap.get(normalizeHeader(header).toLowerCase());
+    if (!internal) continue;
+
+    const raw =
+      input.source[header] ??
+      input.source[normalizeHeader(header)] ??
+      null;
+    const asText =
+      raw == null ? null : typeof raw === "string" ? raw : String(raw);
+    const iso =
+      normalizeDateValue(asText) ?? excelSerialToIsoDate(raw);
+    const serial = isoToExcelSerial(iso);
+    fields[internal] = serial ?? 0;
+  }
+
+  if (input.existingItemId?.trim()) {
+    await updateListItemFieldsByKey(
+      "trainingMatrixExample",
+      input.existingItemId.trim(),
+      fields,
+    );
+    return { id: input.existingItemId.trim(), created: false };
+  }
+
+  const created = await createListItemByKey("trainingMatrixExample", fields);
+  return { id: created.id, created: true };
+}
+
+export function stripExampleMatrixId(id: string | null | undefined): string | null {
+  if (!id?.trim()) return null;
+  return id.startsWith("example:") ? id.slice("example:".length) : id.trim();
+}
