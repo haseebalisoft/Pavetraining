@@ -126,21 +126,35 @@ type ExampleColumnInfo = {
   storage: "number" | "dateTime" | "other";
 };
 
-async function getExampleColumnMap(): Promise<Map<string, ExampleColumnInfo>> {
+/** Collapse dashes/degrees so Excel headers match SharePoint display names. */
+function headerLookupKey(value: string): string {
+  return normalizeHeader(value)
+    .toLowerCase()
+    .replace(/[–—]/g, "-")
+    .replace(/[°º]/g, "");
+}
+
+/**
+ * Column map must be a plain object for Next.js unstable_cache (JSON).
+ * Returning a Map serializes to {} and later .get() throws → empty matrix UI.
+ */
+async function getExampleColumnRecords(): Promise<
+  Record<string, ExampleColumnInfo>
+> {
   const listId =
     process.env[EXAMPLE_LIST_ENV]?.trim() ??
     (await resolveTrainingMatrixExampleListId());
   if (!listId) {
-    return new Map();
+    return {};
   }
   const siteRoot = getSharePointSiteApiRoot();
 
   return cachedSharePointRead(
-    ["sp-matrix-example-columns-v2", listId],
+    ["sp-matrix-example-columns-v3", listId],
     [sharePointListTag("trainingMatrixExample")],
     async () => {
       const client = getGraphClient();
-      const map = new Map<string, ExampleColumnInfo>();
+      const records: Record<string, ExampleColumnInfo> = {};
       let url = `${siteRoot}/lists/${listId}/columns?$top=200`;
       while (url) {
         const page = (await client.api(url).get()) as {
@@ -156,7 +170,6 @@ async function getExampleColumnMap(): Promise<Map<string, ExampleColumnInfo>> {
         for (const col of page.value ?? []) {
           if (col.readOnly || !col.name || !col.displayName) continue;
           if (col.name === "ContentType" || col.name === "Attachments") continue;
-          const display = normalizeHeader(col.displayName);
           const info: ExampleColumnInfo = {
             name: col.name,
             storage: col.dateTime
@@ -165,10 +178,12 @@ async function getExampleColumnMap(): Promise<Map<string, ExampleColumnInfo>> {
                 ? "number"
                 : "other",
           };
-          map.set(display.toLowerCase(), info);
-          // Title holds candidate Name in Excel import
+          const key = headerLookupKey(col.displayName);
+          records[key] = info;
+          // Also index by exact lower display for simple headers like "dob"
+          records[normalizeHeader(col.displayName).toLowerCase()] = info;
           if (col.name === "Title") {
-            map.set("name", info);
+            records.name = info;
           }
         }
         url = page["@odata.nextLink"]
@@ -178,10 +193,15 @@ async function getExampleColumnMap(): Promise<Map<string, ExampleColumnInfo>> {
             )
           : "";
       }
-      return map;
+      return records;
     },
     300,
   );
+}
+
+async function getExampleColumnMap(): Promise<Map<string, ExampleColumnInfo>> {
+  const records = await getExampleColumnRecords();
+  return new Map(Object.entries(records));
 }
 
 function mapItemToRow(
@@ -195,16 +215,21 @@ function mapItemToRow(
       ? fields.Title.trim()
       : typeof fields.LinkTitle === "string"
         ? fields.LinkTitle.trim()
-        : nameInternal && typeof fields[nameInternal] === "string"
-          ? String(fields[nameInternal]).trim()
-          : "";
+        : typeof fields.CandidateNameText === "string"
+          ? fields.CandidateNameText.trim()
+          : nameInternal && typeof fields[nameInternal] === "string"
+            ? String(fields[nameInternal]).trim()
+            : "";
   if (!title) return null;
 
   const columnValues: Record<string, string | null> = { Name: title };
 
   for (const header of CLIENT_MATRIX_DISPLAY_HEADERS) {
     if (header === "Name") continue;
-    const col = columnMap.get(normalizeHeader(header).toLowerCase()) ?? null;
+    const col =
+      columnMap.get(headerLookupKey(header)) ??
+      columnMap.get(normalizeHeader(header).toLowerCase()) ??
+      null;
     if (!col) {
       columnValues[header] = null;
       continue;
@@ -230,8 +255,8 @@ function mapItemToRow(
 }
 
 /**
- * Reads the Excel-imported "Training matrix example" list.
- * Returns [] if the list cannot be resolved (env unset and SharePoint lookup fails).
+ * Reads SharePoint "Training Matrix Update" (wide DateTime matrix list).
+ * Returns [] only when the list id cannot be resolved.
  */
 export async function listTrainingMatrixExampleRows(): Promise<
   TrainingMatrixExampleRow[]
@@ -242,13 +267,22 @@ export async function listTrainingMatrixExampleRows(): Promise<
   }
 
   try {
-    const items = await getListItemsByKey("trainingMatrixExample", { top: 5000 });
-    const columnMap = await getExampleColumnMap().catch(() => new Map());
+    const items = await getListItemsByKey("trainingMatrixExample", {
+      top: 5000,
+    });
+    const columnMap = await getExampleColumnMap().catch((error) => {
+      console.error(
+        "[trainingMatrixExample] column map failed; showing names only:",
+        error,
+      );
+      return new Map<string, ExampleColumnInfo>();
+    });
     return items
       .map((item) => mapItemToRow(item, columnMap))
       .filter((row): row is TrainingMatrixExampleRow => Boolean(row));
-  } catch {
-    return [];
+  } catch (error) {
+    console.error("[trainingMatrixExample] list rows failed:", error);
+    throw error;
   }
 }
 
@@ -312,7 +346,7 @@ export async function upsertTrainingMatrixExampleRow(input: {
 
   for (const header of CLIENT_MATRIX_DISPLAY_HEADERS) {
     if (header === "Name") continue;
-    const col = columnMap.get(normalizeHeader(header).toLowerCase());
+    const col = columnMap.get(headerLookupKey(header));
     if (!col) continue;
 
     const raw =
