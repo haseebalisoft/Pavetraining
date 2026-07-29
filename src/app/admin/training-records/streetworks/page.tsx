@@ -2,19 +2,29 @@ import { AdminRegisterClient } from "@/components/admin/pages/AdminRegisterClien
 import {
   listAdminCompanies,
   listAdminRegister,
+  listAdminWorkforce,
 } from "@/lib/services/adminCrudService";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminStreetworksPage() {
-  const [companies, records] = await Promise.all([
+  const [companies, workforce, records] = await Promise.all([
     listAdminCompanies(),
+    listAdminWorkforce(),
     listAdminRegister("nrswaRegister"),
   ]);
   return (
     <AdminRegisterClient
       kind="streetworks"
       companies={companies}
+      workforce={workforce.map((row) => ({
+        id: row.id,
+        candidateName: row.candidateName,
+        companyName: row.companyName,
+        nporsNumbers: row.nporsNumbers,
+        eusrNumber: row.eusrNumber,
+        swqrNumber: row.swqrNumber,
+      }))}
       initialRows={records}
     />
   );

@@ -21,7 +21,17 @@ export type AdminFieldType =
   | "textarea"
   | "select"
   | "boolean"
-  | "company";
+  | "company"
+  | "workforce";
+
+export interface AdminWorkforceOption {
+  id: string;
+  candidateName: string;
+  companyName: string;
+  nporsNumbers?: string | null;
+  eusrNumber?: string | null;
+  swqrNumber?: string | null;
+}
 
 export interface AdminFieldConfig {
   name: string;
@@ -59,6 +69,8 @@ interface AdminCrudPageProps<T extends { id: string }> {
   initialRows: T[];
   mapResponse: (payload: unknown) => T[];
   companies?: Company[];
+  /** Workforce options for type="workforce" fields (auto-fills name/company). */
+  workforce?: AdminWorkforceOption[];
   enableCompanyFilter?: boolean;
   getCompanyName?: (row: T) => string | null | undefined;
   searchKeys?: Array<(row: T) => string | null | undefined>;
@@ -124,6 +136,25 @@ function buildInitialForm(
   return state;
 }
 
+function matchWorkforceId(
+  form: FormState,
+  workforce: AdminWorkforceOption[],
+): string {
+  const name = String(form.candidateName ?? "").trim().toLowerCase();
+  const company = String(form.companyName ?? "").trim().toLowerCase();
+  if (!name) return "";
+  const exact =
+    workforce.find(
+      (row) =>
+        row.candidateName.trim().toLowerCase() === name &&
+        row.companyName.trim().toLowerCase() === company,
+    ) ??
+    workforce.find(
+      (row) => row.candidateName.trim().toLowerCase() === name,
+    );
+  return exact?.id ?? "";
+}
+
 async function readError(response: Response): Promise<string> {
   return readPublicApiError(response);
 }
@@ -143,6 +174,7 @@ export function AdminCrudPage<T extends { id: string }>({
   initialRows,
   mapResponse,
   companies = [],
+  workforce = [],
   enableCompanyFilter = false,
   getCompanyName,
   searchKeys,
@@ -380,6 +412,10 @@ export function AdminCrudPage<T extends { id: string }>({
           body.companyName = company.companyName;
         }
       }
+      const workforceId = matchWorkforceId(next, workforce);
+      if (workforceId) {
+        body.workforceId = workforceId;
+      }
 
       const isCreate = !editing;
       if (!isCreate && !updateUrl) {
@@ -400,8 +436,25 @@ export function AdminCrudPage<T extends { id: string }>({
 
       const payload = (await response.json().catch(() => null)) as {
         warning?: string;
+        matrixSync?: {
+          summary?: {
+            updated?: number;
+            created?: number;
+            skipped?: number;
+            errors?: number;
+          };
+        };
       } | null;
-      pushToast(isCreate ? "Record created." : "Record updated.");
+      const sync = payload?.matrixSync?.summary;
+      const syncNote = sync
+        ? ` Matrix sync: ${sync.updated ?? 0} updated, ${sync.created ?? 0} created` +
+          (sync.errors ? `, ${sync.errors} error(s)` : "") +
+          (sync.skipped ? `, ${sync.skipped} skipped` : "") +
+          "."
+        : "";
+      pushToast(
+        (isCreate ? "Record created." : "Record updated.") + syncNote,
+      );
       if (payload?.warning?.trim()) {
         pushToast(payload.warning, "error");
       }
@@ -692,6 +745,55 @@ export function AdminCrudPage<T extends { id: string }>({
                       }))
                     }
                   />
+                </label>
+              );
+            } else if (field.type === "workforce") {
+              const selectedId = matchWorkforceId(form, workforce);
+              control = (
+                <label className={styles.field}>
+                  <span className={styles.fieldLabel}>{field.label}</span>
+                  <select
+                    className={styles.select}
+                    value={selectedId}
+                    disabled={field.readOnly}
+                    onChange={(event) => {
+                      const hit = workforce.find(
+                        (row) => row.id === event.target.value,
+                      );
+                      if (!hit) {
+                        setForm((current) => ({
+                          ...current,
+                          candidateName: "",
+                          companyName: current.companyName,
+                        }));
+                        return;
+                      }
+                      setForm((current) => ({
+                        ...current,
+                        candidateName: hit.candidateName,
+                        companyName: hit.companyName,
+                        nporsNumber:
+                          String(current.nporsNumber ?? "").trim() ||
+                          hit.nporsNumbers ||
+                          "",
+                        eusrNumber:
+                          String(current.eusrNumber ?? "").trim() ||
+                          hit.eusrNumber ||
+                          "",
+                        swqrNumber:
+                          String(current.swqrNumber ?? "").trim() ||
+                          hit.swqrNumber ||
+                          "",
+                      }));
+                    }}
+                  >
+                    <option value="">Select candidate…</option>
+                    {workforce.map((row) => (
+                      <option key={row.id} value={row.id}>
+                        {row.candidateName} — {row.companyName}
+                      </option>
+                    ))}
+                  </select>
                 </label>
               );
             } else if (field.type === "company" || field.type === "select") {

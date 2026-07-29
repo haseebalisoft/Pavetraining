@@ -1649,6 +1649,10 @@ export interface AdminTrainingRecord {
   trainingDate: string | null;
   trainingAddress: string | null;
   trainingOutcome: string | null;
+  outcomeDate?: string | null;
+  assessorTrainer?: string | null;
+  outcomeNotes?: string | null;
+  notes?: string | null;
   customerVisible: boolean;
   expiry: string | null;
   // register-specific
@@ -1657,6 +1661,7 @@ export interface AdminTrainingRecord {
   nporsCategory?: string | null;
   eusrNumber?: string | null;
   eusrCategory?: string | null;
+  cardType?: string | null;
   swqrNumber?: string | null;
   course?: string | null;
   streetworksCategory?: string | null;
@@ -1758,6 +1763,10 @@ function mapRegister(
       trainingDate: asNullableString(item.fields[f.trainingDate]),
       trainingAddress: asNullableString(item.fields[f.trainingAddress]),
       trainingOutcome: asNullableString(item.fields[f.trainingOutcome]),
+      outcomeDate: asNullableString(item.fields[f.outcomeDate]),
+      assessorTrainer: asNullableString(item.fields[f.assessorTrainer]),
+      outcomeNotes: asNullableString(item.fields[f.outcomeNotes]),
+      notes: asNullableString(item.fields[f.notes]),
       customerVisible: asBoolean(item.fields[f.customerVisible]),
       expiry: asNullableString(item.fields[f.expiry]),
       nporsNumber:
@@ -1784,10 +1793,15 @@ function mapRegister(
       trainingDate: asNullableString(item.fields[f.trainingDate]),
       trainingAddress: asNullableString(item.fields[f.trainingAddress]),
       trainingOutcome: asNullableString(item.fields[f.trainingOutcome]),
+      outcomeDate: asNullableString(item.fields[f.outcomeDate]),
+      assessorTrainer: asNullableString(item.fields[f.assessorTrainer]),
+      outcomeNotes: asNullableString(item.fields[f.outcomeNotes]),
+      notes: asNullableString(item.fields[f.notes]),
       customerVisible: asBoolean(item.fields[f.customerVisible]),
       expiry: asNullableString(item.fields[f.expiry]),
       eusrNumber: asNullableString(item.fields[f.eusrNumber]),
       eusrCategory: asNullableString(item.fields[f.eusrCategory]),
+      cardType: asNullableString(item.fields[f.cardType]),
     };
   }
 
@@ -1806,6 +1820,9 @@ function mapRegister(
       trainingDate: asNullableString(item.fields[f.trainingDate]),
       trainingAddress: asNullableString(item.fields[f.trainingAddress]),
       trainingOutcome: asNullableString(item.fields[f.trainingOutcome]),
+      outcomeDate: asNullableString(item.fields[f.outcomeDate]),
+      assessorTrainer: asNullableString(item.fields[f.assessorTrainer]),
+      outcomeNotes: asNullableString(item.fields[f.outcomeNotes]),
       customerVisible: asBoolean(item.fields[f.customerVisible]),
       expiry: asNullableString(item.fields[f.expiryDate]),
       swqrNumber: asNullableString(item.fields[f.swqrNumber]),
@@ -1828,6 +1845,10 @@ function mapRegister(
     trainingDate: asNullableString(item.fields[f.courseDate]),
     trainingAddress: asNullableString(item.fields[f.trainingAddress]),
     trainingOutcome: asNullableString(item.fields[f.trainingOutcome]),
+    outcomeDate: asNullableString(item.fields[f.outcomeDate]),
+    assessorTrainer: asNullableString(item.fields[f.assessorTrainer]),
+    outcomeNotes: asNullableString(item.fields[f.outcomeNotes]),
+    notes: asNullableString(item.fields[f.notes]),
     customerVisible: asBoolean(item.fields[f.customerVisible]),
     expiry: asNullableString(item.fields[f.expiryDate]),
     course: asNullableString(item.fields[f.courseCategory]),
@@ -1878,8 +1899,34 @@ function registerWritePayload(
       nporsCategory:
         input.nporsCategory === undefined
           ? undefined
-          : optionalText(input.nporsCategory),
+          : (() => {
+              const text = optionalText(input.nporsCategory);
+              if (!text) return null;
+              // SharePoint NPORS Category is multi-choice (checkboxes).
+              return text
+                .split(/[;,|]+/)
+                .map((part) => part.trim())
+                .filter(Boolean)
+                .map((part) => {
+                  const upper = part.toUpperCase();
+                  const match = upper.match(/\bN\d{3}\b/);
+                  return match?.[0] ?? part;
+                });
+            })(),
       trainingOutcome: normalizedOutcome,
+      outcomeDate:
+        input.outcomeDate === undefined
+          ? undefined
+          : asDateInput(input.outcomeDate),
+      assessorTrainer:
+        input.assessorTrainer === undefined
+          ? undefined
+          : optionalText(input.assessorTrainer),
+      outcomeNotes:
+        input.outcomeNotes === undefined
+          ? undefined
+          : optionalText(input.outcomeNotes),
+      notes: input.notes === undefined ? undefined : optionalText(input.notes),
       expiry:
         input.expiry === undefined ? undefined : asDateInput(input.expiry),
       customerVisible: optionalBool(input.customerVisible),
@@ -1900,6 +1947,10 @@ function registerWritePayload(
         input.eusrCategory === undefined
           ? undefined
           : optionalText(input.eusrCategory),
+      cardType:
+        input.cardType === undefined
+          ? undefined
+          : optionalText(input.cardType),
       trainingDate:
         input.trainingDate === undefined
           ? undefined
@@ -1909,6 +1960,19 @@ function registerWritePayload(
           ? undefined
           : optionalText(input.trainingAddress),
       trainingOutcome: normalizedOutcome,
+      outcomeDate:
+        input.outcomeDate === undefined
+          ? undefined
+          : asDateInput(input.outcomeDate),
+      assessorTrainer:
+        input.assessorTrainer === undefined
+          ? undefined
+          : optionalText(input.assessorTrainer),
+      outcomeNotes:
+        input.outcomeNotes === undefined
+          ? undefined
+          : optionalText(input.outcomeNotes),
+      notes: input.notes === undefined ? undefined : optionalText(input.notes),
       expiry:
         input.expiry === undefined ? undefined : asDateInput(input.expiry),
       customerVisible: optionalBool(input.customerVisible),
@@ -1940,6 +2004,18 @@ function registerWritePayload(
           ? undefined
           : optionalText(input.trainingAddress),
       trainingOutcome: normalizedOutcome,
+      outcomeDate:
+        input.outcomeDate === undefined
+          ? undefined
+          : asDateInput(input.outcomeDate),
+      assessorTrainer:
+        input.assessorTrainer === undefined
+          ? undefined
+          : optionalText(input.assessorTrainer),
+      outcomeNotes:
+        input.outcomeNotes === undefined
+          ? undefined
+          : optionalText(input.outcomeNotes),
       expiryDate:
         input.expiry === undefined ? undefined : asDateInput(input.expiry),
       customerVisible: optionalBool(input.customerVisible),
@@ -1968,6 +2044,19 @@ function registerWritePayload(
         ? undefined
         : optionalText(input.trainingAddress),
     trainingOutcome: normalizedOutcome,
+    outcomeDate:
+      input.outcomeDate === undefined
+        ? undefined
+        : asDateInput(input.outcomeDate),
+    assessorTrainer:
+      input.assessorTrainer === undefined
+        ? undefined
+        : optionalText(input.assessorTrainer),
+    outcomeNotes:
+      input.outcomeNotes === undefined
+        ? undefined
+        : optionalText(input.outcomeNotes),
+    notes: input.notes === undefined ? undefined : optionalText(input.notes),
     expiryDate:
       input.expiry === undefined ? undefined : asDateInput(input.expiry),
     customerVisible: optionalBool(input.customerVisible),
@@ -1983,6 +2072,7 @@ async function applyRegisterLookupIds(
   input: Record<string, unknown>,
   mode: "create" | "update",
 ): Promise<void> {
+  const workforceId = optionalText(input.workforceId);
   const candidateName =
     mode === "create"
       ? requireText(input.candidateName, "Candidate name")
@@ -1992,7 +2082,7 @@ async function applyRegisterLookupIds(
       ? requireText(input.companyName, "Company")
       : optionalText(input.companyName);
 
-  if (!candidateName && !companyName) return;
+  if (!workforceId && !candidateName && !companyName) return;
 
   const [companies, workforce] = await Promise.all([
     listAdminCompanies(),
@@ -2009,7 +2099,10 @@ async function applyRegisterLookupIds(
       : null;
 
   let resolvedCandidate =
-    candidateName
+    (workforceId
+      ? (workforce.find((row) => row.id === workforceId) ?? null)
+      : null) ??
+    (candidateName
       ? workforce.find(
           (row) =>
             row.candidateName.trim().toLowerCase() ===
@@ -2023,7 +2116,7 @@ async function applyRegisterLookupIds(
             row.candidateName.trim().toLowerCase() ===
             candidateName.trim().toLowerCase(),
         )
-      : null;
+      : null);
 
   if (mode === "create" && !resolvedCandidate) {
     throw new ValidationError(
@@ -2080,11 +2173,39 @@ export async function createAdminRegister(
   input: Record<string, unknown>,
 ) {
   const payload = registerWritePayload(key, input, "create");
+  // Graph app-only often rejects MultiChoice writes on NPORS Category.
+  // Keep create reliable; retry category separately; still pass it to matrix sync.
+  const deferredCategory = payload.NPORSCategory;
+  delete payload.NPORSCategory;
+
   await applyRegisterLookupIds(payload, input, "create");
   const item = await createListItemByKey(key, payload);
+
+  if (deferredCategory !== undefined && key === "nporsRegister") {
+    try {
+      await updateListItemFieldsByKey(key, item.id, {
+        NPORSCategory: deferredCategory,
+      });
+      item.fields = {
+        ...item.fields,
+        NPORSCategory: deferredCategory,
+      };
+    } catch (error) {
+      console.warn(
+        `[npors] NPORSCategory write failed for #${item.id}; matrix sync will use form value.`,
+        error,
+      );
+    }
+  }
+
   const lookups = await loadRegisterLookupMaps();
   const mapped = mapRegister(key, item, lookups);
   if (!mapped) throw new Error("Created training record could not be mapped.");
+
+  const submittedCategory = optionalText(input.nporsCategory);
+  if (submittedCategory && !mapped.nporsCategory) {
+    mapped.nporsCategory = submittedCategory;
+  }
   return mapped;
 }
 
@@ -2096,11 +2217,33 @@ export async function updateAdminRegister(
   const existing = await getListItemByKey(key, id);
   if (!existing) throw new NotFoundError("Training record not found.");
   const payload = registerWritePayload(key, input, "update");
+  const deferredCategory = payload.NPORSCategory;
+  if (key === "nporsRegister") {
+    delete payload.NPORSCategory;
+  }
   await applyRegisterLookupIds(payload, input, "update");
-  const item = await updateListItemFieldsByKey(key, id, payload);
+  let item = await updateListItemFieldsByKey(key, id, payload);
+
+  if (deferredCategory !== undefined && key === "nporsRegister") {
+    try {
+      item = await updateListItemFieldsByKey(key, id, {
+        NPORSCategory: deferredCategory,
+      });
+    } catch (error) {
+      console.warn(
+        `[npors] NPORSCategory write failed for #${id}; matrix sync will use form value.`,
+        error,
+      );
+    }
+  }
+
   const lookups = await loadRegisterLookupMaps();
   const mapped = mapRegister(key, item, lookups);
   if (!mapped) throw new Error("Updated training record could not be mapped.");
+  const submittedCategory = optionalText(input.nporsCategory);
+  if (submittedCategory) {
+    mapped.nporsCategory = submittedCategory;
+  }
   return mapped;
 }
 
@@ -2183,6 +2326,7 @@ export async function listAdminNvq(companyName?: string | null) {
 }
 
 export async function createAdminNvq(input: Record<string, unknown>) {
+  const workforceId = optionalText(input.workforceId);
   const candidateName = requireText(input.candidateName, "Candidate name");
   const companyName = requireText(input.companyName, "Company");
   const [companies, workforce] = await Promise.all([
@@ -2199,6 +2343,9 @@ export async function createAdminNvq(input: Record<string, unknown>) {
     throw new ValidationError(`Company "${companyName}" was not found.`);
   }
   const candidate =
+    (workforceId
+      ? (workforce.find((row) => row.id === workforceId) ?? null)
+      : null) ??
     workforce.find(
       (row) =>
         row.candidateName.trim().toLowerCase() ===
@@ -2269,7 +2416,11 @@ export async function updateAdminNvq(
     customerVisible: optionalBool(input.customerVisible),
   });
 
-  if (input.candidateName !== undefined || input.companyName !== undefined) {
+  if (
+    input.workforceId !== undefined ||
+    input.candidateName !== undefined ||
+    input.companyName !== undefined
+  ) {
     const [companies, workforce] = await Promise.all([
       listAdminCompanies(),
       listAdminWorkforce(),
@@ -2286,6 +2437,7 @@ export async function updateAdminNvq(
       ),
     };
     const existingMapped = mapNvq(existing, lookups);
+    const workforceId = optionalText(input.workforceId);
     const candidateName =
       optionalText(input.candidateName) ?? existingMapped?.candidateName ?? "";
     const companyName =
@@ -2303,9 +2455,12 @@ export async function updateAdminNvq(
       payload.NVQCompanyLookupId = Number(company.id);
     }
 
-    if (candidateName) {
+    if (workforceId || candidateName) {
       const companyKey = companyName.trim().toLowerCase();
       const candidate =
+        (workforceId
+          ? (workforce.find((row) => row.id === workforceId) ?? null)
+          : null) ??
         workforce.find(
           (row) =>
             row.candidateName.trim().toLowerCase() ===

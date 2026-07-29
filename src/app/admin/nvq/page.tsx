@@ -2,14 +2,29 @@ import { AdminNvqClient } from "@/components/admin/pages/AdminNvqClient";
 import {
   listAdminCompanies,
   listAdminNvq,
+  listAdminWorkforce,
 } from "@/lib/services/adminCrudService";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminNvqPage() {
-  const [companies, records] = await Promise.all([
+  const [companies, workforce, records] = await Promise.all([
     listAdminCompanies(),
+    listAdminWorkforce(),
     listAdminNvq(),
   ]);
-  return <AdminNvqClient companies={companies} initialRows={records} />;
+  return (
+    <AdminNvqClient
+      companies={companies}
+      workforce={workforce.map((row) => ({
+        id: row.id,
+        candidateName: row.candidateName,
+        companyName: row.companyName,
+        nporsNumbers: row.nporsNumbers,
+        eusrNumber: row.eusrNumber,
+        swqrNumber: row.swqrNumber,
+      }))}
+      initialRows={records}
+    />
+  );
 }

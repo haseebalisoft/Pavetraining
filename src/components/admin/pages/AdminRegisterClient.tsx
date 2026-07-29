@@ -4,9 +4,11 @@ import {
   AdminCrudPage,
   type AdminColumn,
   type AdminFieldConfig,
+  type AdminWorkforceOption,
 } from "@/components/admin/AdminCrudPage";
 import { ExpiryDateBadge } from "@/components/ui/ExpiryDateBadge";
 import { getInHouseCourseOptions } from "@/lib/training/inHouseCourseOptions";
+import { getNporsCategoryOptions } from "@/lib/training/nporsCategoryOptions";
 import type { AdminTrainingRecord } from "@/lib/services/adminCrudService";
 import type { Company } from "@/types/models";
 
@@ -20,69 +22,176 @@ const titles: Record<RegisterKind, string> = {
 };
 
 function fieldsFor(kind: RegisterKind): AdminFieldConfig[] {
-  const sharedStart: AdminFieldConfig[] = [
-    { name: "candidateName", label: "Candidate name", type: "text", required: true },
-    { name: "companyName", label: "Company", type: "company", required: true },
+  const people: AdminFieldConfig[] = [
+    {
+      name: "candidateName",
+      label: "Candidate",
+      type: "workforce",
+      required: true,
+      section: "Candidate",
+    },
+    {
+      name: "companyName",
+      label: "Company",
+      type: "company",
+      required: true,
+      section: "Candidate",
+    },
   ];
-  const sharedEnd: AdminFieldConfig[] = [
-    { name: "trainingDate", label: "Training date", type: "date" },
-    { name: "trainingAddress", label: "Training address", type: "text" },
+
+  const outcome: AdminFieldConfig[] = [
+    {
+      name: "trainingDate",
+      label: "Training date",
+      type: "date",
+      section: "Training",
+    },
+    {
+      name: "trainingAddress",
+      label: "Training address",
+      type: "text",
+      section: "Training",
+    },
     {
       name: "trainingOutcome",
       label: "Outcome",
       type: "select",
+      section: "Outcome",
       options: [
         { value: "Pass", label: "Pass" },
         { value: "Fail", label: "Fail" },
       ],
     },
-    { name: "expiry", label: "Expiry", type: "date" },
-    { name: "customerVisible", label: "Customer visible", type: "boolean" },
+    {
+      name: "outcomeDate",
+      label: "Outcome date",
+      type: "date",
+      section: "Outcome",
+    },
+    { name: "expiry", label: "Expiry", type: "date", section: "Outcome" },
+    {
+      name: "assessorTrainer",
+      label: "Assessor / trainer",
+      type: "text",
+      section: "Outcome",
+    },
+    {
+      name: "outcomeNotes",
+      label: "Outcome notes",
+      type: "textarea",
+      section: "Outcome",
+    },
+    {
+      name: "notes",
+      label: "Notes",
+      type: "textarea",
+      section: "Outcome",
+    },
+    {
+      name: "customerVisible",
+      label: "Customer visible",
+      type: "boolean",
+      section: "Outcome",
+    },
   ];
 
   if (kind === "npors") {
     return [
-      ...sharedStart,
-      { name: "nporsNumber", label: "NPORS number", type: "text" },
-      { name: "noviceOrEwt", label: "Novice or EWT", type: "text" },
-      { name: "nporsCategory", label: "NPORS category", type: "text" },
-      ...sharedEnd,
+      ...people,
+      {
+        name: "nporsNumber",
+        label: "NPORS number",
+        type: "text",
+        section: "Training",
+      },
+      {
+        name: "noviceOrEwt",
+        label: "Novice or EWT",
+        type: "select",
+        section: "Training",
+        options: [
+          { value: "Novice", label: "Novice" },
+          { value: "Ewt", label: "Ewt" },
+        ],
+      },
+      {
+        name: "nporsCategory",
+        label: "NPORS category",
+        type: "select",
+        section: "Training",
+        options: getNporsCategoryOptions(),
+      },
+      ...outcome,
     ];
   }
   if (kind === "eusr") {
     return [
-      ...sharedStart,
-      { name: "eusrNumber", label: "EUSR number", type: "text" },
-      { name: "eusrCategory", label: "EUSR category", type: "text" },
-      ...sharedEnd,
+      ...people,
+      {
+        name: "eusrNumber",
+        label: "EUSR number",
+        type: "text",
+        section: "Training",
+      },
+      {
+        name: "eusrCategory",
+        label: "EUSR category",
+        type: "text",
+        section: "Training",
+      },
+      {
+        name: "cardType",
+        label: "Card type",
+        type: "text",
+        section: "Training",
+      },
+      ...outcome,
     ];
   }
   if (kind === "streetworks") {
     return [
-      ...sharedStart,
-      { name: "swqrNumber", label: "SWQR number", type: "text" },
+      ...people,
+      {
+        name: "swqrNumber",
+        label: "SWQR number",
+        type: "text",
+        section: "Training",
+      },
       {
         name: "course",
         label: "Course",
         type: "select",
+        section: "Training",
         options: [
           { value: "Operative", label: "Operative" },
           { value: "Supervisor", label: "Supervisor" },
         ],
       },
-      { name: "streetworksCategory", label: "Streetworks category", type: "text" },
-      ...sharedEnd,
+      {
+        name: "streetworksCategory",
+        label: "Streetworks category",
+        type: "text",
+        section: "Training",
+      },
+      ...outcome.filter((field) => field.name !== "notes"),
     ];
   }
   return [
-    ...sharedStart,
+    ...people,
+    {
+      name: "certificateCategory",
+      label: "Certificate category",
+      type: "text",
+      section: "Training",
+    },
     {
       name: "course",
       label: "Course",
       type: "select",
+      section: "Training",
       options: getInHouseCourseOptions(),
     },
-    ...sharedEnd,
+    ...outcome,
   ];
 }
 
@@ -96,6 +205,11 @@ function columnsFor(kind: RegisterKind): AdminColumn<AdminTrainingRecord>[] {
       key: "number",
       header: "NPORS number",
       render: (row) => row.nporsNumber ?? "—",
+    });
+    base.push({
+      key: "category",
+      header: "Category",
+      render: (row) => row.nporsCategory ?? "—",
     });
   }
   if (kind === "eusr") {
@@ -142,22 +256,26 @@ function columnsFor(kind: RegisterKind): AdminColumn<AdminTrainingRecord>[] {
 export function AdminRegisterClient({
   kind,
   companies,
+  workforce,
   initialRows,
 }: {
   kind: RegisterKind;
   companies: Company[];
+  workforce: AdminWorkforceOption[];
   initialRows: AdminTrainingRecord[];
 }) {
   return (
     <AdminCrudPage<AdminTrainingRecord>
       title={titles[kind]}
-      description="Add and edit training records, outcomes, visibility, and addresses."
+      description="Pick a Workforce candidate to auto-fill name and company (same as SharePoint). Saving a Pass/Fail record updates the Training Matrix for that candidate."
       columns={columnsFor(kind)}
       fields={fieldsFor(kind)}
       companies={companies}
+      workforce={workforce}
       initialRows={initialRows}
       enableCompanyFilter
       getCompanyName={(row) => row.companyName}
+      drawerWide
       listUrl={`/api/admin/training-records/${kind}`}
       createUrl={`/api/admin/training-records/${kind}`}
       updateUrl={(id) => `/api/admin/training-records/${kind}/${id}`}
@@ -168,10 +286,12 @@ export function AdminRegisterClient({
         (row) => row.candidateName,
         (row) => row.companyName,
         (row) => row.nporsNumber,
+        (row) => row.nporsCategory,
         (row) => row.eusrNumber,
         (row) => row.swqrNumber,
         (row) => row.course,
         (row) => row.trainingAddress,
+        (row) => row.assessorTrainer,
       ]}
     />
   );

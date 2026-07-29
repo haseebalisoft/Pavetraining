@@ -1045,6 +1045,14 @@ export async function syncAfterRegisterSave(
   const ctx = await loadSyncContext({ ...options, focusRecords: [focus] });
   // Ensure we have full register set for status — reload all for this candidate path.
   ctx.registers = await listAllNormalizedRegisters();
+  // Prefer the just-saved form values (e.g. NPORS category) when SharePoint
+  // MultiChoice writes are blocked for app-only Graph.
+  ctx.registers = [
+    ...ctx.registers.filter(
+      (row) => !(row.registerKey === registerKey && row.id === record.id),
+    ),
+    focus,
+  ];
 
   const company = findCompany(ctx.companies, {
     companyLookupId: focus.companyLookupId,
