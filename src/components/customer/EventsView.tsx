@@ -147,11 +147,12 @@ export function EventsView({ companyName, records }: Props) {
           { label: "Events" },
         ]}
         title="Events"
-        subtitle="Upcoming and scheduled training events for your company."
+        subtitle="Only your company’s booked days — free days have nothing scheduled for you."
       />
 
       <p className={styles.companyMeta}>
-        Showing events for <strong>{companyName}</strong>
+        Busy / free calendar for <strong>{companyName}</strong> only. Other
+        companies’ bookings are not shown.
       </p>
 
       <div className={styles.toolbar}>
@@ -256,10 +257,10 @@ export function EventsView({ companyName, records }: Props) {
                 >
                   <span>{cell.date.getDate()}</span>
                   {cell.count > 0 ? (
-                    <em>
-                      {cell.count} event{cell.count === 1 ? "" : "s"}
-                    </em>
-                  ) : null}
+                    <em className={styles.eventCalendarBusy}>Busy</em>
+                  ) : (
+                    <em className={styles.eventCalendarFree}>Free</em>
+                  )}
                 </button>
               ) : (
                 <span key={cell.key} className={styles.eventCalendarPad} />

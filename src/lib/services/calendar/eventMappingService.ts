@@ -64,8 +64,12 @@ export function mapSharePointEventToOutlookPayload(input: {
   const startIso = toIsoOrFallback(input.eventDate);
   const endIso = toIsoOrFallback(input.endDate, 1, startIso);
 
+  const title = input.title.trim() || "PAVE Training Event";
+  const company = input.companyName?.trim() || "";
+  const subject = company ? `${company} — ${title}` : title;
+
   return {
-    subject: input.title.trim() || "PAVE Training Event",
+    subject,
     bodyHtml: parts.join("\n"),
     startIso,
     endIso,

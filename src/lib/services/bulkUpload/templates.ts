@@ -85,10 +85,11 @@ const NVQ_COLUMNS: BulkImportColumn[] = [
   { key: "company", label: "Company", required: true },
   { key: "nvqTitle", label: "NVQ Title" },
   { key: "boltOn", label: "Bolt On" },
-  { key: "startDate", label: "Start Date" },
+  { key: "dateRegistered", label: "Date Registered" },
+  { key: "inductionDate", label: "Date Induction Booked" },
   { key: "stageOfNvq", label: "Stage of NVQ" },
-  { key: "completedDate", label: "Completed Date" },
   { key: "notes", label: "Notes" },
+  { key: "completedDate", label: "Completed Date" },
 ];
 
 export const BULK_IMPORT_TEMPLATES: BulkImportTemplate[] = [
@@ -122,42 +123,47 @@ export const BULK_IMPORT_TEMPLATES: BulkImportTemplate[] = [
   {
     importType: "npors",
     label: "NPORS records",
-    description: "Import NPORS training records (coming next).",
+    description:
+      "Import NPORS training records. Candidate must already exist in Workforce. Pass outcomes sync into the Training Matrix.",
     fileName: "pave-npors-template.csv",
     columns: NPORS_COLUMNS,
-    implemented: false,
+    implemented: true,
   },
   {
     importType: "eusr",
     label: "EUSR records",
-    description: "Import EUSR training records (coming next).",
+    description:
+      "Import EUSR training records. Candidate must already exist in Workforce. Pass outcomes sync into the Training Matrix.",
     fileName: "pave-eusr-template.csv",
     columns: EUSR_COLUMNS,
-    implemented: false,
+    implemented: true,
   },
   {
     importType: "streetworks",
     label: "Streetworks / NRSWA records",
-    description: "Import Streetworks/NRSWA records (coming next).",
+    description:
+      "Import Streetworks/NRSWA records. Candidate must already exist in Workforce. Pass outcomes sync into the Training Matrix.",
     fileName: "pave-streetworks-template.csv",
     columns: STREETWORKS_COLUMNS,
-    implemented: false,
+    implemented: true,
   },
   {
     importType: "inHouse",
     label: "In-House records",
-    description: "Import in-house certificates (coming next).",
+    description:
+      "Import in-house certificates (standalone — does not update the Training Matrix).",
     fileName: "pave-in-house-template.csv",
     columns: IN_HOUSE_COLUMNS,
-    implemented: false,
+    implemented: true,
   },
   {
     importType: "nvq",
     label: "NVQ records",
-    description: "Import NVQ progress records (coming next).",
+    description:
+      "Import NVQ progress records (standalone — does not update the Training Matrix).",
     fileName: "pave-nvq-template.csv",
     columns: NVQ_COLUMNS,
-    implemented: false,
+    implemented: true,
   },
 ];
 

@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 
 import { BrandLogo } from "@/components/brand/BrandLogo";
 import { auth, signIn } from "@/auth";
+import { LoginClient } from "./LoginClient";
 import styles from "./login.module.css";
 
 export const dynamic = "force-dynamic";
@@ -10,6 +11,11 @@ export default async function LoginPage() {
   const session = await auth();
   if (session?.user?.email) {
     redirect("/");
+  }
+
+  async function microsoftSignIn() {
+    "use server";
+    await signIn("microsoft-entra-id", { redirectTo: "/" });
   }
 
   return (
@@ -21,19 +27,18 @@ export default async function LoginPage() {
         <p className={styles.tagline}>Paving the way in industry</p>
         <h1 className={styles.title}>Sign in to your portal</h1>
         <p className={styles.copy}>
-          Use your Microsoft work account. Access is granted from your PAVE
-          permissions after sign-in.
+          Prefer Microsoft when you can. Customers without Microsoft can use an
+          email one-time code. Access still comes from Permissions.
         </p>
-        <form
-          action={async () => {
-            "use server";
-            await signIn("microsoft-entra-id", { redirectTo: "/" });
-          }}
-        >
-          <button className={styles.button} type="submit">
-            Sign in with Microsoft
-          </button>
-        </form>
+        <LoginClient
+          microsoftButton={
+            <form action={microsoftSignIn}>
+              <button className={styles.button} type="submit">
+                Sign in with Microsoft
+              </button>
+            </form>
+          }
+        />
       </section>
     </main>
   );

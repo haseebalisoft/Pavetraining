@@ -1,4 +1,5 @@
 import NextAuth from "next-auth";
+import Credentials from "next-auth/providers/credentials";
 import MicrosoftEntraID from "next-auth/providers/microsoft-entra-id";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
@@ -7,6 +8,41 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       clientId: process.env.AUTH_MICROSOFT_ENTRA_ID_ID!,
       clientSecret: process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET!,
       issuer: process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER,
+    }),
+    Credentials({
+      id: "email-otp",
+      name: "Email OTP",
+      credentials: {
+        email: { label: "Email", type: "email" },
+        code: { label: "Code", type: "text" },
+        challenge: { label: "Challenge", type: "text" },
+      },
+      async authorize(credentials) {
+        const { verifyEmailOtp } = await import(
+          "@/lib/services/otpAuthService"
+        );
+        try {
+          const verified = await verifyEmailOtp({
+            email:
+              typeof credentials?.email === "string"
+                ? credentials.email
+                : null,
+            code:
+              typeof credentials?.code === "string" ? credentials.code : null,
+            challenge:
+              typeof credentials?.challenge === "string"
+                ? credentials.challenge
+                : null,
+          });
+          return {
+            id: verified.email,
+            email: verified.email,
+            name: verified.email.split("@")[0] ?? verified.email,
+          };
+        } catch {
+          return null;
+        }
+      },
     }),
   ],
   session: {
@@ -46,7 +82,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     },
   },
   callbacks: {
-    async jwt({ token, profile }) {
+    async jwt({ token, user, profile }) {
       const profileEmail =
         typeof profile?.email === "string"
           ? profile.email
@@ -54,7 +90,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             ? profile.preferred_username
             : undefined;
 
-      if (profileEmail) {
+      if (typeof user?.email === "string" && user.email.trim()) {
+        token.email = user.email.toLowerCase();
+      } else if (profileEmail) {
         token.email = profileEmail.toLowerCase();
       }
 

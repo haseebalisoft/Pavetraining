@@ -959,6 +959,25 @@
   text-decoration: underline;
 }
 
+.imageUploadRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.imageUploadPreview {
+  width: 36px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--pave-charcoal) 18%, transparent);
+  background: #fff;
+}
+
+.workforceFilter {
+  margin-bottom: 0.35rem;
+}
+
 .linkButtonDanger {
   border: 0;
   background: none;

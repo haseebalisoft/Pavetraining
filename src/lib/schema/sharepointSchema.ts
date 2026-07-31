@@ -95,6 +95,8 @@ const workforceFields = {
   cscsExpiry: "CscsExpiry",
   swqrExpiry: "SwqrExpiry",
   eusrExpiry: "EusrExpiry",
+  /** Thumbnail / Image column — write via listThumbnailService only. */
+  photo: "Photo",
   notes: "Notes",
 } as const;
 
@@ -149,7 +151,11 @@ const eusrRegisterFields = {
   id: "ID",
   candidateName: "CandidateName",
   companyName: "CompanyName",
-  eusrNumber: "EUSRNumber",
+  /**
+   * Live list has no writable EUSRNumber column — value is a projected lookup
+   * from Workforce via Candidate Name (“EUSR Number”).
+   */
+  eusrNumber: "Candidate_x0020_Name_x003a__x0020",
   eusrCategory: "EusrCategory",
   cardType: "CardType",
   trainingDate: "TrainingDate",
@@ -167,7 +173,11 @@ const nrswaRegisterFields = {
   id: "ID",
   candidateName: "CandidateName",
   companyName: "CompanyName",
-  swqrNumber: "SWQRNumber",
+  /**
+   * Live list has no writable SWQRNumber column — value is a projected lookup
+   * from Workforce via Candidate Name (“SWQR Number”).
+   */
+  swqrNumber: "Candidate_x0020_Name_x003a__x0020",
   streetworksCategory: "StreetworksCategory",
   course: "Course",
   trainingDate: "TrainingDate",
@@ -413,6 +423,7 @@ export const SHAREPOINT_LISTS = {
       cscsExpiry: "CSCS expiry",
       swqrExpiry: "SWQR expiry",
       eusrExpiry: "EUSR expiry",
+      photo: "Candidate photo",
       notes: "Notes",
     },
   } satisfies SharePointListDefinition<typeof workforceFields>,

@@ -5,6 +5,7 @@ import { getNotificationSettings, getPortalSettingsCached } from "@/lib/services
 import { writeNotificationLog } from "@/lib/services/notificationLogService";
 import {
   adminAlertEmailTemplate,
+  portalInviteEmailTemplate,
   testEmailTemplate,
 } from "@/lib/services/notificationTemplateService";
 import { resolveAdminAlertRecipients } from "@/lib/services/notificationRecipientService";
@@ -73,6 +74,8 @@ export async function sendNotification(
   const to = input.to.trim().toLowerCase();
 
   const isAdminAlert = input.type === "admin_alert";
+  const isPortalInvite = input.type === "portal_invite";
+  const isLoginOtp = input.type === "login_otp";
   const isExpiry =
     input.type === "expiry_3m" ||
     input.type === "expiry_6m" ||
@@ -100,8 +103,11 @@ export async function sendNotification(
     };
   }
 
+  // Portal invites + login OTP must send when mail is configured.
   if (
     !isAdminAlert &&
+    !isPortalInvite &&
+    !isLoginOtp &&
     (!settings.notificationsEnabled || !portal.enableCustomerNotifications)
   ) {
     await writeNotificationLog({
@@ -323,6 +329,33 @@ export async function sendAdminAlert(input: {
     );
   }
   return results;
+}
+
+export async function sendPortalInviteNotification(input: {
+  to: string;
+  displayName?: string | null;
+  companyName?: string | null;
+  roleLabel?: string | null;
+  itemId?: string | null;
+  actorEmail?: string | null;
+}): Promise<NotificationSendResult> {
+  const template = portalInviteEmailTemplate({
+    displayName: input.displayName,
+    companyName: input.companyName,
+    roleLabel: input.roleLabel,
+  });
+  return sendNotification({
+    type: "portal_invite",
+    to: input.to,
+    subject: template.subject,
+    text: template.text,
+    html: template.html,
+    companyName: input.companyName,
+    itemId: input.itemId,
+    actorEmail: input.actorEmail,
+    detail: "Permissions list invite",
+    dedupeKey: `portal-invite:${input.to.toLowerCase()}:${input.itemId ?? "new"}`,
+  });
 }
 
 export function summarizeStatuses(

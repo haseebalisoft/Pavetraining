@@ -238,7 +238,7 @@ export function AdminEventsClient({
   return (
     <AdminCrudPage<AdminEventRecord>
       title="Events"
-      description="Manage training events. SharePoint Events is the source of truth; Outlook sync is one-way from this portal."
+      description="Manage training events. SharePoint Events is the source of truth. Sync pushes to the Pave Training Operations Outlook calendar (app + SharePoint + Outlook mobile). Customers only see busy/free for their own company."
       columns={columns}
       fields={fields}
       companies={companies}

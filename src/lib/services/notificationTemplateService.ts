@@ -96,6 +96,49 @@ export function adminAlertEmailTemplate(input: {
   return { subject, text, html };
 }
 
+export function portalInviteEmailTemplate(input: {
+  displayName?: string | null;
+  companyName?: string | null;
+  roleLabel?: string | null;
+}): { subject: string; text: string; html: string } {
+  const settings = getNotificationSettingsSync();
+  const portalUrl = settings.portalUrl?.replace(/\/$/, "") || null;
+  const loginUrl = portalUrl ? `${portalUrl}/login` : null;
+  const who = input.displayName?.trim() || "there";
+  const company = input.companyName?.trim() || null;
+  const role = input.roleLabel?.trim() || null;
+
+  const subject = "You're invited to the PAVE Training Portal";
+  const text = [
+    `Hi ${who},`,
+    "",
+    "You have been invited to the PAVE Training Portal.",
+    company ? `Company: ${company}` : null,
+    role ? `Role: ${role}` : null,
+    "",
+    loginUrl
+      ? `Sign in here:\n${loginUrl}`
+      : "Please sign in using the portal link provided by your training provider.",
+    "",
+    "Use your work email with Microsoft sign-in. If your organisation uses multi-factor authentication, you will be prompted as usual.",
+  ]
+    .filter((line): line is string => line !== null)
+    .join("\n");
+
+  const html = `<p>Hi ${escapeHtml(who)},</p>
+<p>You have been invited to the <strong>PAVE Training Portal</strong>.</p>
+${company ? `<p>Company: <strong>${escapeHtml(company)}</strong></p>` : ""}
+${role ? `<p>Role: <strong>${escapeHtml(role)}</strong></p>` : ""}
+${
+  loginUrl
+    ? `<p><a href="${escapeHtml(loginUrl)}">Sign in to the portal</a></p>`
+    : `<p>Please sign in using the portal link provided by your training provider.</p>`
+}
+<p>Use your work email with Microsoft sign-in. If your organisation uses multi-factor authentication, you will be prompted as usual.</p>`;
+
+  return { subject, text, html };
+}
+
 export function testEmailTemplate(): {
   subject: string;
   text: string;

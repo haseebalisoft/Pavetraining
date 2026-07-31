@@ -5,7 +5,11 @@ import {
   type AdminColumn,
   type AdminFieldConfig,
 } from "@/components/admin/AdminCrudPage";
-import type { AdminWorkforceRecord } from "@/lib/services/adminCrudService";
+import { ImageUploadButton } from "@/components/admin/ImageUploadButton";
+import type {
+  AdminPermissionRecord,
+  AdminWorkforceRecord,
+} from "@/lib/services/adminCrudService";
 import type { Company } from "@/types/models";
 
 function formatDateCell(value: string | null | undefined): string {
@@ -23,6 +27,21 @@ function text(value: string | null | undefined): string {
 
 /** Match Workforce list.xlsx column order for admin table. */
 const columns: AdminColumn<AdminWorkforceRecord>[] = [
+  {
+    key: "photo",
+    header: "Photo",
+    render: (row) =>
+      row.photoUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={row.photoUrl}
+          alt=""
+          style={{ width: 40, height: 40, objectFit: "cover", borderRadius: 6 }}
+        />
+      ) : (
+        "—"
+      ),
+  },
   {
     key: "workforceNumber",
     header: "Workforce Number",
@@ -135,64 +154,134 @@ const columns: AdminColumn<AdminWorkforceRecord>[] = [
   },
 ];
 
-const fields: AdminFieldConfig[] = [
-  {
-    name: "candidateName",
-    label: "Candidate Name",
-    type: "text",
-    required: true,
-    section: "Candidate",
-  },
-  {
-    name: "companyName",
-    label: "Company Name",
-    type: "company",
-    required: true,
-  },
-  { name: "workforceNumber", label: "Workforce Number", type: "text" },
-  { name: "trainingManager", label: "Training manager", type: "text" },
-  { name: "supervisor", label: "Supervisor", type: "text" },
-  { name: "candidateAddress", label: "Candidate Address", type: "text" },
-  { name: "email", label: "Email", type: "email" },
-  { name: "contactNumber", label: "Contact number", type: "text" },
-  { name: "dateOfBirth", label: "Date of birth", type: "date" },
-  { name: "niNumber", label: "Ni Number", type: "text" },
-  { name: "nporsNumbers", label: "NPORS Number", type: "text" },
-  { name: "cscsNumber", label: "CSCS Number", type: "text" },
-  { name: "cscsExpiry", label: "Cscs Expiry", type: "date" },
-  { name: "swqrNumber", label: "SWQR Number", type: "text" },
-  { name: "swqrExpiry", label: "Swqr Expiry", type: "date" },
-  { name: "eusrNumber", label: "EUSR Number", type: "text" },
-  { name: "eusrExpiry", label: "Eusr Expiry", type: "date" },
-  {
-    name: "inHouseCertificationNumber",
-    label: "In House Certification Number",
-    type: "text",
-  },
-  { name: "department", label: "Department", type: "text" },
-  {
-    name: "status",
-    label: "Status",
-    type: "select",
-    options: [
-      { value: "Active", label: "Active" },
-      { value: "inactive", label: "Inactive" },
-    ],
-  },
-  { name: "notes", label: "Notes", type: "textarea" },
-];
+function buildWorkforceFields(
+  trainingManagerOptions: Array<{ value: string; label: string }>,
+  supervisorOptions: Array<{ value: string; label: string }>,
+): AdminFieldConfig[] {
+  return [
+    {
+      name: "candidateName",
+      label: "Candidate Name",
+      type: "text",
+      required: true,
+      section: "Candidate",
+    },
+    {
+      name: "companyName",
+      label: "Company Name",
+      type: "company",
+      required: true,
+    },
+    { name: "workforceNumber", label: "Workforce Number", type: "text" },
+    {
+      name: "trainingManager",
+      label: "Training manager",
+      type: "select",
+      options: trainingManagerOptions,
+    },
+    {
+      name: "supervisor",
+      label: "Supervisor",
+      type: "select",
+      options: supervisorOptions,
+    },
+    { name: "candidateAddress", label: "Candidate Address", type: "text" },
+    { name: "email", label: "Email", type: "email" },
+    { name: "contactNumber", label: "Contact number", type: "text" },
+    { name: "dateOfBirth", label: "Date of birth", type: "date" },
+    { name: "niNumber", label: "Ni Number", type: "text" },
+    { name: "nporsNumbers", label: "NPORS Number", type: "text" },
+    { name: "cscsNumber", label: "CSCS Number", type: "text" },
+    { name: "cscsExpiry", label: "Cscs Expiry", type: "date" },
+    { name: "swqrNumber", label: "SWQR Number", type: "text" },
+    { name: "swqrExpiry", label: "Swqr Expiry", type: "date" },
+    { name: "eusrNumber", label: "EUSR Number", type: "text" },
+    { name: "eusrExpiry", label: "Eusr Expiry", type: "date" },
+    {
+      name: "inHouseCertificationNumber",
+      label: "In House Certification Number",
+      type: "text",
+    },
+    { name: "department", label: "Department", type: "text" },
+    {
+      name: "status",
+      label: "Status",
+      type: "select",
+      options: [
+        { value: "Active", label: "Active" },
+        { value: "inactive", label: "Inactive" },
+      ],
+    },
+    { name: "notes", label: "Notes", type: "textarea" },
+  ];
+}
+
+function permissionOptionLabel(row: {
+  name: string | null;
+  userEmail: string;
+}): string {
+  const name = row.name?.trim();
+  return name ? `${name} (${row.userEmail})` : row.userEmail;
+}
 
 export function AdminWorkforceClient({
   companies,
   initialRows,
+  permissionPeople,
 }: {
   companies: Company[];
   initialRows: AdminWorkforceRecord[];
+  permissionPeople: AdminPermissionRecord[];
 }) {
+  const activePeople = permissionPeople.filter(
+    (row) => (row.status || "").toLowerCase() === "active",
+  );
+
+  const withCurrentValue = (
+    options: Array<{ value: string; label: string }>,
+    currentValues: Array<string | null | undefined>,
+  ) => {
+    const seen = new Set(options.map((o) => o.value));
+    const extra = currentValues
+      .map((v) => v?.trim() || "")
+      .filter((v) => v && !seen.has(v))
+      .map((v) => ({ value: v, label: `${v} (not in active Permissions)` }));
+    return [...options, ...extra];
+  };
+
+  const trainingManagerOptions = withCurrentValue(
+    [
+      { value: "", label: "— None —" },
+      ...activePeople
+        .filter((row) => row.permissionRole === "Admin")
+        .map((row) => ({
+          value: row.name?.trim() || row.userEmail,
+          label: permissionOptionLabel(row),
+        })),
+    ],
+    initialRows.map((row) => row.trainingManager),
+  );
+  const supervisorOptions = withCurrentValue(
+    [
+      { value: "", label: "— None —" },
+      ...activePeople
+        .filter((row) => row.permissionRole === "Customer")
+        .map((row) => ({
+          value: row.name?.trim() || row.userEmail,
+          label: permissionOptionLabel(row),
+        })),
+    ],
+    initialRows.map((row) => row.supervisor),
+  );
+  const fields = buildWorkforceFields(
+    trainingManagerOptions,
+    supervisorOptions,
+  );
+
   return (
     <AdminCrudPage<AdminWorkforceRecord>
       title="Workforce"
-      description="Manage candidates and link them to companies. Columns match the Workforce list.xlsx template."
+      description="Manage candidates and link them to companies. Training manager / Supervisor must already exist on the Permissions list. Upload a candidate photo from the row actions — it appears on their profile."
       columns={columns}
       fields={fields}
       companies={companies}
@@ -206,6 +295,14 @@ export function AdminWorkforceClient({
       mapResponse={(payload) =>
         ((payload as { records?: AdminWorkforceRecord[] }).records ?? [])
       }
+      extraActions={(row, { reload }) => (
+        <ImageUploadButton
+          uploadUrl={`/api/admin/workforce/${row.id}/photo`}
+          label="Upload photo"
+          currentUrl={row.photoUrl}
+          onUploaded={reload}
+        />
+      )}
       searchKeys={[
         (row) => row.candidateName,
         (row) => row.companyName,

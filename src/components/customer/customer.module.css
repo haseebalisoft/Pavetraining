@@ -524,6 +524,32 @@
   padding: 0.35rem;
 }
 
+.profileHero {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-top: 0.75rem;
+}
+
+.candidatePhoto,
+.candidatePhotoPlaceholder {
+  width: 5.5rem;
+  height: 5.5rem;
+  border-radius: 12px;
+  flex-shrink: 0;
+  object-fit: cover;
+  border: 1px solid var(--pave-border);
+  background: var(--pave-surface);
+}
+
+.candidatePhotoPlaceholder {
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 1.35rem;
+  color: var(--pave-charcoal);
+}
+
 .companyProfileGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
@@ -912,8 +938,17 @@
 .eventCalendarDayActive em {
   font-style: normal;
   font-size: var(--pave-font-size-caption);
-  color: var(--pave-lime-dark);
   font-weight: 650;
+}
+
+.eventCalendarBusy {
+  color: var(--pave-lime-dark, #2f6b3a);
+}
+
+.eventCalendarFree {
+  color: var(--pave-charcoal-muted);
+  font-weight: 500;
+  opacity: 0.8;
 }
 
 .eventCalendarSelected {

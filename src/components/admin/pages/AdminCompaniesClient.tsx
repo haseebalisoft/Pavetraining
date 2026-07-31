@@ -5,20 +5,12 @@ import {
   type AdminColumn,
   type AdminFieldConfig,
 } from "@/components/admin/AdminCrudPage";
+import { ImageUploadButton } from "@/components/admin/ImageUploadButton";
 import type { Company } from "@/types/models";
 
 function cell(value: string | null | undefined) {
   const text = value?.trim();
   return text ? text : "—";
-}
-
-function logoCell(value: string | null | undefined) {
-  const text = value?.trim();
-  if (!text) return "—";
-  if (text.startsWith("http") || text.startsWith("/")) {
-    return text.length > 40 ? `${text.slice(0, 37)}…` : text;
-  }
-  return "Uploaded";
 }
 
 /**
@@ -102,7 +94,17 @@ const columns: AdminColumn<Company>[] = [
   {
     key: "companyLogo",
     header: "Company Logo",
-    render: (row) => logoCell(row.companyLogo),
+    render: (row) =>
+      row.companyLogo ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={row.companyLogo}
+          alt=""
+          style={{ width: 40, height: 40, objectFit: "contain" }}
+        />
+      ) : (
+        "—"
+      ),
   },
   {
     key: "status",
@@ -208,13 +210,6 @@ const fields: AdminFieldConfig[] = [
     section: "Company List",
   },
   {
-    name: "companyLogo",
-    label: "Company Logo",
-    type: "text",
-    placeholder: "Logo URL or leave blank",
-    section: "Company List",
-  },
-  {
     name: "status",
     label: "Status",
     type: "select",
@@ -235,7 +230,7 @@ export function AdminCompaniesClient({
   return (
     <AdminCrudPage<Company>
       title="Companies"
-      description="Company List — same columns as Company list.xlsx / SharePoint Company List."
+      description="Company List — same columns as SharePoint. Upload the company logo from the row actions; it shows on that company’s customer portal only."
       columns={columns}
       fields={fields}
       initialRows={initialRows}
@@ -254,6 +249,14 @@ export function AdminCompaniesClient({
       emptyLabel="No companies found. Add your first company to begin."
       drawerWide
       wideTable
+      extraActions={(row, { reload }) => (
+        <ImageUploadButton
+          uploadUrl={`/api/admin/companies/${row.id}/logo`}
+          label="Upload logo"
+          currentUrl={row.companyLogo}
+          onUploaded={reload}
+        />
+      )}
       searchKeys={[
         (row) => row.companyNumber,
         (row) => row.companyName,

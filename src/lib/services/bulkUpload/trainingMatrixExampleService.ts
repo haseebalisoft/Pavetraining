@@ -349,6 +349,15 @@ export async function upsertTrainingMatrixExampleRow(input: {
     const col = columnMap.get(headerLookupKey(header));
     if (!col) continue;
 
+    // Partial updates: skip columns not present in `source` so we don't wipe dates.
+    const hasKey =
+      Object.prototype.hasOwnProperty.call(input.source, header) ||
+      Object.prototype.hasOwnProperty.call(
+        input.source,
+        normalizeHeader(header),
+      );
+    if (!hasKey) continue;
+
     const raw =
       input.source[header] ??
       input.source[normalizeHeader(header)] ??

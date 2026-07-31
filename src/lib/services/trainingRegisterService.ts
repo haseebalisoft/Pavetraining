@@ -302,11 +302,11 @@ export async function listNormalizedRegisters(
 export async function listAllNormalizedRegisters(): Promise<
   NormalizedRegisterRecord[]
 > {
+  // In-House is standalone (client brief) — do not feed Training Matrix sync.
   const keys: AdminRegisterKey[] = [
     "nporsRegister",
     "eusrRegister",
     "nrswaRegister",
-    "inHouseCertificates",
   ];
   const batches = await Promise.all(keys.map((key) => listNormalizedRegisters(key)));
   return batches.flat();

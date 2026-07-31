@@ -20,13 +20,15 @@ import type {
 const permissionFields = getSharePointFields("permissions");
 
 /**
- * SharePoint RoleType choices today: Training Manager | Supervisor
- * (Admin / Candidate may be added later — already mapped).
+ * SharePoint RoleType values used by the portal:
+ * Training Manager | Supervisor | Admin | Candidate
  *
- * Portal routing bucket:
- * - Admin: Admin + Training Manager (legacy PAVE staff keep /admin)
- * - Customer: Supervisor + Candidate (+ Training Manager can also use customer APIs)
+ * Portal routing bucket (`RoleType`):
+ * - Admin: Admin + Training Manager (PAVE staff → /admin; TM also sees customer APIs)
+ * - Customer: Supervisor + Candidate → /customer (Training Matrix, docs, etc.)
  */
+export type PermissionFormRole = "Admin" | "Customer" | "Candidate";
+
 export function normalizePermissionRoleType(
   value: unknown,
 ): RoleType | null {
@@ -50,9 +52,48 @@ export function normalizePermissionRoleType(
   return null;
 }
 
-/** Values written back to the SharePoint RoleType choice column. */
-export function toSharePointRoleType(role: RoleType): string {
-  return role === "Admin" ? "Training Manager" : "Supervisor";
+/** Form / admin UI role including first-class Candidate. */
+export function normalizePermissionFormRole(
+  value: unknown,
+): PermissionFormRole | null {
+  const role = asString(value);
+  if (!role) return null;
+  const normalized = role.toLowerCase().trim();
+  if (
+    normalized === "admin" ||
+    normalized === "training manager" ||
+    normalized === "trainingmanager"
+  ) {
+    return "Admin";
+  }
+  if (normalized === "candidate") return "Candidate";
+  if (normalized === "customer" || normalized === "supervisor") {
+    return "Customer";
+  }
+  return null;
+}
+
+/**
+ * Values written back to the SharePoint RoleType column.
+ * Candidate is first-class (accepted by the live list even if not in the choice UI).
+ */
+export function toSharePointRoleType(
+  role: RoleType | PermissionFormRole,
+): string {
+  if (role === "Admin") return "Training Manager";
+  if (role === "Candidate") return "Candidate";
+  return "Supervisor";
+}
+
+/** Admin form value derived from SharePoint RoleType + AccessScope. */
+export function permissionFormRoleFromSharePoint(
+  sharePointRole: string,
+  accessScope: string,
+): PermissionFormRole {
+  const customerRole = resolveCustomerRole(sharePointRole, accessScope);
+  if (customerRole === "Candidate") return "Candidate";
+  const routing = normalizePermissionRoleType(sharePointRole);
+  return routing === "Admin" ? "Admin" : "Customer";
 }
 
 export function resolveCustomerRole(

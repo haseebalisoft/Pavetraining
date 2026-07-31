@@ -445,7 +445,7 @@ export async function syncEventToOutlook(
 
     if (!isOutlookCalendarConfigured()) {
       const reason =
-        "Outlook calendar is not configured. Set OUTLOOK_USER_ID (and optionally OUTLOOK_CALENDAR_ID).";
+        "Outlook calendar is not configured. Set OUTLOOK_GROUP_ID (Pave Training Operations) or OUTLOOK_USER_ID, and optionally OUTLOOK_CALENDAR_ID.";
       const publicError = await markSyncFailure(eventId, new Error(reason));
       console.warn(`[calendarSync] ${eventId}: ${reason}`);
       await auditSync({

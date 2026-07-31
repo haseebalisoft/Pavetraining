@@ -495,7 +495,6 @@ async function syncOneCandidate(
 
   let workforceEusrExpiry: string | null | undefined;
   let workforceSwqrExpiry: string | null | undefined;
-  let inHouseExpiry: string | null | undefined;
   let needsReviewForced = false;
 
   for (const record of registersForMapping) {
@@ -574,19 +573,7 @@ async function syncOneCandidate(
       }
     }
 
-    if (record.source === "In-House") {
-      if (!record.expiry) {
-        needsReviewForced = true;
-        warnings.push(`In-House #${record.id}: Pass but missing ExpiryDate.`);
-        continue;
-      }
-      if (
-        inHouseExpiry === undefined ||
-        shouldApplyPassExpiry(inHouseExpiry, record.expiry, "Pass")
-      ) {
-        inHouseExpiry = record.expiry;
-      }
-    }
+    // In-House is intentionally ignored for matrix updates (standalone register).
   }
 
   if (workforceEusrExpiry) {
@@ -609,14 +596,13 @@ async function syncOneCandidate(
     }
   }
 
-  // In-House has no dedicated wide column on the Excel template — status still uses it.
+  // In-House is standalone and does not contribute matrix status dates.
   const statusDates = [
     ...Object.entries(columnValues)
       .filter(([key]) => key !== "Name" && key !== "DOB")
       .map(([, value]) => value),
     workforceEusrExpiry,
     workforceSwqrExpiry,
-    inHouseExpiry,
   ];
   const status = computeMatrixStatusFromDates(statusDates);
   const needsReview = needsReviewForced || status.needsReview;
@@ -1017,6 +1003,26 @@ export async function syncAfterRegisterSave(
   record: AdminTrainingRecord,
   options: MatrixSyncOptions = {},
 ): Promise<MatrixSyncResult> {
+  // In-House certificates stay on their own register — never update the matrix.
+  if (registerKey === "inHouseCertificates") {
+    const items = [
+      emptyResultItem({
+        candidate: record.candidateName,
+        company: record.companyName,
+        registerSources: [],
+        skipped: true,
+        skipReason:
+          "In-House is standalone and does not sync to the Training Matrix.",
+      }),
+    ];
+    return {
+      dryRun: Boolean(options.dryRun),
+      scope: "register",
+      items,
+      summary: buildSummary(items),
+    };
+  }
+
   const focus = normalizeRegisterFromAdminRecord(registerKey, record);
 
   // Enrich lookup IDs from the saved SharePoint item when possible.

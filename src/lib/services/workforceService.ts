@@ -14,6 +14,7 @@ import {
   getListItemsByKey,
   type SharePointFields,
 } from "@/lib/services/sharePointListService";
+import { parseThumbnailField } from "@/lib/services/listThumbnailService";
 import type { WorkforceCandidate } from "@/types/models";
 
 const workforceFields = getSharePointFields("workforce");
@@ -106,6 +107,9 @@ function mapWorkforceItem(
     cscsExpiry: asNullableString(fields[workforceFields.cscsExpiry]),
     swqrExpiry: asNullableString(fields[workforceFields.swqrExpiry]),
     eusrExpiry: asNullableString(fields[workforceFields.eusrExpiry]),
+    photoUrl: parseThumbnailField(fields[workforceFields.photo])
+      ? `/api/media/workforce/${id}/photo`
+      : null,
   };
 }
 

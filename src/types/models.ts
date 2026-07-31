@@ -84,6 +84,8 @@ export interface WorkforceCandidate {
   cscsExpiry: string | null;
   swqrExpiry: string | null;
   eusrExpiry: string | null;
+  /** App media URL for Candidate Photo when set. */
+  photoUrl: string | null;
 }
 
 export interface TrainingMatrixRow {

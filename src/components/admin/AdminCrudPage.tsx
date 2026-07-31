@@ -203,6 +203,7 @@ export function AdminCrudPage<T extends { id: string }>({
   const [editing, setEditing] = useState<T | null>(null);
   const [form, setForm] = useState<FormState>({});
   const [formError, setFormError] = useState<string | null>(null);
+  const [workforceQuery, setWorkforceQuery] = useState("");
   const [saving, setSaving] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [pendingSave, setPendingSave] = useState<FormState | null>(null);
@@ -213,6 +214,7 @@ export function AdminCrudPage<T extends { id: string }>({
     setEditing(null);
     setForm(buildInitialForm(fields));
     setFormError(null);
+    setWorkforceQuery("");
     setDrawerOpen(true);
   }
 
@@ -378,6 +380,7 @@ export function AdminCrudPage<T extends { id: string }>({
       buildInitialForm(fields, row as unknown as Record<string, unknown>),
     );
     setFormError(null);
+    setWorkforceQuery("");
     setDrawerOpen(true);
   }
 
@@ -749,9 +752,27 @@ export function AdminCrudPage<T extends { id: string }>({
               );
             } else if (field.type === "workforce") {
               const selectedId = matchWorkforceId(form, workforce);
+              const query = workforceQuery.trim().toLowerCase();
+              const filteredWorkforce = query
+                ? workforce.filter((row) =>
+                    `${row.candidateName} ${row.companyName}`
+                      .toLowerCase()
+                      .includes(query),
+                  )
+                : workforce;
               control = (
                 <label className={styles.field}>
-                  <span className={styles.fieldLabel}>{field.label}</span>
+                  <span className={styles.fieldLabel}>
+                    {field.label} (auto-fills name & company)
+                  </span>
+                  <input
+                    className={`${styles.input} ${styles.workforceFilter}`}
+                    type="search"
+                    value={workforceQuery}
+                    placeholder="Type to search Workforce…"
+                    disabled={field.readOnly}
+                    onChange={(event) => setWorkforceQuery(event.target.value)}
+                  />
                   <select
                     className={styles.select}
                     value={selectedId}
@@ -788,7 +809,7 @@ export function AdminCrudPage<T extends { id: string }>({
                     }}
                   >
                     <option value="">Select candidate…</option>
-                    {workforce.map((row) => (
+                    {filteredWorkforce.map((row) => (
                       <option key={row.id} value={row.id}>
                         {row.candidateName} — {row.companyName}
                       </option>

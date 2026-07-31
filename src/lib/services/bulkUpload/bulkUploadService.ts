@@ -14,6 +14,11 @@ import {
   commitMatrixImport,
   previewMatrixImport,
 } from "@/lib/services/bulkUpload/matrixImporter";
+import {
+  commitRegisterImport,
+  isRegisterImportType,
+  previewRegisterImport,
+} from "@/lib/services/bulkUpload/registerImporter";
 import { parseSpreadsheetBuffer } from "@/lib/services/bulkUpload/parseSpreadsheet";
 import {
   BULK_IMPORT_TEMPLATES,
@@ -173,6 +178,25 @@ export async function previewBulkUpload(input: {
     };
   }
 
+  if (isRegisterImportType(importType)) {
+    const rows = await previewRegisterImport(importType, spreadsheet);
+    return {
+      importType,
+      fileName,
+      headers: spreadsheet.headers,
+      rows,
+      summary: summarizeBulkRows(rows),
+      suppressNotifications,
+      implemented: true,
+      message:
+        importType === "inHouse"
+          ? "In-House import is standalone and will not update the Training Matrix."
+          : importType === "nvq"
+            ? "NVQ import is standalone and will not update the Training Matrix."
+            : "NPORS / EUSR / Streetworks imports sync Pass expiry dates into the Training Matrix after each row.",
+    };
+  }
+
   throw new ValidationError("Import type is not implemented.");
 }
 
@@ -251,6 +275,27 @@ export async function commitBulkUpload(input: {
       message: suppressNotifications
         ? "Import completed. Customer notifications were suppressed. Import Workforce before matrix if candidates are missing."
         : "Import completed.",
+    };
+  }
+
+  if (isRegisterImportType(importType)) {
+    const rows = await commitRegisterImport({
+      importType,
+      rows: input.rows,
+      duplicateMode,
+    });
+    const summary = summarizeBulkRows(rows);
+    return {
+      importType,
+      fileName,
+      duplicateMode,
+      suppressNotifications,
+      rows,
+      summary,
+      message:
+        importType === "inHouse" || importType === "nvq"
+          ? `${template.label} import completed (standalone — Training Matrix not updated).`
+          : `${template.label} import completed. Matching Training Matrix rows were synced for Pass outcomes.`,
     };
   }
 

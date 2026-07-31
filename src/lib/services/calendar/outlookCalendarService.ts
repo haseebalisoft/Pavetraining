@@ -6,25 +6,58 @@ import type {
   OutlookEventResult,
 } from "@/types/calendarSync";
 
-export type OutlookCalendarConfig = {
-  userId: string;
-  calendarId: string | null;
-};
+export type OutlookCalendarConfig =
+  | {
+      mode: "user";
+      userId: string;
+      calendarId: string | null;
+    }
+  | {
+      mode: "group";
+      groupId: string;
+      calendarId: string | null;
+    };
 
 /**
- * Outlook mailbox/calendar configuration for app-only Graph access.
- * Requires OUTLOOK_USER_ID (UPN or Graph user id).
- * Optional OUTLOOK_CALENDAR_ID targets a specific calendar; otherwise default.
+ * Outlook mailbox / group calendar config for app-only Graph access.
+ *
+ * Prefer group calendar for shared ops:
+ *   OUTLOOK_GROUP_ID = Microsoft 365 group id (e.g. Pave Training Operations)
+ * Optional:
+ *   OUTLOOK_CALENDAR_ID = specific calendar id; omit for default group calendar
+ *
+ * Fallback (shared mailbox / user):
+ *   OUTLOOK_USER_ID = mailbox UPN or Graph user id
  */
 export function getOutlookCalendarConfig(): OutlookCalendarConfig | null {
+  const groupId = process.env.OUTLOOK_GROUP_ID?.trim() || "";
   const userId = process.env.OUTLOOK_USER_ID?.trim() || "";
-  if (!userId) return null;
   const calendarId = process.env.OUTLOOK_CALENDAR_ID?.trim() || null;
-  return { userId, calendarId };
+
+  if (groupId) {
+    return { mode: "group", groupId, calendarId };
+  }
+  if (userId) {
+    return { mode: "user", userId, calendarId };
+  }
+  return null;
 }
 
 export function isOutlookCalendarConfigured(): boolean {
   return Boolean(getOutlookCalendarConfig());
+}
+
+export function describeOutlookCalendarTarget(): string {
+  const config = getOutlookCalendarConfig();
+  if (!config) return "not configured";
+  if (config.mode === "group") {
+    return config.calendarId
+      ? `group:${config.groupId}/calendar:${config.calendarId}`
+      : `group:${config.groupId}/default`;
+  }
+  return config.calendarId
+    ? `user:${config.userId}/calendar:${config.calendarId}`
+    : `user:${config.userId}/default`;
 }
 
 function toGraphDateTime(iso: string, timeZone: string) {
@@ -48,6 +81,8 @@ function buildGraphEventBody(payload: OutlookEventPayload) {
     location: payload.location
       ? { displayName: payload.location }
       : undefined,
+    showAs: "busy",
+    categories: ["PAVE Training Portal"],
   };
 }
 
@@ -71,6 +106,13 @@ function mapGraphEventResult(
 }
 
 function eventsCollectionPath(config: OutlookCalendarConfig): string {
+  if (config.mode === "group") {
+    const group = encodeURIComponent(config.groupId);
+    if (config.calendarId) {
+      return `/groups/${group}/calendars/${encodeURIComponent(config.calendarId)}/events`;
+    }
+    return `/groups/${group}/events`;
+  }
   const user = encodeURIComponent(config.userId);
   if (config.calendarId) {
     return `/users/${user}/calendars/${encodeURIComponent(config.calendarId)}/events`;
@@ -82,8 +124,16 @@ function eventItemPath(
   config: OutlookCalendarConfig,
   outlookEventId: string,
 ): string {
+  if (config.mode === "group") {
+    const group = encodeURIComponent(config.groupId);
+    return `/groups/${group}/events/${encodeURIComponent(outlookEventId)}`;
+  }
   const user = encodeURIComponent(config.userId);
   return `/users/${user}/events/${encodeURIComponent(outlookEventId)}`;
+}
+
+function configMissingMessage(): string {
+  return "Outlook calendar is not configured. Set OUTLOOK_GROUP_ID (Pave Training Operations) or OUTLOOK_USER_ID, and optionally OUTLOOK_CALENDAR_ID.";
 }
 
 /**
@@ -94,9 +144,7 @@ export async function createOutlookEvent(
 ): Promise<OutlookEventResult> {
   const config = getOutlookCalendarConfig();
   if (!config) {
-    throw new Error(
-      "Outlook calendar is not configured. Set OUTLOOK_USER_ID (and optionally OUTLOOK_CALENDAR_ID).",
-    );
+    throw new Error(configMissingMessage());
   }
 
   const client = getGraphClient();
@@ -116,9 +164,7 @@ export async function updateOutlookEvent(
 ): Promise<OutlookEventResult> {
   const config = getOutlookCalendarConfig();
   if (!config) {
-    throw new Error(
-      "Outlook calendar is not configured. Set OUTLOOK_USER_ID (and optionally OUTLOOK_CALENDAR_ID).",
-    );
+    throw new Error(configMissingMessage());
   }
 
   const client = getGraphClient();

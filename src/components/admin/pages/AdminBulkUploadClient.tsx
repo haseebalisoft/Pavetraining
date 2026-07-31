@@ -23,46 +23,55 @@ const IMPORT_OPTIONS: Array<{
   value: BulkImportType;
   label: string;
   hint: string;
+  implemented: boolean;
 }> = [
   {
     value: "company",
     label: "Companies",
     hint: "Use Company list.xlsx exactly. Preview shows every Excel column. Creates or updates Company List rows.",
+    implemented: true,
   },
   {
     value: "workforce",
     label: "Workforce / Candidates",
     hint: "Use Workforce list.xlsx exactly. Preview shows every Excel column. Missing companies are created on import.",
+    implemented: true,
   },
   {
     value: "trainingMatrix",
     label: "Training Matrix rows",
     hint: "Use Training matrix example.xlsx exactly. Preview shows every Excel column. Import Workforce first (match by Name / DOB).",
+    implemented: true,
   },
   {
     value: "npors",
     label: "NPORS records",
-    hint: "Coming next — template available.",
+    hint: "Import NPORS rows. Candidate must exist in Workforce. Pass outcomes sync to the Training Matrix.",
+    implemented: true,
   },
   {
     value: "eusr",
     label: "EUSR records",
-    hint: "Coming next — template available.",
+    hint: "Import EUSR rows. Candidate must exist in Workforce. Pass outcomes sync to the Training Matrix.",
+    implemented: true,
   },
   {
     value: "streetworks",
     label: "Streetworks / NRSWA",
-    hint: "Coming next — template available.",
+    hint: "Import Streetworks/NRSWA rows. Candidate must exist in Workforce. Pass outcomes sync to the Training Matrix.",
+    implemented: true,
   },
   {
     value: "inHouse",
     label: "In-House records",
-    hint: "Coming next — template available.",
+    hint: "Import in-house certificates. Standalone — does not update the Training Matrix.",
+    implemented: true,
   },
   {
     value: "nvq",
     label: "NVQ records",
-    hint: "Coming next — template available.",
+    hint: "Import NVQ progress rows. Standalone — does not update the Training Matrix.",
+    implemented: true,
   },
 ];
 
@@ -466,8 +475,9 @@ export function AdminBulkUploadClient() {
           <header className={styles.settingsCardHeader}>
             <h2>1. Choose import type</h2>
             <p>
-              Start with Workforce / Candidates. Other types expose templates
-              now and will reuse the same preview → confirm flow.
+              Import Companies / Workforce first, then registers or matrix.
+              NPORS / EUSR / Streetworks sync Pass outcomes into the Training
+              Matrix; In-House and NVQ stay standalone.
             </p>
           </header>
           <div className={styles.settingsCardBody}>
@@ -485,10 +495,7 @@ export function AdminBulkUploadClient() {
                 {IMPORT_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>
                     {option.label}
-                    {option.value === "workforce" ||
-                    option.value === "trainingMatrix"
-                      ? ""
-                      : " (coming next)"}
+                    {option.implemented ? "" : " (coming next)"}
                   </option>
                 ))}
               </select>

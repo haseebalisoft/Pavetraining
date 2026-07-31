@@ -364,16 +364,37 @@ export function CandidateProfileView({
             { label: candidate.candidateName },
           ]}
         />
-        <p className={styles.eyebrow}>Candidate Profile</p>
-        <h1 className={styles.title}>{candidate.candidateName}</h1>
-        {candidate.dateOfBirth?.trim() ? (
-          <p className={styles.dobSecondary}>
-            DOB {formatDisplayDate(candidate.dateOfBirth)}
-          </p>
-        ) : null}
-        <p className={styles.subtitle}>
-          Training summary and customer-visible records for this candidate.
-        </p>
+        <div className={styles.profileHero}>
+          {candidate.photoUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              className={styles.candidatePhoto}
+              src={candidate.photoUrl}
+              alt={candidate.candidateName}
+            />
+          ) : (
+            <div className={styles.candidatePhotoPlaceholder} aria-hidden>
+              {candidate.candidateName
+                .split(/\s+/)
+                .filter(Boolean)
+                .slice(0, 2)
+                .map((part) => part[0]?.toUpperCase() ?? "")
+                .join("")}
+            </div>
+          )}
+          <div>
+            <p className={styles.eyebrow}>Candidate Profile</p>
+            <h1 className={styles.title}>{candidate.candidateName}</h1>
+            {candidate.dateOfBirth?.trim() ? (
+              <p className={styles.dobSecondary}>
+                DOB {formatDisplayDate(candidate.dateOfBirth)}
+              </p>
+            ) : null}
+            <p className={styles.subtitle}>
+              Training summary and customer-visible records for this candidate.
+            </p>
+          </div>
+        </div>
       </header>
 
       <p className={styles.companyMeta}>

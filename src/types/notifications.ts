@@ -4,6 +4,8 @@ export type NotificationType =
   | "expiry_6m"
   | "expiry_expired"
   | "admin_alert"
+  | "portal_invite"
+  | "login_otp"
   | "test";
 
 export type NotificationDeliveryStatus =

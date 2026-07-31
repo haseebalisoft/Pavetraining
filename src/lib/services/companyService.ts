@@ -10,9 +10,23 @@ import {
   getListItemsByKey,
   type SharePointFields,
 } from "@/lib/services/sharePointListService";
+import { parseThumbnailField } from "@/lib/services/listThumbnailService";
 import type { Company, CustomerCompanyProfile } from "@/types/models";
 
 const companyFields = getSharePointFields("company");
+
+/** App-served logo URL so browsers do not need SharePoint cookies. */
+export function companyLogoMediaUrl(
+  companyId: string,
+  logoField: unknown,
+): string | null {
+  if (parseThumbnailField(logoField)) {
+    return `/api/media/company/${companyId}/logo`;
+  }
+  const httpLogo = asNullableString(logoField);
+  if (httpLogo?.startsWith("http")) return httpLogo;
+  return null;
+}
 
 export function mapCompanyFields(
   id: string,
@@ -53,7 +67,7 @@ export function mapCompanyFields(
     notesPricesAgreed: asNullableString(
       fields[companyFields.notesPricesAgreed],
     ),
-    companyLogo: asNullableString(fields[companyFields.companyLogo]),
+    companyLogo: companyLogoMediaUrl(id, fields[companyFields.companyLogo]),
     status: asNullableString(fields[companyFields.status]) ?? "Unknown",
   };
 }

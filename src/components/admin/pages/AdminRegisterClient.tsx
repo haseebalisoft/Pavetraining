@@ -129,8 +129,9 @@ function fieldsFor(kind: RegisterKind): AdminFieldConfig[] {
       ...people,
       {
         name: "eusrNumber",
-        label: "EUSR number",
+        label: "EUSR number (from Workforce)",
         type: "text",
+        readOnly: true,
         section: "Training",
       },
       {
@@ -153,8 +154,9 @@ function fieldsFor(kind: RegisterKind): AdminFieldConfig[] {
       ...people,
       {
         name: "swqrNumber",
-        label: "SWQR number",
+        label: "SWQR number (from Workforce)",
         type: "text",
+        readOnly: true,
         section: "Training",
       },
       {
@@ -267,7 +269,7 @@ export function AdminRegisterClient({
   return (
     <AdminCrudPage<AdminTrainingRecord>
       title={titles[kind]}
-      description="Pick a Workforce candidate to auto-fill name and company (same as SharePoint). Saving a Pass/Fail record updates the Training Matrix for that candidate."
+      description="Select a Workforce candidate (search box + dropdown) — name and company auto-fill like SharePoint. Saving Pass/Fail updates the Training Matrix for that person."
       columns={columnsFor(kind)}
       fields={fieldsFor(kind)}
       companies={companies}

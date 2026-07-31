@@ -15,7 +15,16 @@ const columns: AdminColumn<AdminPermissionRecord>[] = [
     header: "Name",
     render: (row) => row.name?.trim() || "—",
   },
-  { key: "role", header: "Role", render: (row) => row.roleType },
+  {
+    key: "role",
+    header: "Role",
+    render: (row) => row.roleLabel,
+  },
+  {
+    key: "scope",
+    header: "Access scope",
+    render: (row) => row.accessScope?.trim() || "—",
+  },
   { key: "company", header: "Company", render: (row) => row.companyName ?? "—" },
   { key: "status", header: "Status", render: (row) => row.status },
   {
@@ -41,18 +50,36 @@ const fields: AdminFieldConfig[] = [
     required: false,
   },
   {
-    name: "roleType",
+    name: "permissionRole",
     label: "Role",
     type: "select",
     required: true,
     options: [
       {
         value: "Admin",
-        label: "Training Manager (Admin portal)",
+        label: "Training Manager (Admin + Training Matrix)",
       },
       {
         value: "Customer",
-        label: "Supervisor (Customer portal)",
+        label: "Supervisor (Customer Training Matrix)",
+      },
+      {
+        value: "Candidate",
+        label: "Candidate (own Training Matrix only)",
+      },
+    ],
+  },
+  {
+    name: "accessScope",
+    label: "Access scope",
+    type: "select",
+    required: true,
+    options: [
+      { value: "Full Company", label: "Full Company" },
+      { value: "Department Only", label: "Department Only" },
+      {
+        value: "Candidate Only",
+        label: "Candidate Only",
       },
     ],
   },
@@ -82,7 +109,7 @@ export function AdminPermissionsClient({
   return (
     <AdminCrudPage<AdminPermissionRecord>
       title="Permissions"
-      description="Assign portal roles, companies, and access flags. Name is used by Workforce Training manager / Supervisor lookups."
+      description="Assign Training Manager, Supervisor, or Candidate. Candidates use the customer Training Matrix for their own records only. Adding a user sends one invite email. Name is used by Workforce Training manager / Supervisor lookups."
       columns={columns}
       fields={fields}
       companies={companies}
@@ -95,7 +122,10 @@ export function AdminPermissionsClient({
       }
       searchKeys={[
         (row) => row.userEmail,
-        (row) => row.roleType,
+        (row) => row.name,
+        (row) => row.roleLabel,
+        (row) => row.permissionRole,
+        (row) => row.accessScope,
         (row) => row.companyName,
         (row) => row.status,
       ]}

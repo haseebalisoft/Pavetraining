@@ -90,21 +90,80 @@ const columns: AdminColumn<AdminMatrixRecord>[] = [
 ];
 
 const fields: AdminFieldConfig[] = [
-  { name: "candidateName", label: "Candidate name", type: "text", required: true },
-  { name: "companyName", label: "Company", type: "company", required: true },
-  { name: "department", label: "Department", type: "text" },
-  { name: "overallStatus", label: "Overall status", type: "text" },
-  { name: "needsReview", label: "Records to Review", type: "boolean" },
-  { name: "matrixNotes", label: "Notes", type: "textarea" },
-  { name: "nextExpiryDate", label: "Next expiry date", type: "date" },
-  { name: "n001Expiry", label: "N001 - Ind FLT", type: "date" },
-  { name: "n003Expiry", label: "N003 - Reach Lift Truck", type: "date" },
-  { name: "n004Expiry", label: "N004 - Lorry Mounted Lift Truck", type: "date" },
-  { name: "n010Expiry", label: "N010 - Telescopic Handler", type: "date" },
-  { name: "n020Expiry", label: "N020 - Tiltrotator System", type: "date" },
-  { name: "n021Expiry", label: "N021 - Suction Excavator", type: "date" },
-  { name: "n027Expiry", label: "N027 - Excavation Marshal - Banksperson", type: "date" },
-  { name: "n100Expiry", label: "N100 - Exc Crane", type: "date" },
+  {
+    name: "candidateName",
+    label: "Candidate name",
+    type: "text",
+    required: true,
+    section: "Candidate",
+  },
+  {
+    name: "companyName",
+    label: "Company",
+    type: "company",
+    required: true,
+    section: "Candidate",
+  },
+  {
+    name: "dateOfBirth",
+    label: "DOB",
+    type: "date",
+    section: "Candidate",
+  },
+  {
+    name: "cscsExpiry",
+    label: "CSCS Expiry",
+    type: "date",
+    section: "Card expiries",
+  },
+  {
+    name: "n001Expiry",
+    label: "N001 - Ind FLT",
+    type: "date",
+    section: "NPORS categories",
+  },
+  {
+    name: "n003Expiry",
+    label: "N003 - Reach Lift Truck",
+    type: "date",
+    section: "NPORS categories",
+  },
+  {
+    name: "n004Expiry",
+    label: "N004 - Lorry Mounted Lift Truck",
+    type: "date",
+    section: "NPORS categories",
+  },
+  {
+    name: "n010Expiry",
+    label: "N010 - Telescopic Handler",
+    type: "date",
+    section: "NPORS categories",
+  },
+  {
+    name: "n020Expiry",
+    label: "N020 - Tiltrotator System",
+    type: "date",
+    section: "NPORS categories",
+  },
+  {
+    name: "n021Expiry",
+    label: "N021 - Suction Excavator",
+    type: "date",
+    section: "NPORS categories",
+  },
+  {
+    name: "n027Expiry",
+    label: "N027 - Excavation Marshal - Banksperson",
+    type: "date",
+    section: "NPORS categories",
+  },
+  {
+    name: "n100Expiry",
+    label: "N100 - Exc Crane",
+    type: "date",
+    section: "NPORS categories",
+  },
 ];
 
 function matchesFilter(
@@ -205,6 +264,14 @@ export function AdminMatrixClient({
   const [syncResult, setSyncResult] = useState<MatrixSyncResult | null>(null);
   const [syncCompanyId, setSyncCompanyId] = useState("");
 
+  function setExpiryFilter(next: string) {
+    const params = new URLSearchParams(searchParams.toString());
+    if (!next || next === "all") params.delete("filter");
+    else params.set("filter", next);
+    const qs = params.toString();
+    router.replace(qs ? `?${qs}` : "?");
+  }
+
   const runSync = useCallback(
     async (body: Record<string, unknown>, label: string) => {
       setSyncing(true);
@@ -259,7 +326,7 @@ export function AdminMatrixClient({
       </div>
       <AdminCrudPage<AdminMatrixRecord>
         title="Training Matrix"
-        description="Synced from NPORS / EUSR / Streetworks / In-House into SharePoint ‘Training Matrix Update’. Pass updates expiry when newer; Fail never extends. Use Sync Matrix / Sync company / Sync candidate; Dry run previews without writing."
+        description="Synced from NPORS / EUSR / Streetworks into SharePoint ‘Training Matrix Update’. In-House and NVQ are standalone. Pass updates expiry when newer; Fail never extends. Sync Matrix refreshes everyone; Sync company / Sync candidate target one company or person; Dry run previews without writing."
         columns={columns}
         fields={fields}
         companies={companies}
@@ -268,6 +335,7 @@ export function AdminMatrixClient({
         getCompanyName={(row) => row.companyName}
         drawerWide
         listUrl="/api/admin/training-matrix"
+        updateUrl={(id) => `/api/admin/training-matrix/${id}`}
         allowCreate={false}
         mapResponse={(payload) =>
           ((payload as { records?: AdminMatrixRecord[] }).records ?? [])
@@ -282,6 +350,21 @@ export function AdminMatrixClient({
         ]}
         toolbarExtra={
           <div className={styles.syncToolbar}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Expiry filter</span>
+              <select
+                className={styles.select}
+                value={filter || "all"}
+                onChange={(event) => setExpiryFilter(event.target.value)}
+              >
+                <option value="all">All expiries</option>
+                <option value="within-3m">Expiring within 3 months</option>
+                <option value="within-6m">Expiring within 6 months</option>
+                <option value="within-9m">Expiring within 9 months</option>
+                <option value="expired">Expired</option>
+                <option value="review">Records to Review</option>
+              </select>
+            </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Sync company</span>
               <select
