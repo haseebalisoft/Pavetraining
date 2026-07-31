@@ -2,6 +2,10 @@ import "server-only";
 
 import { listAdminMatrix } from "@/lib/services/adminCrudService";
 import {
+  earliestDateFromColumns,
+  listTrainingMatrixExampleRows,
+} from "@/lib/services/bulkUpload/trainingMatrixExampleService";
+import {
   filterRowsByCandidateAccess,
   getAllowedCandidateNames,
   getAllowedWorkforceForCustomer,
@@ -40,7 +44,54 @@ const NPORS_CATEGORY_COLUMNS = [
   { code: "N100", key: "n100Expiry" as const },
 ] as const;
 
-type MatrixSourceRow = Awaited<ReturnType<typeof listAdminMatrix>>[number];
+type MatrixSourceRow = {
+  id: string;
+  candidateName: string;
+  companyName: string | null;
+  department: string | null;
+  dateOfBirth: string | null;
+  overallStatus: string | null;
+  needsReview: boolean;
+  nextExpiryDate: string | null;
+  n001Expiry: string | null;
+  n003Expiry: string | null;
+  n004Expiry: string | null;
+  n010Expiry: string | null;
+  n020Expiry: string | null;
+  n021Expiry: string | null;
+  n027Expiry: string | null;
+  n100Expiry: string | null;
+  columnValues: Record<string, string | null>;
+};
+
+function exampleToMatrixSource(
+  example: Awaited<ReturnType<typeof listTrainingMatrixExampleRows>>[number],
+  companyName: string | null,
+): MatrixSourceRow {
+  const columnValues = { ...example.columnValues };
+  const nextExpiryDate =
+    example.nextExpiryDate ?? earliestDateFromColumns(columnValues);
+  return {
+    id: `example:${example.id}`,
+    candidateName: example.candidateName,
+    companyName,
+    department: null,
+    dateOfBirth: example.dateOfBirth,
+    overallStatus: null,
+    needsReview: !nextExpiryDate,
+    nextExpiryDate,
+    n001Expiry: columnValues["N001 - Ind FLT"] ?? null,
+    n003Expiry: columnValues["N003 - Reach Lift Truck"] ?? null,
+    n004Expiry: columnValues["N004 - Lorry Mounted Lift Truck"] ?? null,
+    n010Expiry: columnValues["N010 - Telescopic Handler"] ?? null,
+    n020Expiry: columnValues["N020 - Tiltrotator System"] ?? null,
+    n021Expiry: columnValues["N021 - Suction Excavator"] ?? null,
+    n027Expiry:
+      columnValues["N027 - Excavation Marshal - Banksperson"] ?? null,
+    n100Expiry: columnValues["N100 - Exc Crane"] ?? null,
+    columnValues,
+  };
+}
 
 function nameKey(value: string | null | undefined): string {
   return (value ?? "").trim().toLowerCase();
@@ -194,191 +245,163 @@ export async function getCustomerMatrixRecords(
 ): Promise<CustomerMatrixRecord[]> {
   const companyId = context?.companyId;
 
-  const [workforce, matrixRows, npors, eusr, streetworks, inHouse] =
-    await Promise.all([
-      context
-        ? getAllowedWorkforceForCustomer(context)
-        : Promise.resolve([] as WorkforceCandidate[]),
-      listAdminMatrix(companyName),
-      companyId
-        ? getCustomerNporsRecords(companyId, context)
-        : Promise.resolve([]),
-      companyId
-        ? getCustomerEusrRecords(companyId, context)
-        : Promise.resolve([]),
-      companyId
-        ? getCustomerStreetworksRecords(companyId, context)
-        : Promise.resolve([]),
-      companyId
-        ? getCustomerInHouseRecords(companyId, context)
-        : Promise.resolve([]),
-    ]);
+  // With customer context: join company workforce to Training Matrix Update by
+  // candidate name. Do NOT use listAdminMatrix(company) — that depends on a full
+  // workforce reload and was dropping matrix dates (workforce-only UI).
+  if (context) {
+    const [workforce, exampleRows, npors, eusr, streetworks, inHouse] =
+      await Promise.all([
+        getAllowedWorkforceForCustomer(context),
+        listTrainingMatrixExampleRows(),
+        companyId
+          ? getCustomerNporsRecords(companyId, context)
+          : Promise.resolve([]),
+        companyId
+          ? getCustomerEusrRecords(companyId, context)
+          : Promise.resolve([]),
+        companyId
+          ? getCustomerStreetworksRecords(companyId, context)
+          : Promise.resolve([]),
+        companyId
+          ? getCustomerInHouseRecords(companyId, context)
+          : Promise.resolve([]),
+      ]);
 
-  // When called without context (legacy), still return matrix-only rows.
-  if (!context) {
-    return matrixRows.map((row) =>
-      buildEnrichedRow({
-        candidate: null,
-        matrix: row,
-        nporsCategories: nporsCategoriesFromMatrix(row),
-        nporsExpiry: earliestExpiryDate([
-          row.nextExpiryDate,
-          row.n001Expiry,
-          row.n003Expiry,
-          row.n004Expiry,
-          row.n010Expiry,
-          row.n020Expiry,
-          row.n021Expiry,
-          row.n027Expiry,
-          row.n100Expiry,
-        ]),
-        swqrExpiry: null,
-        eusrExpiry: null,
-        inHouseExpiry: null,
-      }),
-    );
-  }
+    const matrixByName = new Map<string, MatrixSourceRow>();
+    for (const example of exampleRows) {
+      const key = nameKey(example.candidateName);
+      if (key && !matrixByName.has(key)) {
+        matrixByName.set(
+          key,
+          exampleToMatrixSource(example, context.companyName),
+        );
+      }
+    }
 
-  const matrixByName = new Map<string, MatrixSourceRow>();
-  for (const row of matrixRows) {
-    const key = nameKey(row.candidateName);
-    if (key && !matrixByName.has(key)) {
-      matrixByName.set(key, row);
+    const nporsCatsByName = new Map<string, Set<string>>();
+    const nporsExpiryByName = new Map<string, string[]>();
+    const nporsNumberByName = new Map<string, string>();
+    for (const row of npors) {
+      const key = nameKey(row.candidateName);
+      if (!key) continue;
+      if (row.nporsCategory?.trim()) {
+        const set = nporsCatsByName.get(key) ?? new Set<string>();
+        set.add(row.nporsCategory.trim());
+        nporsCatsByName.set(key, set);
+      }
+      if (row.nporsNumber?.trim() && !nporsNumberByName.has(key)) {
+        nporsNumberByName.set(key, row.nporsNumber.trim());
+      }
+      if (row.expiry?.trim()) {
+        const list = nporsExpiryByName.get(key) ?? [];
+        list.push(row.expiry);
+        nporsExpiryByName.set(key, list);
+      }
     }
-  }
 
-  const nporsCatsByName = new Map<string, Set<string>>();
-  const nporsExpiryByName = new Map<string, string[]>();
-  const nporsNumberByName = new Map<string, string>();
-  for (const row of npors) {
-    const key = nameKey(row.candidateName);
-    if (!key) continue;
-    if (row.nporsCategory?.trim()) {
-      const set = nporsCatsByName.get(key) ?? new Set<string>();
-      set.add(row.nporsCategory.trim());
-      nporsCatsByName.set(key, set);
-    }
-    if (row.nporsNumber?.trim() && !nporsNumberByName.has(key)) {
-      nporsNumberByName.set(key, row.nporsNumber.trim());
-    }
-    if (row.expiry?.trim()) {
-      const list = nporsExpiryByName.get(key) ?? [];
+    const eusrExpiryByName = new Map<string, string[]>();
+    for (const row of eusr) {
+      const key = nameKey(row.candidateName);
+      if (!key || !row.expiry?.trim()) continue;
+      const list = eusrExpiryByName.get(key) ?? [];
       list.push(row.expiry);
-      nporsExpiryByName.set(key, list);
+      eusrExpiryByName.set(key, list);
     }
-  }
 
-  const eusrExpiryByName = new Map<string, string[]>();
-  for (const row of eusr) {
-    const key = nameKey(row.candidateName);
-    if (!key || !row.expiry?.trim()) continue;
-    const list = eusrExpiryByName.get(key) ?? [];
-    list.push(row.expiry);
-    eusrExpiryByName.set(key, list);
-  }
-
-  const swqrExpiryByName = new Map<string, string[]>();
-  for (const row of streetworks) {
-    const key = nameKey(row.candidateName);
-    if (!key || !row.expiry?.trim()) continue;
-    const list = swqrExpiryByName.get(key) ?? [];
-    list.push(row.expiry);
-    swqrExpiryByName.set(key, list);
-  }
-
-  const inHouseExpiryByName = new Map<string, string[]>();
-  const inHouseCourseByName = new Map<string, string>();
-  for (const row of inHouse) {
-    const key = nameKey(row.candidateName);
-    if (!key) continue;
-    if (row.course?.trim() && !inHouseCourseByName.has(key)) {
-      inHouseCourseByName.set(key, row.course.trim());
+    const swqrExpiryByName = new Map<string, string[]>();
+    for (const row of streetworks) {
+      const key = nameKey(row.candidateName);
+      if (!key || !row.expiry?.trim()) continue;
+      const list = swqrExpiryByName.get(key) ?? [];
+      list.push(row.expiry);
+      swqrExpiryByName.set(key, list);
     }
-    if (!row.expiry?.trim()) continue;
-    const list = inHouseExpiryByName.get(key) ?? [];
-    list.push(row.expiry);
-    inHouseExpiryByName.set(key, list);
-  }
 
-  const usedMatrix = new Set<string>();
-  const rows: CustomerMatrixRecord[] = [];
+    const inHouseExpiryByName = new Map<string, string[]>();
+    const inHouseCourseByName = new Map<string, string>();
+    for (const row of inHouse) {
+      const key = nameKey(row.candidateName);
+      if (!key) continue;
+      if (row.course?.trim() && !inHouseCourseByName.has(key)) {
+        inHouseCourseByName.set(key, row.course.trim());
+      }
+      if (!row.expiry?.trim()) continue;
+      const list = inHouseExpiryByName.get(key) ?? [];
+      list.push(row.expiry);
+      inHouseExpiryByName.set(key, list);
+    }
 
-  for (const candidate of workforce) {
-    const key = nameKey(candidate.candidateName);
-    const matrix = matrixByName.get(key) ?? null;
-    if (matrix) usedMatrix.add(key);
+    const rows: CustomerMatrixRecord[] = [];
 
-    const matrixCats = nporsCategoriesFromMatrix(matrix);
-    const registerCats = Array.from(nporsCatsByName.get(key) ?? []);
-    const categories = Array.from(new Set([...matrixCats, ...registerCats]));
+    for (const candidate of workforce) {
+      const key = nameKey(candidate.candidateName);
+      const matrix = matrixByName.get(key) ?? null;
 
-    const nporsExpiry = earliestExpiryDate([
-      ...(nporsExpiryByName.get(key) ?? []),
-      matrix?.n001Expiry,
-      matrix?.n003Expiry,
-      matrix?.n004Expiry,
-      matrix?.n010Expiry,
-      matrix?.n020Expiry,
-      matrix?.n021Expiry,
-      matrix?.n027Expiry,
-      matrix?.n100Expiry,
-    ]);
+      const matrixCats = nporsCategoriesFromMatrix(matrix);
+      const registerCats = Array.from(nporsCatsByName.get(key) ?? []);
+      const categories = Array.from(new Set([...matrixCats, ...registerCats]));
 
-    rows.push(
-      buildEnrichedRow({
-        candidate,
-        matrix,
-        nporsCategories: categories,
-        nporsExpiry,
-        nporsNumber: nporsNumberByName.get(key) ?? candidate.nporsNumbers,
-        swqrExpiry: earliestExpiryDate([
-          candidate.swqrExpiry,
-          ...(swqrExpiryByName.get(key) ?? []),
-        ]),
-        eusrExpiry: earliestExpiryDate([
-          candidate.eusrExpiry,
-          ...(eusrExpiryByName.get(key) ?? []),
-        ]),
-        inHouseExpiry: earliestExpiryDate(inHouseExpiryByName.get(key) ?? []),
-        inHouseCourse: inHouseCourseByName.get(key) ?? null,
-      }),
+      const nporsExpiry = earliestExpiryDate([
+        ...(nporsExpiryByName.get(key) ?? []),
+        matrix?.n001Expiry,
+        matrix?.n003Expiry,
+        matrix?.n004Expiry,
+        matrix?.n010Expiry,
+        matrix?.n020Expiry,
+        matrix?.n021Expiry,
+        matrix?.n027Expiry,
+        matrix?.n100Expiry,
+      ]);
+
+      rows.push(
+        buildEnrichedRow({
+          candidate,
+          matrix,
+          nporsCategories: categories,
+          nporsExpiry,
+          nporsNumber: nporsNumberByName.get(key) ?? candidate.nporsNumbers,
+          swqrExpiry: earliestExpiryDate([
+            candidate.swqrExpiry,
+            ...(swqrExpiryByName.get(key) ?? []),
+          ]),
+          eusrExpiry: earliestExpiryDate([
+            candidate.eusrExpiry,
+            ...(eusrExpiryByName.get(key) ?? []),
+          ]),
+          inHouseExpiry: earliestExpiryDate(inHouseExpiryByName.get(key) ?? []),
+          inHouseCourse: inHouseCourseByName.get(key) ?? null,
+        }),
+      );
+    }
+
+    const allowedNames = await getAllowedCandidateNames(context);
+    return filterRowsByCandidateAccess(rows, allowedNames, context).sort(
+      (a, b) => a.candidateName.localeCompare(b.candidateName),
     );
   }
 
-  // Matrix-only people still in scope (rare: matrix row without workforce match).
-  for (const [key, matrix] of matrixByName) {
-    if (usedMatrix.has(key)) continue;
-    rows.push(
-      buildEnrichedRow({
-        candidate: null,
-        matrix,
-        nporsCategories: [
-          ...nporsCategoriesFromMatrix(matrix),
-          ...Array.from(nporsCatsByName.get(key) ?? []),
-        ],
-        nporsExpiry: earliestExpiryDate([
-          ...(nporsExpiryByName.get(key) ?? []),
-          matrix.n001Expiry,
-          matrix.n003Expiry,
-          matrix.n004Expiry,
-          matrix.n010Expiry,
-          matrix.n020Expiry,
-          matrix.n021Expiry,
-          matrix.n027Expiry,
-          matrix.n100Expiry,
-        ]),
-        nporsNumber: nporsNumberByName.get(key) ?? null,
-        swqrExpiry: earliestExpiryDate(swqrExpiryByName.get(key) ?? []),
-        eusrExpiry: earliestExpiryDate(eusrExpiryByName.get(key) ?? []),
-        inHouseExpiry: earliestExpiryDate(inHouseExpiryByName.get(key) ?? []),
-        inHouseCourse: inHouseCourseByName.get(key) ?? null,
-      }),
-    );
-  }
-
-  const allowedNames = await getAllowedCandidateNames(context);
-  return filterRowsByCandidateAccess(rows, allowedNames, context).sort((a, b) =>
-    a.candidateName.localeCompare(b.candidateName),
+  // Legacy / no context: matrix-only rows for the company name filter.
+  const matrixRows = await listAdminMatrix(companyName);
+  return matrixRows.map((row) =>
+    buildEnrichedRow({
+      candidate: null,
+      matrix: row,
+      nporsCategories: nporsCategoriesFromMatrix(row),
+      nporsExpiry: earliestExpiryDate([
+        row.nextExpiryDate,
+        row.n001Expiry,
+        row.n003Expiry,
+        row.n004Expiry,
+        row.n010Expiry,
+        row.n020Expiry,
+        row.n021Expiry,
+        row.n027Expiry,
+        row.n100Expiry,
+      ]),
+      swqrExpiry: null,
+      eusrExpiry: null,
+      inHouseExpiry: null,
+    }),
   );
 }
 

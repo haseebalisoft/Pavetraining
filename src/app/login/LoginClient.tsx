@@ -79,7 +79,19 @@ export function LoginClient({
           );
           return;
         }
-        window.location.href = "/";
+        let destination = "/";
+        try {
+          const meRes = await fetch("/api/me");
+          if (meRes.ok) {
+            const me = (await meRes.json()) as { redirectTo?: string };
+            if (me.redirectTo === "/admin" || me.redirectTo === "/customer") {
+              destination = me.redirectTo;
+            }
+          }
+        } catch {
+          // Fall back to home router.
+        }
+        window.location.href = destination;
       } catch (err) {
         setStep("code");
         setError(err instanceof Error ? err.message : "Sign-in failed.");
@@ -176,7 +188,19 @@ export function LoginClient({
         );
         return;
       }
-      window.location.href = "/";
+      let destination = "/";
+      try {
+        const meRes = await fetch("/api/me");
+        if (meRes.ok) {
+          const me = (await meRes.json()) as { redirectTo?: string };
+          if (me.redirectTo === "/admin" || me.redirectTo === "/customer") {
+            destination = me.redirectTo;
+          }
+        }
+      } catch {
+        // Fall back to home router.
+      }
+      window.location.href = destination;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sign-in failed.");
     } finally {

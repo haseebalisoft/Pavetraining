@@ -224,17 +224,40 @@ function mapItemToRow(
 
   const columnValues: Record<string, string | null> = { Name: title };
 
+  const directFieldByHeader: Record<string, string> = {
+    "CSCS Expiry": "CSCSExpiry",
+    "SSSTS Expiry": "SSSTSExpiry",
+    "SMSTS Expiry": "SMSTSExpiry",
+    "NRSWA Expiry": "NRSWAExpiry",
+    "EUSR Expiry": "EUSRExpiry",
+    DOB: "DOB",
+    "N001 - Ind FLT": "N001_x002d_IndFLT",
+    "N003 - Reach Lift Truck": "N003_x002d_ReachLiftTruck",
+    "N004 - Lorry Mounted Lift Truck": "N004_x002d_LorryMountedLiftTruck",
+    "N010 - Telescopic Handler": "N010_x002d_TelescopicHandler",
+    "N020 - Tiltrotator System": "N020_x002d_TiltrotatorSystem",
+    "N021 - Suction Excavator": "N021_x002d_SuctionExcavator",
+    "N027 - Excavation Marshal - Banksperson":
+      "N027_x002d_ExcavationMarshalBanksperson",
+    "N100 - Exc Crane": "N100_x002d_ExcCrane",
+  };
+
   for (const header of CLIENT_MATRIX_DISPLAY_HEADERS) {
     if (header === "Name") continue;
     const col =
       columnMap.get(headerLookupKey(header)) ??
       columnMap.get(normalizeHeader(header).toLowerCase()) ??
       null;
-    if (!col) {
+    const directName = directFieldByHeader[header];
+    const raw = col
+      ? fields[col.name]
+      : directName
+        ? fields[directName]
+        : undefined;
+    if (raw === undefined && !col) {
       columnValues[header] = null;
       continue;
     }
-    const raw = fields[col.name];
     columnValues[header] = excelSerialToIsoDate(raw);
   }
 
