@@ -112,20 +112,42 @@ export async function requestEmailOtp(input: {
     hash: codeHash(email, salt, code),
   });
 
+  const portalBase = (
+    process.env.AUTH_URL?.trim() ||
+    process.env.NEXT_PUBLIC_APP_URL?.trim() ||
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "") ||
+    "https://pave-training-portal-nu.vercel.app"
+  ).replace(/\/$/, "");
+
+  const loginUrl = new URL(`${portalBase}/login`);
+  loginUrl.searchParams.set("email", email);
+  loginUrl.searchParams.set("code", code);
+  loginUrl.searchParams.set("challenge", challenge);
+  const signInLink = loginUrl.toString();
+
   const result = await sendNotification({
     type: "login_otp",
     to: email,
     subject: "Your PAVE Training Portal sign-in code",
     text: [
-      "Your one-time sign-in code is:",
+      "Sign in to the PAVE Training Portal with this one-time code:",
       "",
       code,
+      "",
+      "Open this link to sign in (code is filled in for you):",
+      signInLink,
+      "",
+      "Or go to the portal login page and enter the code manually:",
+      `${portalBase}/login`,
       "",
       "This code expires in 10 minutes.",
       "If you did not request this, you can ignore this email.",
     ].join("\n"),
-    html: `<p>Your one-time sign-in code is:</p>
+    html: `<p>Sign in to the <strong>PAVE Training Portal</strong> with this one-time code:</p>
 <p style="font-size:1.5rem;font-weight:700;letter-spacing:0.12em">${code}</p>
+<p><a href="${signInLink}" style="display:inline-block;padding:12px 18px;background:#1f2937;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">Open portal &amp; sign in</a></p>
+<p style="margin-top:1rem">Or copy this link:<br/><a href="${signInLink}">${signInLink}</a></p>
+<p>Portal login page: <a href="${portalBase}/login">${portalBase}/login</a></p>
 <p>This code expires in 10 minutes.</p>
 <p>If you did not request this, you can ignore this email.</p>`,
     companyName: permission.companyDisplayName ?? null,

@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { signIn } from "next-auth/react";
+import { useSearchParams } from "next/navigation";
 
 import styles from "./login.module.css";
 
@@ -12,6 +13,9 @@ export function LoginClient({
 }: {
   microsoftButton: ReactNode;
 }) {
+  const searchParams = useSearchParams();
+  const autoSignInTried = useRef(false);
+
   const [step, setStep] = useState<OtpStep>("email");
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
@@ -20,6 +24,70 @@ export function LoginClient({
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [verifying, setVerifying] = useState(false);
+
+  useEffect(() => {
+    const emailParam = searchParams.get("email")?.trim() || "";
+    const codeParam = searchParams.get("code")?.trim() || "";
+    const challengeParam = searchParams.get("challenge")?.trim() || "";
+
+    if (emailParam) {
+      setEmail(emailParam);
+    }
+    if (codeParam) {
+      setCode(codeParam.replace(/\D/g, "").slice(0, 6));
+    }
+    if (challengeParam) {
+      setChallenge(challengeParam);
+    }
+    if (emailParam && (codeParam || challengeParam)) {
+      setStep("code");
+      setMessage("Code loaded from your email link. Sign in to continue.");
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (autoSignInTried.current) return;
+    const emailParam = searchParams.get("email")?.trim() || "";
+    const codeParam = (searchParams.get("code")?.trim() || "").replace(/\D/g, "");
+    const challengeParam = searchParams.get("challenge")?.trim() || "";
+    if (
+      !emailParam ||
+      !/^\d{6}$/.test(codeParam) ||
+      !challengeParam
+    ) {
+      return;
+    }
+
+    autoSignInTried.current = true;
+    setVerifying(true);
+    setError(null);
+    void (async () => {
+      try {
+        const result = await signIn("email-otp", {
+          email: emailParam.toLowerCase(),
+          code: codeParam,
+          challenge: challengeParam,
+          redirect: false,
+        });
+        if (result?.error) {
+          setStep("code");
+          setEmail(emailParam);
+          setCode(codeParam);
+          setChallenge(challengeParam);
+          setError(
+            "This email link is invalid or expired. Request a new code below.",
+          );
+          return;
+        }
+        window.location.href = "/";
+      } catch (err) {
+        setStep("code");
+        setError(err instanceof Error ? err.message : "Sign-in failed.");
+      } finally {
+        setVerifying(false);
+      }
+    })();
+  }, [searchParams]);
 
   async function onSendCode(event: FormEvent) {
     event.preventDefault();
@@ -130,7 +198,7 @@ export function LoginClient({
         <p className={styles.otpTitle}>Enter your code</p>
         <p className={styles.otpHint}>
           We sent a 6-digit code to <strong>{email}</strong>. Check your inbox
-          (and spam).
+          (and spam), or use the link in that email.
         </p>
 
         <form className={styles.otpForm} onSubmit={onVerifyCode}>
