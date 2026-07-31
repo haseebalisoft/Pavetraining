@@ -73,7 +73,12 @@ function nporsCategoriesFromMatrix(matrix: MatrixSourceRow | null): string[] {
   if (!matrix) return [];
   const codes: string[] = [];
   for (const column of NPORS_CATEGORY_COLUMNS) {
-    if (matrix[column.key]?.trim()) {
+    const fromTyped = matrix[column.key]?.trim();
+    const fromColumns = Object.entries(matrix.columnValues ?? {}).find(([header]) =>
+      header.toUpperCase().startsWith(`${column.code} `) ||
+      header.toUpperCase().startsWith(`${column.code} -`),
+    )?.[1];
+    if (fromTyped || fromColumns?.trim()) {
       codes.push(column.code);
     }
   }

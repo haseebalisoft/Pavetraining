@@ -51,6 +51,62 @@ type ListQueryOptions = {
   selectFields?: string[];
 };
 
+function fieldsAreEmpty(fields: SharePointFields | null | undefined): boolean {
+  if (!fields) return true;
+  for (const key of Object.keys(fields)) {
+    if (key.startsWith("@")) continue;
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Wide SharePoint lists (e.g. Training Matrix Update with 100+ columns) often
+ * return items with an empty `fields` object on collection `$expand=fields`.
+ * Per-item `/items/{id}/fields` still works — hydrate in parallel batches.
+ */
+async function hydrateEmptyItemFields(
+  listId: string,
+  items: SharePointListItem[],
+): Promise<SharePointListItem[]> {
+  const missing = items.filter((item) => fieldsAreEmpty(item.fields));
+  if (missing.length === 0) return items;
+
+  const siteRoot = getSharePointSiteApiRoot();
+  const client = getGraphClient();
+  const byId = new Map<string, SharePointFields>();
+  const batchSize = 12;
+
+  for (let i = 0; i < missing.length; i += batchSize) {
+    const chunk = missing.slice(i, i + batchSize);
+    const results = await Promise.all(
+      chunk.map(async (item) => {
+        try {
+          const fields = (await client
+            .api(`${siteRoot}/lists/${listId}/items/${item.id}/fields`)
+            .get()) as SharePointFields;
+          return { id: item.id, fields };
+        } catch (error) {
+          console.warn(
+            `[sharePoint] fields hydrate failed for list ${listId} item ${item.id}:`,
+            error instanceof Error ? error.message : error,
+          );
+          return { id: item.id, fields: item.fields };
+        }
+      }),
+    );
+    for (const result of results) {
+      byId.set(result.id, result.fields ?? {});
+    }
+  }
+
+  return items.map((item) => {
+    const hydrated = byId.get(item.id);
+    if (!hydrated) return item;
+    return { ...item, fields: hydrated };
+  });
+}
+
 /**
  * Uncached Graph list query. Prefer getListItemsByKey for app reads.
  */
@@ -99,7 +155,7 @@ async function fetchListItemsUncached(
         lastModifiedDateTime: item.lastModifiedDateTime ?? null,
       });
       if (hardCap && items.length >= hardCap) {
-        return items.slice(0, hardCap);
+        return hydrateEmptyItemFields(listId, items.slice(0, hardCap));
       }
     }
 
@@ -112,7 +168,7 @@ async function fetchListItemsUncached(
       .get()) as typeof response;
   }
 
-  return items;
+  return hydrateEmptyItemFields(listId, items);
 }
 
 async function fetchListItemByIdUncached(
@@ -176,8 +232,9 @@ export async function getListItemsByKey(
   const top = String(options?.top ?? "");
   const select = options?.selectFields?.join(",") ?? "";
 
+  // Cache key bump: wide lists previously cached empty `fields` from Graph expand.
   return cachedSharePointRead(
-    ["sp-list-items", listKey, listId, filter, top, select],
+    ["sp-list-items", listKey, listId, filter, top, select, "hydrate-v1"],
     [sharePointListTag(listKey)],
     () => fetchListItemsUncached(listId, options),
   );

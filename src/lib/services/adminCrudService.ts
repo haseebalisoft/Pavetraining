@@ -1291,13 +1291,31 @@ export async function listAdminMatrix(companyName?: string | null) {
     listTrainingMatrixExampleRows(),
   ]);
 
+  const companyKey = companyName?.trim().toLowerCase() || "";
+  const workforceForCompany = companyKey
+    ? workforce.filter(
+        (row) => row.companyName.trim().toLowerCase() === companyKey,
+      )
+    : workforce;
+
   const workforceByName = new Map<string, AdminWorkforceRecord>();
-  for (const row of workforce) {
+  for (const row of workforceForCompany) {
     const key = row.candidateName.trim().toLowerCase();
     if (key && !workforceByName.has(key)) workforceByName.set(key, row);
   }
 
+  // When scoping to a company, only keep matrix rows whose candidate is in
+  // that company's workforce (Training Matrix Update has no company column).
+  const companyNameKeys = companyKey
+    ? new Set(workforceByName.keys())
+    : null;
+
   return exampleRows
+    .filter((example) => {
+      if (!companyNameKeys) return true;
+      const key = example.candidateName.trim().toLowerCase();
+      return Boolean(key && companyNameKeys.has(key));
+    })
     .map((example) => {
       const wf =
         workforceByName.get(example.candidateName.trim().toLowerCase()) ?? null;
@@ -1308,7 +1326,7 @@ export async function listAdminMatrix(companyName?: string | null) {
       const record: AdminMatrixRecord = {
         id: `example:${example.id}`,
         candidateName: example.candidateName,
-        companyName: wf?.companyName ?? null,
+        companyName: wf?.companyName ?? (companyName?.trim() || null),
         department: wf?.department ?? null,
         dateOfBirth: example.dateOfBirth ?? wf?.dateOfBirth ?? null,
         overallStatus: null,
@@ -1328,8 +1346,7 @@ export async function listAdminMatrix(companyName?: string | null) {
         columnValues,
       };
       return record;
-    })
-    .filter((row) => matchesCompany(row.companyName, companyName));
+    });
 }
 
 export async function createAdminMatrix(input: Record<string, unknown>) {
