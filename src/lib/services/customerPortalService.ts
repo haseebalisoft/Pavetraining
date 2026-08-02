@@ -23,6 +23,7 @@ import {
   type SharePointFields,
 } from "@/lib/services/sharePointListService";
 import { stripSharePointHtml } from "@/lib/text/stripSharePointHtml";
+import { parseThumbnailField } from "@/lib/services/listThumbnailService";
 import type {
   CustomerContext,
   CustomerDocumentRecord,
@@ -115,6 +116,25 @@ function isActiveOfferStatus(status: string | null): boolean {
     normalized === "live" ||
     normalized === "published"
   );
+}
+
+function offerHasNotExpired(endDate: string | null): boolean {
+  if (!endDate?.trim()) return true;
+
+  const dateOnly = /^(\d{4}-\d{2}-\d{2})/.exec(endDate.trim())?.[1];
+  if (dateOnly) {
+    return dateOnly >= new Date().toISOString().slice(0, 10);
+  }
+
+  const expiry = new Date(endDate).getTime();
+  return Number.isNaN(expiry) || expiry >= Date.now();
+}
+
+function offerImageUrl(id: string, value: unknown): string | null {
+  if (parseThumbnailField(value)) {
+    return `/api/media/offer/${id}/image`;
+  }
+  return asNullableString(value);
 }
 
 function nvqStatus(completedDate: string | null): CustomerNvqStatus {
@@ -259,6 +279,11 @@ function mapOffer(
     return null;
   }
 
+  const endDate = asNullableString(fields[offerFields.endDate]);
+  if (!offerHasNotExpired(endDate)) {
+    return null;
+  }
+
   const title = asString(fields[offerFields.title]);
   if (!title) {
     return null;
@@ -270,8 +295,11 @@ function mapOffer(
     category: asNullableString(fields[offerFields.category]),
     description: asNullableString(fields[offerFields.shortDescription]),
     startDate: asNullableString(fields[offerFields.startDate]),
-    endDate: asNullableString(fields[offerFields.endDate]),
+    endDate,
     status: status ?? "Active",
+    image: offerImageUrl(id, fields[offerFields.image]),
+    ctaLabel: asNullableString(fields[offerFields.ctaLabel]),
+    ctaLink: asNullableString(fields[offerFields.ctaLink]),
   };
 }
 
@@ -488,9 +516,10 @@ export async function getCustomerEventRecords(
 }
 
 export async function getCustomerOfferRecords(
-  _companyId?: string,
+  companyId?: string,
 ): Promise<CustomerOfferRecord[]> {
   // Offers / Promotions is site-wide (no Company column). Show visible + active only.
+  void companyId;
   const items = await getListItemsByKey("offersPromotions", {
     filter: `fields/${offerFields.customerVisible} eq true`,
     top: 5000,

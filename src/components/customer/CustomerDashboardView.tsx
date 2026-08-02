@@ -1,11 +1,17 @@
 import Link from "next/link";
 
 import { CustomerCompanyProfileCard } from "@/components/customer/CustomerCompanyProfileCard";
-import { Breadcrumbs } from "@/components/ui/Breadcrumbs";
-import { StatusBadge } from "@/components/ui/StatusBadge";
-import type { CustomerCompanyProfile, DashboardStats } from "@/types/models";
+import { CustomerOfferSlider } from "@/components/customer/CustomerOfferSlider";
+import { CustomerUpcomingEvents } from "@/components/customer/CustomerUpcomingEvents";
+import type {
+  CustomerCompanyProfile,
+  CustomerEventRecord,
+  CustomerOfferRecord,
+  DashboardStats,
+} from "@/types/models";
 
 import styles from "./customer.module.css";
+import dashStyles from "./customerDashboard.module.css";
 
 const SECTIONS = [
   {
@@ -47,50 +53,25 @@ const SECTIONS = [
 
 interface CustomerDashboardViewProps {
   companyName: string;
-  email: string;
-  permissionStatus: string;
-  accessScope: string;
-  roleLabel: string;
-  normalizedAccessScope: string;
-  departmentScopes: string[];
-  canDownload: boolean;
   stats: DashboardStats;
+  offers: CustomerOfferRecord[];
+  upcomingEvents: CustomerEventRecord[];
   companyProfile?: CustomerCompanyProfile | null;
 }
 
-function accessLabel(
-  normalizedAccessScope: string,
-  departmentScopes: string[],
-  accessScope: string,
-): string {
-  if (normalizedAccessScope === "Company" || normalizedAccessScope === "All") {
-    return "Company-wide";
-  }
-  if (normalizedAccessScope === "Department") {
-    if (departmentScopes.length > 0) {
-      return `${departmentScopes.join(", ")} department`;
-    }
-    return "Department";
-  }
-  if (normalizedAccessScope === "AssignedCandidates") {
-    return "Assigned candidates";
-  }
-  if (normalizedAccessScope === "CandidateOnly") {
-    return "Own records only";
-  }
-  return accessScope || "Company";
+type StatTone = "danger" | "warn" | "ok" | undefined;
+
+function toneClass(tone: StatTone): string {
+  if (tone === "danger") return styles.statDanger;
+  if (tone === "warn") return styles.statWarn;
+  if (tone === "ok") return styles.statOk;
+  return "";
 }
 
 export function CustomerDashboardView({
-  companyName,
-  email,
-  permissionStatus,
-  accessScope,
-  roleLabel,
-  normalizedAccessScope,
-  departmentScopes,
-  canDownload,
   stats,
+  offers,
+  upcomingEvents,
   companyProfile = null,
 }: CustomerDashboardViewProps) {
   const warningCards = [
@@ -124,118 +105,79 @@ export function CustomerDashboardView({
     },
   ].filter((card) => card.show);
 
+  const overviewCards: Array<{
+    label: string;
+    value: number;
+    tone?: StatTone;
+  }> = [
+    { label: "Candidates", value: stats.workforceCount },
+    { label: "Matrix rows", value: stats.trainingMatrixCount },
+    {
+      label: "Expired",
+      value: stats.expiredCount,
+      tone: stats.expiredCount > 0 ? "danger" : undefined,
+    },
+    {
+      label: "Urgent (0–90 days)",
+      value: stats.expiringSoonCount,
+      tone: stats.expiringSoonCount > 0 ? "danger" : undefined,
+    },
+    {
+      label: "Upcoming (91–270 days)",
+      value: stats.upcomingExpiryCount,
+      tone: stats.upcomingExpiryCount > 0 ? "warn" : undefined,
+    },
+    {
+      label: "Records to Review",
+      value: stats.needsReviewCount,
+      tone: stats.needsReviewCount > 0 ? "warn" : "ok",
+    },
+    { label: "NVQ programmes", value: stats.nvqCount },
+    { label: "Documents", value: stats.documentsCount },
+    { label: "Upcoming events", value: stats.upcomingEventsCount },
+  ];
+
   return (
-    <div>
-      <header className={styles.pageHeader}>
-        <Breadcrumbs items={[{ label: "Customer" }, { label: "Dashboard" }]} />
-        <p className={styles.eyebrow}>Customer portal</p>
-        <h1 className={styles.title}>Dashboard</h1>
-        <p className={styles.subtitle}>
-          A clear view of training health for {companyName}. Only records marked
-          visible to your organisation are included.
-        </p>
-      </header>
+    <div className={dashStyles.dashboardPage}>
+      <h1 className={styles.srOnly}>Dashboard</h1>
+
+      {/* Reference order: offers hero, then upcoming events */}
+      <CustomerOfferSlider offers={offers} />
+      <CustomerUpcomingEvents events={upcomingEvents} />
 
       {companyProfile ? (
         <CustomerCompanyProfileCard company={companyProfile} />
       ) : null}
 
-      <section className={styles.metaGrid} aria-label="Account summary">
-        <div className={styles.metaItem}>
-          <p className={styles.metaLabel}>Company</p>
-          <p className={styles.metaValue}>{companyName}</p>
+      <section className={styles.statsSection} aria-label="Training overview">
+        <div className={dashStyles.sectionHeader}>
+          <h2>Training overview</h2>
         </div>
-        <div className={styles.metaItem}>
-          <p className={styles.metaLabel}>Signed in</p>
-          <p className={styles.metaValue}>{email}</p>
+        <div className={styles.statsGrid}>
+          {overviewCards.map((card) => (
+            <article
+              key={card.label}
+              className={`${styles.statCard} ${toneClass(card.tone)}`}
+            >
+              <p className={styles.statLabel}>{card.label}</p>
+              <p className={styles.statValue}>{card.value}</p>
+            </article>
+          ))}
         </div>
-        <div className={styles.metaItem}>
-          <p className={styles.metaLabel}>Role</p>
-          <p className={styles.metaValue}>
-            <StatusBadge label={roleLabel} tone="neutral" />
-          </p>
-        </div>
-        <div className={styles.metaItem}>
-          <p className={styles.metaLabel}>Access</p>
-          <p className={styles.metaValue}>
-            {accessLabel(normalizedAccessScope, departmentScopes, accessScope)}
-          </p>
-        </div>
-        <div className={styles.metaItem}>
-          <p className={styles.metaLabel}>Permission status</p>
-          <p className={styles.metaValue}>
-            <StatusBadge
-              label={permissionStatus}
-              tone={
-                permissionStatus.toLowerCase() === "active" ? "ok" : "warn"
-              }
-            />
-          </p>
-        </div>
-        <div className={styles.metaItem}>
-          <p className={styles.metaLabel}>Downloads</p>
-          <p className={styles.metaValue}>
-            <StatusBadge
-              label={canDownload ? "Enabled" : "Disabled"}
-              tone={canDownload ? "ok" : "neutral"}
-            />
-          </p>
-        </div>
-      </section>
-
-      <section className={styles.statsGrid} aria-label="Training overview">
-        <article className={styles.statCard}>
-          <p className={styles.statLabel}>Candidates</p>
-          <p className={styles.statValue}>{stats.workforceCount}</p>
-        </article>
-        <article className={styles.statCard}>
-          <p className={styles.statLabel}>Matrix rows</p>
-          <p className={styles.statValue}>{stats.trainingMatrixCount}</p>
-        </article>
-        <article
-          className={`${styles.statCard} ${stats.expiredCount ? styles.statDanger : ""}`}
-        >
-          <p className={styles.statLabel}>Expired</p>
-          <p className={styles.statValue}>{stats.expiredCount}</p>
-        </article>
-        <article
-          className={`${styles.statCard} ${stats.expiringSoonCount ? styles.statWarn : ""}`}
-        >
-          <p className={styles.statLabel}>Urgent (0–90 days)</p>
-          <p className={styles.statValue}>{stats.expiringSoonCount}</p>
-        </article>
-        <article
-          className={`${styles.statCard} ${stats.upcomingExpiryCount ? styles.statWarn : ""}`}
-        >
-          <p className={styles.statLabel}>Upcoming (91–270 days)</p>
-          <p className={styles.statValue}>{stats.upcomingExpiryCount}</p>
-        </article>
-        <article
-          className={`${styles.statCard} ${stats.needsReviewCount ? styles.statWarn : styles.statOk}`}
-        >
-          <p className={styles.statLabel}>Records to Review</p>
-          <p className={styles.statValue}>{stats.needsReviewCount}</p>
-        </article>
-        <article className={styles.statCard}>
-          <p className={styles.statLabel}>NVQ programmes</p>
-          <p className={styles.statValue}>{stats.nvqCount}</p>
-        </article>
-        <article className={styles.statCard}>
-          <p className={styles.statLabel}>Documents</p>
-          <p className={styles.statValue}>{stats.documentsCount}</p>
-        </article>
-        <article className={styles.statCard}>
-          <p className={styles.statLabel}>Upcoming events</p>
-          <p className={styles.statValue}>{stats.upcomingEventsCount}</p>
-        </article>
       </section>
 
       {warningCards.length > 0 ? (
         <section className={styles.panel} aria-label="Expiry warnings">
-          <h2 className={styles.panelTitle}>Attention needed</h2>
+          <div className={dashStyles.sectionHeader}>
+            <h2>Attention needed</h2>
+          </div>
           <div className={styles.warningList}>
             {warningCards.map((card) => (
-              <Link key={card.href} href={card.href} className={styles.warningCard}>
+              <Link
+                key={card.href}
+                href={card.href}
+                className={styles.warningCard}
+              >
                 <strong>
                   {card.title} · {card.value}
                 </strong>
@@ -247,17 +189,25 @@ export function CustomerDashboardView({
       ) : null}
 
       <section
-        className={styles.cardGrid}
+        className={styles.cardGridSection}
         aria-label="Customer portal sections"
-        style={{ marginTop: "1.35rem" }}
       >
-        {SECTIONS.map((section) => (
-          <Link key={section.href} href={section.href} className={styles.navCard}>
-            <h2>{section.title}</h2>
-            <p>{section.description}</p>
-            <span className={styles.navCardCta}>Open →</span>
-          </Link>
-        ))}
+        <div className={dashStyles.sectionHeader}>
+          <h2>Quick links</h2>
+        </div>
+        <div className={styles.cardGrid}>
+          {SECTIONS.map((section) => (
+            <Link
+              key={section.href}
+              href={section.href}
+              className={styles.navCard}
+            >
+              <h2>{section.title}</h2>
+              <p>{section.description}</p>
+              <span className={styles.navCardCta}>Open →</span>
+            </Link>
+          ))}
+        </div>
       </section>
     </div>
   );

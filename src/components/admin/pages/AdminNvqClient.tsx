@@ -9,6 +9,7 @@ import {
 import styles from "@/components/admin/admin.module.css";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import type { AdminNvqRecord } from "@/lib/services/adminCrudService";
+import { getNvqStageOptions } from "@/lib/training/nvqOptions";
 import { formatDate } from "@/lib/utils/formatDate";
 import type { Company } from "@/types/models";
 
@@ -31,6 +32,11 @@ const columns: AdminColumn<AdminNvqRecord>[] = [
     key: "completed",
     header: "Completed date",
     render: (row) => formatDate(row.completedDate),
+  },
+  {
+    key: "visible",
+    header: "Customer visible",
+    render: (row) => (row.customerVisible ? "Yes" : "No"),
   },
 ];
 
@@ -59,17 +65,23 @@ const fields: AdminFieldConfig[] = [
   },
   {
     name: "inductionDate",
-    label: "Induction date",
+    label: "Date induction booked",
     type: "date",
     section: "NVQ",
   },
   {
     name: "stageOfNvq",
     label: "Stage of NVQ",
-    type: "text",
+    type: "select",
+    section: "NVQ",
+    options: getNvqStageOptions(),
+  },
+  {
+    name: "notes",
+    label: "Customer update notes",
+    type: "textarea",
     section: "NVQ",
   },
-  { name: "notes", label: "Notes", type: "textarea", section: "NVQ" },
   {
     name: "completedDate",
     label: "Completed date",
@@ -77,10 +89,38 @@ const fields: AdminFieldConfig[] = [
     section: "NVQ",
   },
   {
+    name: "trainingOutcome",
+    label: "Training outcome",
+    type: "select",
+    section: "Outcome",
+    options: [
+      { value: "Pass", label: "Pass" },
+      { value: "Fail", label: "Fail" },
+    ],
+  },
+  {
+    name: "outcomeDate",
+    label: "Outcome date",
+    type: "date",
+    section: "Outcome",
+  },
+  {
+    name: "assessorTrainer",
+    label: "Assessor / trainer",
+    type: "text",
+    section: "Outcome",
+  },
+  {
+    name: "outcomeNotes",
+    label: "Outcome notes",
+    type: "textarea",
+    section: "Outcome",
+  },
+  {
     name: "customerVisible",
     label: "Customer visible",
     type: "boolean",
-    section: "NVQ",
+    section: "Outcome",
   },
 ];
 
@@ -96,7 +136,7 @@ export function AdminNvqClient({
   return (
     <AdminCrudPage<AdminNvqRecord>
       title="NVQ"
-      description="Select a company to scope the Workforce candidate list, then track NVQ stages, notes, and completion dates."
+      description="Select a company to scope candidates. Admin sees full NVQ fields; customers only see customer-visible progress."
       columns={columns}
       fields={fields}
       companies={companies}

@@ -139,6 +139,73 @@ ${
   return { subject, text, html };
 }
 
+/**
+ * Client-approved booking confirmation — sent when Tentative → Confirmed.
+ */
+export function bookingConfirmedEmailTemplate(input: {
+  trainingManagerName?: string | null;
+  eventTitle: string;
+  dateLabel: string;
+  timeLabel: string;
+  location?: string | null;
+}): { subject: string; text: string; html: string } {
+  const settings = getNotificationSettingsSync();
+  const portalUrl = settings.portalUrl?.replace(/\/$/, "") || null;
+  const eventsUrl = portalUrl ? `${portalUrl}/customer/events` : null;
+  const who = input.trainingManagerName?.trim() || "there";
+  const title = input.eventTitle.trim() || "Training booking";
+  const location = input.location?.trim() || "—";
+  const contact = "Info@pavetraining.co.uk";
+
+  const subject = `Training booking confirmed — ${title}`;
+  const text = [
+    `Hi ${who},`,
+    "",
+    "Your training booking is confirmed.",
+    "",
+    `Event: ${title}`,
+    `Date: ${input.dateLabel}`,
+    `Time: ${input.timeLabel}`,
+    `Location: ${location}`,
+    "",
+    eventsUrl
+      ? `View in the PAVE Training Portal:\n${eventsUrl}`
+      : "View in the PAVE Training Portal.",
+    "",
+    "Any questions please contact:",
+    contact,
+    "",
+    "Cancellation terms:",
+    "100% fee if cancelled within 10 days of the course start date.",
+    "50% fee if cancelled 11-20 days before the course start date.",
+    "These charges will not apply if the course is rebooked for alternative dates.",
+    "",
+    "Kind regards,",
+    "PAVE Training",
+  ].join("\n");
+
+  const html = `<p>Hi ${escapeHtml(who)},</p>
+<p>Your training booking is confirmed.</p>
+<p><strong>Event:</strong> ${escapeHtml(title)}<br/>
+<strong>Date:</strong> ${escapeHtml(input.dateLabel)}<br/>
+<strong>Time:</strong> ${escapeHtml(input.timeLabel)}<br/>
+<strong>Location:</strong> ${escapeHtml(location)}</p>
+${
+  eventsUrl
+    ? `<p>View in the <a href="${escapeHtml(eventsUrl)}">PAVE Training Portal</a>.</p>`
+    : `<p>View in the PAVE Training Portal.</p>`
+}
+<p>Any questions please contact:<br/>
+<a href="mailto:info@pavetraining.co.uk">${escapeHtml(contact)}</a></p>
+<p><strong>Cancellation terms:</strong><br/>
+100% fee if cancelled within 10 days of the course start date.<br/>
+50% fee if cancelled 11-20 days before the course start date.<br/>
+These charges will not apply if the course is rebooked for alternative dates.</p>
+<p>Kind regards,<br/>PAVE Training</p>`;
+
+  return { subject, text, html };
+}
+
 export function testEmailTemplate(): {
   subject: string;
   text: string;

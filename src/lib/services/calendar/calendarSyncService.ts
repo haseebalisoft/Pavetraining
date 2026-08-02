@@ -2,6 +2,7 @@ import "server-only";
 
 import { getSharePointFields } from "@/lib/schema/sharepointSchema";
 import { writeAuditEvent } from "@/lib/services/auditLogService";
+import { bookingStatusFromFreeBusy } from "@/lib/services/bookingStatusService";
 import { computeEventSyncHash } from "@/lib/services/calendar/eventHashService";
 import { mapSharePointEventToOutlookPayload } from "@/lib/services/calendar/eventMappingService";
 import {
@@ -126,6 +127,7 @@ function readEventCore(fields: SharePointFields) {
     trainingAddress: stripSharePointHtml(
       asNullableString(fields[eventFields.trainingAddress]),
     ),
+    bookingStatus: bookingStatusFromFreeBusy(fields[eventFields.freeBusy]),
     outlookEventId: asNullableString(fields[eventFields.outlookEventId]),
     syncStatus: asNullableString(fields[eventFields.syncStatus]),
     syncHash: asNullableString(fields[eventFields.syncHash]),
@@ -254,6 +256,7 @@ export async function createOutlookEventFromSharePointEvent(
     trainingAddress: core.trainingAddress,
     companyName,
     companyId,
+    bookingStatus: core.bookingStatus,
   });
   const payload = mapSharePointEventToOutlookPayload({
     title: core.title,
@@ -263,6 +266,7 @@ export async function createOutlookEventFromSharePointEvent(
     description: core.description,
     trainingAddress: core.trainingAddress,
     companyName,
+    bookingStatus: core.bookingStatus,
   });
   const result = await createOutlookEvent(payload);
   return { result, syncHash };
@@ -284,6 +288,7 @@ export async function updateOutlookEventFromSharePointEvent(
     trainingAddress: core.trainingAddress,
     companyName,
     companyId,
+    bookingStatus: core.bookingStatus,
   });
   const payload = mapSharePointEventToOutlookPayload({
     title: core.title,
@@ -293,6 +298,7 @@ export async function updateOutlookEventFromSharePointEvent(
     description: core.description,
     trainingAddress: core.trainingAddress,
     companyName,
+    bookingStatus: core.bookingStatus,
   });
   const result = await updateOutlookEvent(outlookEventId, payload);
   return { result, syncHash };

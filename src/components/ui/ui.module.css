@@ -2,12 +2,12 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 1.5rem;
-  padding: 0.18rem 0.6rem;
+  min-height: 1.65rem;
+  padding: 0.2rem 0.58rem;
   border-radius: 999px;
   font-size: var(--pave-font-size-caption);
   font-weight: var(--pave-font-weight-caption);
-  line-height: var(--pave-line-height-caption);
+  line-height: 1.2;
   letter-spacing: 0.03em;
   text-transform: uppercase;
   white-space: nowrap;

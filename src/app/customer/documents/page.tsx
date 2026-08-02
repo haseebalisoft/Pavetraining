@@ -4,7 +4,6 @@ import { redirect } from "next/navigation";
 import { DocumentsView } from "@/components/customer/DocumentsView";
 import { LoadingState } from "@/components/ui/States";
 import { auth } from "@/auth";
-import { accessScopeBadgeLabel } from "@/lib/services/customerAccessService";
 import { getCustomerContext } from "@/lib/services/customerContextService";
 import { getCustomerDocumentRecords } from "@/lib/services/customerPortalService";
 import type { CustomerContext } from "@/types/models";
@@ -22,8 +21,6 @@ async function DocumentsContent({ context }: { context: CustomerContext }) {
     <DocumentsView
       companyName={context.companyName}
       email={context.loggedInEmail}
-      roleLabel={context.roleLabel}
-      accessLabel={accessScopeBadgeLabel(context)}
       canDownload={context.canDownload}
       records={records}
     />

@@ -156,6 +156,9 @@ export async function sendNotification(
     };
   }
 
+  // Booking confirmations use the same customer-notification master switch
+  // (enableCustomerNotifications) already checked above.
+
   if (isExpiry && !portal.enableExpiryReminders) {
     await writeNotificationLog({
       type: input.type,

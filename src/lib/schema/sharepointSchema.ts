@@ -261,6 +261,11 @@ const eventsFields = {
   description: "Description",
   internalNotes: "InternalNotes",
   location: "Location",
+  /**
+   * SharePoint calendar Free/Busy — Tentative (offered) or Busy (confirmed).
+   * App maps this to bookingStatus Tentative | Confirmed.
+   */
+  freeBusy: "FreeBusy",
   outlookEventId: "OutlookEventId",
   outlookCalendarId: "OutlookCalendarId",
   outlookICalUid: "OutlookICalUid",
@@ -284,6 +289,10 @@ const offersPromotionsFields = {
   /** Live SharePoint field is ShortDescription (not Description). */
   shortDescription: "ShortDescription",
   status: "Status",
+  /** Reserved internal names; the live list columns must be provisioned first. */
+  image: "OfferImage",
+  ctaLabel: "CtaLabel",
+  ctaLink: "CtaLink",
 } as const;
 
 const permissionsFields = {
@@ -638,6 +647,7 @@ export const SHAREPOINT_LISTS = {
       description: "Customer description",
       internalNotes: "Internal notes",
       location: "Location",
+      freeBusy: "Free/Busy",
       outlookEventId: "Outlook event ID",
       outlookCalendarId: "Outlook calendar ID",
       outlookICalUid: "Outlook iCal UID",
@@ -666,6 +676,9 @@ export const SHAREPOINT_LISTS = {
       endDate: "End date",
       shortDescription: "Short description",
       status: "Status",
+      image: "Offer image",
+      ctaLabel: "CTA label",
+      ctaLink: "CTA link",
     },
   } satisfies SharePointListDefinition<typeof offersPromotionsFields>,
 

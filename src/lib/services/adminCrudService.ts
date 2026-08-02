@@ -6,6 +6,7 @@ import { getSharePointFields } from "@/lib/schema/sharepointSchema";
 import {
   asBoolean,
   asLookupOrString,
+  asMultiChoiceText,
   asNullableString,
   asString,
   createListItemByKey,
@@ -47,6 +48,12 @@ import type {
   AdminDocumentRecord,
   DocumentMetadataStatus,
 } from "@/types/adminDocuments";
+import {
+  bookingStatusFromFreeBusy,
+  freeBusyFromBookingStatus,
+  normalizeBookingStatus,
+  type BookingStatus,
+} from "@/lib/services/bookingStatusService";
 
 export type {
   AdminDocumentRecord,
@@ -1744,8 +1751,11 @@ export interface AdminTrainingRecord {
   swqrNumber?: string | null;
   course?: string | null;
   streetworksCategory?: string | null;
+  /** Streetworks multi-day end date (stored in OutcomeNotes until SP has a column). */
+  trainingDateEnd?: string | null;
   certificateCategory?: string | null;
   courseCategory?: string | null;
+  inHouseCertificationNumber?: string | null;
 }
 
 type RegisterLookupMaps = {
@@ -1803,23 +1813,67 @@ function resolveRegisterPeople(
   return { candidateName, companyName };
 }
 
-function asMultiChoiceText(value: unknown): string | null {
-  if (Array.isArray(value)) {
-    const parts = value
-      .map((entry) => {
-        if (typeof entry === "string") return entry.trim();
-        if (entry && typeof entry === "object") {
-          const record = entry as { LookupValue?: unknown; Label?: unknown };
-          return (
-            asString(record.LookupValue) ?? asString(record.Label) ?? ""
-          ).trim();
-        }
-        return String(entry ?? "").trim();
-      })
-      .filter(Boolean);
-    return parts.length ? parts.join(", ") : null;
+/** Split admin form multi-choice text into a SharePoint MultiChoice array. */
+function asMultiChoiceWrite(input: unknown): string[] | null | undefined {
+  if (input === undefined) return undefined;
+  const text = optionalText(input);
+  if (!text) return null;
+  const parts = text
+    .split(/[;,|]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return parts.length ? parts : null;
+}
+
+const TRAINING_END_MARKER = /\[TrainingEnd:(\d{4}-\d{2}-\d{2})\]\s*/i;
+
+function extractTrainingDateEnd(notes: string | null): {
+  trainingDateEnd: string | null;
+  outcomeNotes: string | null;
+} {
+  if (!notes?.trim()) {
+    return { trainingDateEnd: null, outcomeNotes: notes };
   }
-  return asLookupOrString(value) ?? asNullableString(value);
+  const match = notes.match(TRAINING_END_MARKER);
+  if (!match) {
+    return { trainingDateEnd: null, outcomeNotes: notes };
+  }
+  const cleaned = notes.replace(TRAINING_END_MARKER, "").trim();
+  return {
+    trainingDateEnd: match[1] ?? null,
+    outcomeNotes: cleaned || null,
+  };
+}
+
+function embedTrainingDateEnd(
+  notes: string | null | undefined,
+  trainingDateEnd: unknown,
+): string | null | undefined {
+  if (notes === undefined && trainingDateEnd === undefined) {
+    return undefined;
+  }
+  const endText =
+    trainingDateEnd === undefined
+      ? undefined
+      : optionalText(trainingDateEnd);
+  const base =
+    notes === undefined
+      ? undefined
+      : notes === null
+        ? null
+        : String(notes).replace(TRAINING_END_MARKER, "").trim() || null;
+
+  if (endText === undefined) {
+    return base;
+  }
+  if (!endText) {
+    return base ?? null;
+  }
+  const marker = `[TrainingEnd:${endText}]`;
+  if (!base) {
+    return marker;
+  }
+  return `${marker} ${base}`;
 }
 
 function mapRegister(
@@ -1879,7 +1933,7 @@ function mapRegister(
       customerVisible: asBoolean(item.fields[f.customerVisible]),
       expiry: asNullableString(item.fields[f.expiry]),
       eusrNumber: asNullableString(item.fields[f.eusrNumber]),
-      eusrCategory: asNullableString(item.fields[f.eusrCategory]),
+      eusrCategory: asMultiChoiceText(item.fields[f.eusrCategory]),
       cardType: asNullableString(item.fields[f.cardType]),
     };
   }
@@ -1893,6 +1947,8 @@ function mapRegister(
       lookups,
     );
     if (!people) return null;
+    const rawNotes = asNullableString(item.fields[f.outcomeNotes]);
+    const { trainingDateEnd, outcomeNotes } = extractTrainingDateEnd(rawNotes);
     return {
       id: item.id,
       ...people,
@@ -1901,12 +1957,15 @@ function mapRegister(
       trainingOutcome: asNullableString(item.fields[f.trainingOutcome]),
       outcomeDate: asNullableString(item.fields[f.outcomeDate]),
       assessorTrainer: asNullableString(item.fields[f.assessorTrainer]),
-      outcomeNotes: asNullableString(item.fields[f.outcomeNotes]),
+      outcomeNotes,
       customerVisible: asBoolean(item.fields[f.customerVisible]),
       expiry: asNullableString(item.fields[f.expiryDate]),
       swqrNumber: asNullableString(item.fields[f.swqrNumber]),
       course: asNullableString(item.fields[f.course]),
-      streetworksCategory: asNullableString(item.fields[f.streetworksCategory]),
+      streetworksCategory: asMultiChoiceText(
+        item.fields[f.streetworksCategory],
+      ),
+      trainingDateEnd,
     };
   }
 
@@ -1933,6 +1992,10 @@ function mapRegister(
     course: asNullableString(item.fields[f.courseCategory]),
     certificateCategory: asNullableString(item.fields[f.certificateCategory]),
     courseCategory: asNullableString(item.fields[f.courseCategory]),
+    inHouseCertificationNumber:
+      asLookupOrString(
+        item.fields.Candidate_x0020_Name_x003a__x002,
+      ) ?? null,
   };
 }
 
@@ -2022,7 +2085,7 @@ function registerWritePayload(
       eusrCategory:
         input.eusrCategory === undefined
           ? undefined
-          : optionalText(input.eusrCategory),
+          : asMultiChoiceWrite(input.eusrCategory),
       cardType:
         input.cardType === undefined
           ? undefined
@@ -2067,7 +2130,7 @@ function registerWritePayload(
       streetworksCategory:
         input.streetworksCategory === undefined
           ? undefined
-          : optionalText(input.streetworksCategory),
+          : asMultiChoiceWrite(input.streetworksCategory),
       trainingDate:
         input.trainingDate === undefined
           ? undefined
@@ -2086,9 +2149,14 @@ function registerWritePayload(
           ? undefined
           : optionalText(input.assessorTrainer),
       outcomeNotes:
-        input.outcomeNotes === undefined
+        input.outcomeNotes === undefined && input.trainingDateEnd === undefined
           ? undefined
-          : optionalText(input.outcomeNotes),
+          : embedTrainingDateEnd(
+              input.outcomeNotes === undefined
+                ? undefined
+                : optionalText(input.outcomeNotes),
+              input.trainingDateEnd,
+            ),
       expiryDate:
         input.expiry === undefined ? undefined : asDateInput(input.expiry),
       customerVisible: optionalBool(input.customerVisible),
@@ -2100,10 +2168,7 @@ function registerWritePayload(
   }
 
   const values: Record<string, unknown> = {
-    courseCategory:
-      input.course === undefined && input.courseCategory === undefined
-        ? undefined
-        : optionalText(input.course ?? input.courseCategory),
+    // CourseCategory is not on the live In-House list — write Certificate Category only.
     certificateCategory:
       input.certificateCategory === undefined
         ? undefined
@@ -2335,6 +2400,10 @@ export interface AdminNvqRecord {
   stageOfNvq: string | null;
   notes: string | null;
   completedDate: string | null;
+  trainingOutcome: string | null;
+  outcomeDate: string | null;
+  assessorTrainer: string | null;
+  outcomeNotes: string | null;
   customerVisible: boolean;
   status: "Active" | "Completed";
 }
@@ -2380,6 +2449,10 @@ function mapNvq(
     stageOfNvq: asNullableString(item.fields[nvqFields.stageOfNvq]),
     notes: asNullableString(item.fields[nvqFields.customerUpdateNotes]),
     completedDate,
+    trainingOutcome: asNullableString(item.fields[nvqFields.trainingOutcome]),
+    outcomeDate: asNullableString(item.fields[nvqFields.outcomeDate]),
+    assessorTrainer: asNullableString(item.fields[nvqFields.assessorTrainer]),
+    outcomeNotes: asNullableString(item.fields[nvqFields.outcomeNotes]),
     customerVisible: asBoolean(item.fields[nvqFields.customerVisible]),
     status: completedDate?.trim() ? "Completed" : "Active",
   };
@@ -2445,6 +2518,10 @@ export async function createAdminNvq(input: Record<string, unknown>) {
     stageOfNvq: optionalText(input.stageOfNvq),
     customerUpdateNotes: optionalText(input.notes),
     completedDate: asDateInput(input.completedDate),
+    trainingOutcome: optionalText(input.trainingOutcome),
+    outcomeDate: asDateInput(input.outcomeDate),
+    assessorTrainer: optionalText(input.assessorTrainer),
+    outcomeNotes: optionalText(input.outcomeNotes),
     customerVisible: optionalBool(input.customerVisible) ?? true,
   });
   payload.CandidateNameLookupId = Number(candidate.id);
@@ -2486,6 +2563,22 @@ export async function updateAdminNvq(
       input.completedDate === undefined
         ? undefined
         : asDateInput(input.completedDate),
+    trainingOutcome:
+      input.trainingOutcome === undefined
+        ? undefined
+        : optionalText(input.trainingOutcome),
+    outcomeDate:
+      input.outcomeDate === undefined
+        ? undefined
+        : asDateInput(input.outcomeDate),
+    assessorTrainer:
+      input.assessorTrainer === undefined
+        ? undefined
+        : optionalText(input.assessorTrainer),
+    outcomeNotes:
+      input.outcomeNotes === undefined
+        ? undefined
+        : optionalText(input.outcomeNotes),
     customerVisible: optionalBool(input.customerVisible),
   });
 
@@ -2977,6 +3070,11 @@ export interface AdminEventRecord {
   endDate: string | null;
   description: string | null;
   internalNotes: string | null;
+  /**
+   * Tentative = offered dates (Outlook tentative).
+   * Confirmed = booking confirmed (Outlook busy + TM email).
+   */
+  bookingStatus: BookingStatus;
   doNotSync: boolean;
   syncStatus: string | null;
   syncDirection: string | null;
@@ -3054,6 +3152,7 @@ function mapEvent(item: SharePointListItem): AdminEventRecord | null {
     internalNotes: stripSharePointHtml(
       asNullableString(item.fields[eventFields.internalNotes]),
     ),
+    bookingStatus: bookingStatusFromFreeBusy(item.fields[eventFields.freeBusy]),
     doNotSync: asBoolean(item.fields[eventFields.doNotSync]),
     syncStatus: asNullableString(item.fields[eventFields.syncStatus]),
     syncDirection: asNullableString(item.fields[eventFields.syncDirection]),
@@ -3216,6 +3315,8 @@ export async function createAdminEvent(input: Record<string, unknown>) {
   }
 
   const doNotSync = optionalBool(input.doNotSync) ?? false;
+  const bookingStatus =
+    normalizeBookingStatus(input.bookingStatus) ?? "Tentative";
   const payload = omitNullishFields({
     ...toSharePointFields("events", {
       title,
@@ -3226,6 +3327,7 @@ export async function createAdminEvent(input: Record<string, unknown>) {
       endDate: asDateTimeInput(input.endDate),
       description: optionalText(input.description),
       internalNotes: optionalText(input.internalNotes),
+      freeBusy: freeBusyFromBookingStatus(bookingStatus),
       // Text column — boolean true/false causes Graph generalException.
       doNotSync: toDoNotSyncText(doNotSync),
       syncStatus: doNotSync ? "Skipped" : "Pending",
@@ -3258,6 +3360,26 @@ export async function createAdminEvent(input: Record<string, unknown>) {
       companyId: mapped.companyId ?? companyId,
     },
   ]);
+
+  try {
+    const { notifyBookingConfirmed } = await import(
+      "@/lib/services/eventBookingNotificationService"
+    );
+    await notifyBookingConfirmed({
+      eventId: withName.id,
+      title: withName.title,
+      companyId: withName.companyId,
+      companyName: withName.company,
+      eventDate: withName.eventDate,
+      endDate: withName.endDate,
+      location: withName.location,
+      previousStatus: null,
+      nextStatus: withName.bookingStatus,
+    });
+  } catch (error) {
+    console.error("[events] booking confirmation notify failed:", error);
+  }
+
   return withName;
 }
 
@@ -3267,9 +3389,16 @@ export async function updateAdminEvent(
 ) {
   const existing = await getListItemByKey("events", id);
   if (!existing) throw new NotFoundError("Event not found.");
+  const previousMapped = mapEvent(existing);
+  const previousStatus = previousMapped?.bookingStatus ?? null;
 
   const doNotSync =
     input.doNotSync === undefined ? undefined : optionalBool(input.doNotSync);
+
+  const bookingStatus =
+    input.bookingStatus === undefined
+      ? undefined
+      : (normalizeBookingStatus(input.bookingStatus) ?? "Tentative");
 
   const payload = omitNullishFields(
     toSharePointFields("events", {
@@ -3295,6 +3424,10 @@ export async function updateAdminEvent(
         input.internalNotes === undefined
           ? undefined
           : optionalText(input.internalNotes),
+      freeBusy:
+        bookingStatus === undefined
+          ? undefined
+          : freeBusyFromBookingStatus(bookingStatus),
       doNotSync: toDoNotSyncText(doNotSync),
     }),
   );
@@ -3329,6 +3462,7 @@ export async function updateAdminEvent(
     input.location !== undefined ||
     input.trainingAddress !== undefined ||
     input.description !== undefined ||
+    bookingStatus !== undefined ||
     companyTouched
   ) {
     payload[eventFields.syncStatus] = "Pending";
@@ -3352,6 +3486,26 @@ export async function updateAdminEvent(
   const mapped = mapEvent(refreshed ?? item);
   if (!mapped) throw new Error("Updated event could not be mapped.");
   const [withName] = await attachEventCompanyNames([mapped]);
+
+  try {
+    const { notifyBookingConfirmed } = await import(
+      "@/lib/services/eventBookingNotificationService"
+    );
+    await notifyBookingConfirmed({
+      eventId: withName.id,
+      title: withName.title,
+      companyId: withName.companyId,
+      companyName: withName.company,
+      eventDate: withName.eventDate,
+      endDate: withName.endDate,
+      location: withName.location,
+      previousStatus,
+      nextStatus: withName.bookingStatus,
+    });
+  } catch (error) {
+    console.error("[events] booking confirmation notify failed:", error);
+  }
+
   return withName;
 }
 

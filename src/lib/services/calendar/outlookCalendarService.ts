@@ -81,7 +81,7 @@ function buildGraphEventBody(payload: OutlookEventPayload) {
     location: payload.location
       ? { displayName: payload.location }
       : undefined,
-    showAs: "busy",
+    showAs: payload.showAs ?? "busy",
     categories: ["PAVE Training Portal"],
   };
 }

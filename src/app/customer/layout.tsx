@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
-import { CustomerSidebar } from "@/components/customer/CustomerSidebar";
+import { CustomerTopNav } from "@/components/customer/CustomerTopNav";
 import { auth, signOut } from "@/auth";
 import { accessScopeBadgeLabel } from "@/lib/services/customerAccessService";
 import { getCustomerContext } from "@/lib/services/customerContextService";
@@ -48,7 +48,7 @@ export default async function CustomerLayout({
 
   return (
     <div className={styles.shell}>
-      <CustomerSidebar
+      <CustomerTopNav
         email={context.loggedInEmail}
         companyName={context.companyName}
         roleLabel={context.roleLabel}

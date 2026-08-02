@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useMemo, useTransition } from "react";
+import { useCallback, useMemo, useRef, useState, useTransition } from "react";
 
 import { Breadcrumbs } from "@/components/ui/Breadcrumbs";
 import { ExpiryDateBadge } from "@/components/ui/ExpiryDateBadge";
+import { SlideOverPanel } from "@/components/ui/SlideOverPanel";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import {
   EXPIRY_STATUS_LEGEND,
@@ -326,22 +327,134 @@ export function TrainingMatrixView({
       (filter && filter !== "all"),
   );
 
-  return (
-    <div>
-      <header className={styles.pageHeader}>
-        <Breadcrumbs
-          items={
-            isLanding
-              ? [{ label: "Customer" }, { label: "Training Matrix" }]
-              : [
-                  { label: "Customer", href: "/customer" },
-                  { label: "Training Matrix" },
-                ]
+  /** Advanced filters only (excludes search) — drives the Filters (N) badge. */
+  const advancedFilterCount = [
+    department,
+    trainingManager,
+    supervisor,
+    category,
+    filter !== "all" ? filter : "",
+  ].filter(Boolean).length;
+
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [legendOpen, setLegendOpen] = useState(false);
+  const filtersTriggerRef = useRef<HTMLButtonElement>(null);
+
+  const filterFields = (
+    <>
+      <label className={styles.field}>
+        <span className={styles.fieldLabel}>Department</span>
+        <select
+          className={styles.select}
+          value={department}
+          onChange={(event) =>
+            setParams({ department: event.target.value || null })
           }
-        />
-        <p className={styles.eyebrow}>Customer</p>
-        <h1 className={styles.title}>Training Matrix</h1>
-        <p className={styles.subtitle}>
+        >
+          <option value="">All departments</option>
+          {departments.map((value) => (
+            <option key={value} value={value}>
+              {value}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className={styles.field}>
+        <span className={styles.fieldLabel}>Training Manager</span>
+        <select
+          className={styles.select}
+          value={trainingManager}
+          onChange={(event) =>
+            setParams({ trainingManager: event.target.value || null })
+          }
+        >
+          <option value="">All managers</option>
+          {managers.map((value) => (
+            <option key={value} value={value}>
+              {value}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className={styles.field}>
+        <span className={styles.fieldLabel}>Supervisor</span>
+        <select
+          className={styles.select}
+          value={supervisor}
+          onChange={(event) =>
+            setParams({ supervisor: event.target.value || null })
+          }
+        >
+          <option value="">All supervisors</option>
+          {supervisors.map((value) => (
+            <option key={value} value={value}>
+              {value}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className={styles.field}>
+        <span className={styles.fieldLabel}>Training category</span>
+        <select
+          className={styles.select}
+          value={category}
+          onChange={(event) =>
+            setParams({ category: event.target.value || null })
+          }
+        >
+          {TRAINING_CATEGORIES.map((option) => (
+            <option key={option.value || "all"} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className={styles.field}>
+        <span className={styles.fieldLabel}>Expiry filter</span>
+        <select
+          className={styles.select}
+          value={filter}
+          onChange={(event) =>
+            setParams({
+              filter: event.target.value === "all" ? null : event.target.value,
+            })
+          }
+        >
+          <option value="all">All expiries</option>
+          <option value="within-3m">Expiring within 3 months</option>
+          <option value="within-6m">Expiring within 6 months</option>
+          <option value="9m-plus">9 months or more</option>
+          <option value="expired">Expired</option>
+          <option value="valid">Valid</option>
+          <option value="missing">Records to Review</option>
+          <option value="urgent">Urgent (status)</option>
+          <option value="upcoming">Upcoming (status)</option>
+          <option value="review">Flagged for review</option>
+        </select>
+      </label>
+    </>
+  );
+
+  return (
+    <div className={styles.matrixPage}>
+      <header className={`${styles.pageHeader} ${styles.matrixHeader}`}>
+        <div className={styles.matrixBreadcrumbs}>
+          <Breadcrumbs
+            items={
+              isLanding
+                ? [{ label: "Customer" }, { label: "Training Matrix" }]
+                : [
+                    { label: "Customer", href: "/customer" },
+                    { label: "Training Matrix" },
+                  ]
+            }
+          />
+        </div>
+        <div className={styles.matrixTitleRow}>
+          <p className={styles.eyebrow}>Customer</p>
+          <h1 className={styles.title}>Training Matrix</h1>
+        </div>
+        <p className={`${styles.subtitle} ${styles.matrixSubtitleDesktop}`}>
           Workforce competency overview for your company — NPORS, CSCS,
           Streetworks (SWQR), EUSR, and In-House Training.
         </p>
@@ -362,139 +475,143 @@ export function TrainingMatrixView({
         </button>
       </div>
 
-      <div className={styles.expiryLegend} role="region" aria-label="Expiry colour legend">
+      <div className={styles.expiryLegendDesktop} role="region" aria-label="Expiry colour legend">
         {EXPIRY_STATUS_LEGEND.map((item) => (
           <div key={item.status} className={styles.expiryLegendItem}>
-            <StatusBadge label={item.label} tone={
-              item.status === "missing"
-                ? "missing"
-                : item.status === "valid"
-                  ? "ok"
-                  : item.status === "upcoming"
-                    ? "warn"
-                    : "danger"
-            } />
+            <StatusBadge
+              label={item.label}
+              tone={
+                item.status === "missing"
+                  ? "missing"
+                  : item.status === "valid"
+                    ? "ok"
+                    : item.status === "upcoming"
+                      ? "warn"
+                      : "danger"
+              }
+            />
             <span className={styles.expiryLegendText}>{item.description}</span>
           </div>
         ))}
       </div>
 
-      <div className={styles.toolbar}>
-        <label className={styles.field}>
-          <span className={styles.fieldLabel}>Candidate search</span>
-          <input
-            className={styles.input}
-            type="search"
-            placeholder="Search candidates…"
-            value={search}
-            onChange={(event) =>
-              setParams({ q: event.target.value ? event.target.value : null })
-            }
-          />
-        </label>
-        <label className={styles.field}>
-          <span className={styles.fieldLabel}>Department</span>
-          <select
-            className={styles.select}
-            value={department}
-            onChange={(event) =>
-              setParams({ department: event.target.value || null })
-            }
-          >
-            <option value="">All departments</option>
-            {departments.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
+      <div className={styles.legendMobile}>
+        <button
+          type="button"
+          className={styles.legendToggle}
+          aria-expanded={legendOpen}
+          onClick={() => setLegendOpen((value) => !value)}
+        >
+          What do the colours mean?
+          <span aria-hidden="true">{legendOpen ? "▴" : "▾"}</span>
+        </button>
+        {legendOpen ? (
+          <div className={styles.expiryLegend} role="region" aria-label="Expiry colour legend">
+            {EXPIRY_STATUS_LEGEND.map((item) => (
+              <div key={item.status} className={styles.expiryLegendItem}>
+                <StatusBadge
+                  label={item.label}
+                  tone={
+                    item.status === "missing"
+                      ? "missing"
+                      : item.status === "valid"
+                        ? "ok"
+                        : item.status === "upcoming"
+                          ? "warn"
+                          : "danger"
+                  }
+                />
+                <span className={styles.expiryLegendText}>{item.description}</span>
+              </div>
             ))}
-          </select>
-        </label>
-        <label className={styles.field}>
-          <span className={styles.fieldLabel}>Training Manager</span>
-          <select
-            className={styles.select}
-            value={trainingManager}
-            onChange={(event) =>
-              setParams({ trainingManager: event.target.value || null })
-            }
-          >
-            <option value="">All managers</option>
-            {managers.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className={styles.field}>
-          <span className={styles.fieldLabel}>Supervisor</span>
-          <select
-            className={styles.select}
-            value={supervisor}
-            onChange={(event) =>
-              setParams({ supervisor: event.target.value || null })
-            }
-          >
-            <option value="">All supervisors</option>
-            {supervisors.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className={styles.field}>
-          <span className={styles.fieldLabel}>Training category</span>
-          <select
-            className={styles.select}
-            value={category}
-            onChange={(event) =>
-              setParams({ category: event.target.value || null })
-            }
-          >
-            {TRAINING_CATEGORIES.map((option) => (
-              <option key={option.value || "all"} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className={styles.field}>
-          <span className={styles.fieldLabel}>Expiry filter</span>
-          <select
-            className={styles.select}
-            value={filter}
-            onChange={(event) =>
-              setParams({
-                filter:
-                  event.target.value === "all" ? null : event.target.value,
-              })
-            }
-          >
-            <option value="all">All expiries</option>
-            <option value="within-3m">Expiring within 3 months</option>
-            <option value="within-6m">Expiring within 6 months</option>
-            <option value="9m-plus">9 months or more</option>
-            <option value="expired">Expired</option>
-            <option value="valid">Valid</option>
-            <option value="missing">Records to Review</option>
-            <option value="urgent">Urgent (status)</option>
-            <option value="upcoming">Upcoming (status)</option>
-            <option value="review">Flagged for review</option>
-          </select>
-        </label>
-        <div className={styles.field}>
-          <span className={styles.fieldLabel}>&nbsp;</span>
+          </div>
+        ) : null}
+      </div>
+
+      <div className={styles.filterPanel}>
+        <div className={styles.mobileFilterBar}>
+          <label className={`${styles.field} ${styles.mobileSearchField}`}>
+            <span className={styles.fieldLabel}>Candidate search</span>
+            <input
+              className={styles.input}
+              type="search"
+              placeholder="Search candidates…"
+              value={search}
+              onChange={(event) =>
+                setParams({ q: event.target.value ? event.target.value : null })
+              }
+            />
+          </label>
           <button
+            ref={filtersTriggerRef}
             type="button"
-            className={styles.secondaryButton}
-            disabled={!hasActiveFilters}
-            onClick={clearFilters}
+            className={styles.filtersChip}
+            aria-haspopup="dialog"
+            aria-expanded={filtersOpen}
+            onClick={() => setFiltersOpen(true)}
           >
-            Clear filters
+            Filters
+            {advancedFilterCount > 0 ? (
+              <span className={styles.filtersChipCount}>{advancedFilterCount}</span>
+            ) : null}
           </button>
         </div>
+
+        <div className={styles.toolbarDesktop}>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Candidate search</span>
+            <input
+              className={styles.input}
+              type="search"
+              placeholder="Search candidates…"
+              value={search}
+              onChange={(event) =>
+                setParams({ q: event.target.value ? event.target.value : null })
+              }
+            />
+          </label>
+          {filterFields}
+          <div className={styles.field}>
+            <span className={styles.fieldLabel}>&nbsp;</span>
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              disabled={!hasActiveFilters}
+              onClick={clearFilters}
+            >
+              Clear filters
+            </button>
+          </div>
+        </div>
       </div>
+
+      <SlideOverPanel
+        open={filtersOpen}
+        title="Filters"
+        onClose={() => setFiltersOpen(false)}
+        returnFocusRef={filtersTriggerRef}
+        footer={
+          <div className={styles.filterSheetActions}>
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              disabled={!hasActiveFilters}
+              onClick={clearFilters}
+            >
+              Clear filters
+            </button>
+            <button
+              type="button"
+              className={styles.primaryButton}
+              onClick={() => setFiltersOpen(false)}
+            >
+              Apply
+            </button>
+          </div>
+        }
+      >
+        <div className={styles.filterSheetBody}>{filterFields}</div>
+      </SlideOverPanel>
 
       <p className={styles.resultCount}>
         {filtered.length} of {records.length} candidate
@@ -503,6 +620,12 @@ export function TrainingMatrixView({
 
       {filtered.length === 0 ? (
         <div className={styles.emptyState}>
+          <span className={styles.emptyStateIcon} aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <path d="M3 9h18M9 9v11M15 9v11" />
+            </svg>
+          </span>
           <h2>No matrix rows</h2>
           <p>
             {records.length === 0

@@ -27,6 +27,8 @@ export interface NotificationRecipient {
   permissionId: string;
   companyId: string;
   companyName: string | null;
+  /** Permissions.Name — used for email greetings. */
+  displayName: string | null;
   customerRole: CustomerRoleType | null;
   roleLabel: string;
   normalizedAccessScope: NormalizedAccessScope;
@@ -260,6 +262,7 @@ export async function resolveNotificationRecipients(input: {
       permissionId: permission.id,
       companyId: permission.companyId,
       companyName: permission.companyDisplayName ?? null,
+      displayName: permission.candidateScopeName,
       customerRole: permission.customerRole,
       roleLabel: permission.roleLabel,
       normalizedAccessScope: permission.normalizedAccessScope,
@@ -269,6 +272,21 @@ export async function resolveNotificationRecipients(input: {
   }
 
   return recipients;
+}
+
+/**
+ * Active Training Managers for a company (booking confirmation audience).
+ */
+export async function resolveTrainingManagerRecipients(
+  companyId: string,
+): Promise<NotificationRecipient[]> {
+  const all = await resolveNotificationRecipients({
+    companyId,
+    audience: "document",
+  });
+  return all.filter(
+    (recipient) => recipient.customerRole === "TrainingManager",
+  );
 }
 
 /** Active Admin / PAVE staff emails for system alerts. */

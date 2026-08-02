@@ -23,6 +23,11 @@ export const proxy = auth((req) => {
     return NextResponse.next();
   }
 
+  // Chrome DevTools / browser probes — do not bounce to login.
+  if (pathname.startsWith("/.well-known/")) {
+    return new NextResponse(null, { status: 404 });
+  }
+
   if (pathname.startsWith("/api/auth")) {
     return NextResponse.next();
   }
@@ -50,6 +55,6 @@ export const proxy = auth((req) => {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|sw\\.js|swe-worker.*|icons/|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|sw\\.js|swe-worker.*|\\.well-known/|icons/|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

@@ -18,7 +18,7 @@ const columns: TrainingRecordColumn<CustomerInHouseRecord>[] = [
   },
   {
     key: "course",
-    header: "Course",
+    header: "Certificate Category",
     render: (row) => formatTextCell(row.course),
   },
   {

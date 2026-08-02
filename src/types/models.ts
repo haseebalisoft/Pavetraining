@@ -218,6 +218,9 @@ export interface OfferPromotion {
   endDate: string | null;
   description: string | null;
   status: string | null;
+  image: string | null;
+  ctaLabel: string | null;
+  ctaLink: string | null;
 }
 
 export interface PermissionProfile {
@@ -463,12 +466,15 @@ export interface CustomerNporsRecord extends CustomerTrainingRecordBase {
 export interface CustomerEusrRecord extends CustomerTrainingRecordBase {
   eusrNumber: string | null;
   eusrCategory: string | null;
+  cardType: string | null;
 }
 
 export interface CustomerStreetworksRecord extends CustomerTrainingRecordBase {
   swqrNumber: string | null;
   course: string | null;
   streetworksCategory: string | null;
+  /** Multi-day course end date when recorded by admin. */
+  trainingDateEnd: string | null;
 }
 
 export interface CustomerInHouseRecord extends CustomerTrainingRecordBase {
@@ -523,4 +529,7 @@ export interface CustomerOfferRecord {
   startDate: string | null;
   endDate: string | null;
   status: string | null;
+  image: string | null;
+  ctaLabel: string | null;
+  ctaLink: string | null;
 }

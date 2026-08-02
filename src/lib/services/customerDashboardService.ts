@@ -28,7 +28,9 @@ import {
 } from "@/lib/training/expiryFilters";
 import type {
   CustomerContext,
+  CustomerEventRecord,
   CustomerMatrixRecord,
+  CustomerOfferRecord,
   DashboardStats,
   WorkforceCandidate,
 } from "@/types/models";
@@ -410,9 +412,15 @@ export async function getCustomerMatrixRecords(
  * Training-register counts are deferred (open Training Records for detail)
  * so first paint does not wait on NPORS/EUSR/Streetworks/In-House.
  */
-export async function getCustomerDashboard(
+export interface CustomerDashboardContent {
+  stats: DashboardStats;
+  offers: CustomerOfferRecord[];
+  upcomingEvents: CustomerEventRecord[];
+}
+
+export async function getCustomerDashboardContent(
   context: CustomerContext,
-): Promise<DashboardStats> {
+): Promise<CustomerDashboardContent> {
   const [workforce, matrix, documents, events, offers, nvq] = await Promise.all([
     getAllowedWorkforceForCustomer(context),
     getCustomerMatrixRecords(context.companyName, context),
@@ -448,7 +456,7 @@ export async function getCustomerDashboard(
     return !Number.isNaN(time) && time >= now;
   }).length;
 
-  return {
+  const stats: DashboardStats = {
     workforceCount: workforce.length,
     trainingMatrixCount: matrix.length,
     needsReviewCount,
@@ -464,4 +472,19 @@ export async function getCustomerDashboard(
     inHouseCount: 0,
     nvqCount: nvq.length,
   };
+
+  const upcomingEvents = events.filter((event) => {
+    if (!event.eventDate) return false;
+    const time = new Date(event.eventDate).getTime();
+    return !Number.isNaN(time) && time >= now;
+  });
+
+  return { stats, offers, upcomingEvents };
+}
+
+/** Backwards-compatible stats-only dashboard service. */
+export async function getCustomerDashboard(
+  context: CustomerContext,
+): Promise<DashboardStats> {
+  return (await getCustomerDashboardContent(context)).stats;
 }

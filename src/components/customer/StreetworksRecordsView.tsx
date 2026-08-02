@@ -24,7 +24,17 @@ const columns: TrainingRecordColumn<CustomerStreetworksRecord>[] = [
   {
     key: "trainingDate",
     header: "Training Date",
-    render: (row) => formatDate(row.trainingDate),
+    render: (row) => {
+      const from = formatDate(row.trainingDate);
+      const to = row.trainingDateEnd ? formatDate(row.trainingDateEnd) : null;
+      if (!row.trainingDate?.trim() && !row.trainingDateEnd?.trim()) {
+        return formatTextCell(null);
+      }
+      if (to && row.trainingDateEnd) {
+        return `${from} → ${to}`;
+      }
+      return from;
+    },
   },
   {
     key: "trainingAddress",

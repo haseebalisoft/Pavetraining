@@ -3,7 +3,6 @@
 import { useMemo, useState } from "react";
 
 import { CustomerPageHeader } from "@/components/customer/CustomerPageHeader";
-import { StatusBadge } from "@/components/ui/StatusBadge";
 import { formatDate } from "@/lib/utils/formatDate";
 import type { CustomerDocumentRecord } from "@/types/models";
 
@@ -12,8 +11,6 @@ import styles from "./customer.module.css";
 interface Props {
   companyName: string;
   email: string;
-  roleLabel: string;
-  accessLabel: string;
   canDownload: boolean;
   records: CustomerDocumentRecord[];
 }
@@ -28,8 +25,6 @@ function cell(value: string | null | undefined) {
 export function DocumentsView({
   companyName,
   email,
-  roleLabel,
-  accessLabel,
   canDownload,
   records,
 }: Props) {
@@ -95,15 +90,6 @@ export function DocumentsView({
         {" · "}
         Company: <strong>{companyName}</strong>
       </p>
-
-      <div className={styles.accessBadges} aria-label="Access permissions">
-        <StatusBadge label={`Role: ${roleLabel}`} tone="neutral" />
-        <StatusBadge label={`Access: ${accessLabel}`} tone="neutral" />
-        <StatusBadge
-          label={canDownload ? "Downloads: Enabled" : "Downloads: Disabled"}
-          tone={canDownload ? "ok" : "neutral"}
-        />
-      </div>
 
       <div className={styles.toolbar}>
         <label className={styles.field}>

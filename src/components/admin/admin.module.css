@@ -951,6 +951,29 @@
   border-color: var(--pave-lime);
 }
 
+.multiSelectList {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+  gap: 0.45rem 0.75rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--pave-border);
+  border-radius: 0.75rem;
+  background: var(--pave-surface);
+}
+
+.multiSelectOption {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: var(--pave-font-size-body);
+  color: var(--admin-text);
+  cursor: pointer;
+}
+
+.multiSelectOption input {
+  accent-color: var(--pave-lime);
+}
+
 .statsGrid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

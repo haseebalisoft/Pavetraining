@@ -24,6 +24,7 @@ export default async function AdminNporsPage() {
         nporsNumbers: row.nporsNumbers,
         eusrNumber: row.eusrNumber,
         swqrNumber: row.swqrNumber,
+        inHouseCertificationNumber: row.inHouseCertificationNumber,
       }))}
       initialRows={records}
     />

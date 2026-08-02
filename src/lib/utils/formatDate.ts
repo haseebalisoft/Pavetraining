@@ -21,6 +21,14 @@ const UK_MONTH_YEAR_FORMATTER = new Intl.DateTimeFormat("en-GB", {
   year: "numeric",
 });
 
+const UK_DAY_FORMATTER = new Intl.DateTimeFormat("en-GB", {
+  day: "2-digit",
+});
+
+const UK_SHORT_MONTH_FORMATTER = new Intl.DateTimeFormat("en-GB", {
+  month: "short",
+});
+
 function invalidValueFallback(value: DateValue, fallback: string): string {
   return typeof value === "string" && value.trim() ? value : fallback;
 }
@@ -102,5 +110,24 @@ export function formatMonthYear(value: DateValue, fallback = "—"): string {
   const parsed = parseDateValue(value);
   return parsed
     ? UK_MONTH_YEAR_FORMATTER.format(parsed)
+    : invalidValueFallback(value, fallback);
+}
+
+/** Two-digit day used by compact date blocks (for example, 02). */
+export function formatDay(value: DateValue, fallback = "—"): string {
+  const parsed = parseDateValue(value);
+  return parsed
+    ? UK_DAY_FORMATTER.format(parsed)
+    : invalidValueFallback(value, fallback);
+}
+
+/** Abbreviated UK month used by compact date blocks (for example, Aug). */
+export function formatShortMonth(
+  value: DateValue,
+  fallback = "TBC",
+): string {
+  const parsed = parseDateValue(value);
+  return parsed
+    ? UK_SHORT_MONTH_FORMATTER.format(parsed)
     : invalidValueFallback(value, fallback);
 }

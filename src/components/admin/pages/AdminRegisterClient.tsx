@@ -11,8 +11,12 @@ import {
   getEusrCardTypeOptions,
   getEusrCategoryOptions,
 } from "@/lib/training/eusrOptions";
-import { getInHouseCourseOptions } from "@/lib/training/inHouseCourseOptions";
+import { getInHouseCertificateCategoryOptions } from "@/lib/training/inHouseCertificateOptions";
 import { getNporsCategoryOptions } from "@/lib/training/nporsCategoryOptions";
+import {
+  getStreetworksCategoryOptions,
+  getStreetworksCourseOptions,
+} from "@/lib/training/streetworksOptions";
 import type { AdminTrainingRecord } from "@/lib/services/adminCrudService";
 import type { Company } from "@/types/models";
 
@@ -23,6 +27,17 @@ const titles: Record<RegisterKind, string> = {
   eusr: "EUSR Training",
   streetworks: "Streetworks Training",
   "in-house": "In-House Training",
+};
+
+const descriptions: Record<RegisterKind, string> = {
+  npors:
+    "Select company, then candidate — NPORS number fills from Workforce. Pass/Fail updates the Training Matrix.",
+  eusr:
+    "Select company, then candidate — EUSR number fills from Workforce. Pass/Fail updates the Training Matrix.",
+  streetworks:
+    "Select company, then candidate — SWQR number fills from Workforce. Pass/Fail updates the Training Matrix.",
+  "in-house":
+    "Select company, then candidate — certification number fills from Workforce. In-House is standalone (does not update the Training Matrix).",
 };
 
 function fieldsFor(kind: RegisterKind): AdminFieldConfig[] {
@@ -104,8 +119,9 @@ function fieldsFor(kind: RegisterKind): AdminFieldConfig[] {
       ...people,
       {
         name: "nporsNumber",
-        label: "NPORS number",
+        label: "NPORS number (from Workforce)",
         type: "text",
+        readOnly: true,
         section: "Training",
       },
       {
@@ -115,13 +131,13 @@ function fieldsFor(kind: RegisterKind): AdminFieldConfig[] {
         section: "Training",
         options: [
           { value: "Novice", label: "Novice" },
-          { value: "Ewt", label: "Ewt" },
+          { value: "Ewt", label: "EWT" },
         ],
       },
       {
         name: "nporsCategory",
         label: "NPORS category",
-        type: "select",
+        type: "multiselect",
         section: "Training",
         options: getNporsCategoryOptions(),
       },
@@ -141,7 +157,7 @@ function fieldsFor(kind: RegisterKind): AdminFieldConfig[] {
       {
         name: "eusrCategory",
         label: "EUSR category",
-        type: "select",
+        type: "multiselect",
         section: "Training",
         options: getEusrCategoryOptions(),
       },
@@ -167,37 +183,88 @@ function fieldsFor(kind: RegisterKind): AdminFieldConfig[] {
       },
       {
         name: "course",
-        label: "Course",
+        label: "Course (Operative / Supervisor)",
         type: "select",
         section: "Training",
-        options: [
-          { value: "Operative", label: "Operative" },
-          { value: "Supervisor", label: "Supervisor" },
-        ],
+        options: getStreetworksCourseOptions(),
       },
       {
         name: "streetworksCategory",
-        label: "Streetworks category",
+        label: "Streetworks category (units)",
+        type: "multiselect",
+        section: "Training",
+        options: getStreetworksCategoryOptions(),
+      },
+      {
+        name: "trainingDate",
+        label: "Training date (from)",
+        type: "date",
+        section: "Training",
+      },
+      {
+        name: "trainingDateEnd",
+        label: "Training date (to)",
+        type: "date",
+        section: "Training",
+      },
+      {
+        name: "trainingAddress",
+        label: "Training address",
         type: "text",
         section: "Training",
       },
-      ...outcome.filter((field) => field.name !== "notes"),
+      {
+        name: "trainingOutcome",
+        label: "Outcome",
+        type: "select",
+        section: "Outcome",
+        options: [
+          { value: "Pass", label: "Pass" },
+          { value: "Fail", label: "Fail" },
+        ],
+      },
+      {
+        name: "outcomeDate",
+        label: "Outcome date",
+        type: "date",
+        section: "Outcome",
+      },
+      { name: "expiry", label: "Expiry", type: "date", section: "Outcome" },
+      {
+        name: "assessorTrainer",
+        label: "Assessor / trainer",
+        type: "text",
+        section: "Outcome",
+      },
+      {
+        name: "outcomeNotes",
+        label: "Outcome notes",
+        type: "textarea",
+        section: "Outcome",
+      },
+      {
+        name: "customerVisible",
+        label: "Customer visible",
+        type: "boolean",
+        section: "Outcome",
+      },
     ];
   }
   return [
     ...people,
     {
-      name: "certificateCategory",
-      label: "Certificate category",
+      name: "inHouseCertificationNumber",
+      label: "In-House certification number (from Workforce)",
       type: "text",
+      readOnly: true,
       section: "Training",
     },
     {
-      name: "course",
-      label: "Course",
+      name: "certificateCategory",
+      label: "Certificate category",
       type: "select",
       section: "Training",
-      options: getInHouseCourseOptions(),
+      options: getInHouseCertificateCategoryOptions(),
     },
     ...outcome,
   ];
@@ -219,12 +286,27 @@ function columnsFor(kind: RegisterKind): AdminColumn<AdminTrainingRecord>[] {
       header: "Category",
       render: (row) => row.nporsCategory ?? "—",
     });
+    base.push({
+      key: "novice",
+      header: "Novice / EWT",
+      render: (row) => row.noviceOrEwt ?? "—",
+    });
   }
   if (kind === "eusr") {
     base.push({
       key: "number",
       header: "EUSR number",
       render: (row) => row.eusrNumber ?? "—",
+    });
+    base.push({
+      key: "category",
+      header: "Category",
+      render: (row) => row.eusrCategory ?? "—",
+    });
+    base.push({
+      key: "card",
+      header: "Card type",
+      render: (row) => row.cardType ?? "—",
     });
   }
   if (kind === "streetworks") {
@@ -233,12 +315,22 @@ function columnsFor(kind: RegisterKind): AdminColumn<AdminTrainingRecord>[] {
       header: "SWQR number",
       render: (row) => row.swqrNumber ?? "—",
     });
-  }
-  if (kind === "in-house") {
     base.push({
       key: "course",
       header: "Course",
       render: (row) => row.course ?? "—",
+    });
+    base.push({
+      key: "category",
+      header: "Category",
+      render: (row) => row.streetworksCategory ?? "—",
+    });
+  }
+  if (kind === "in-house") {
+    base.push({
+      key: "certCategory",
+      header: "Certificate category",
+      render: (row) => row.certificateCategory ?? "—",
     });
   }
   base.push(
@@ -275,7 +367,7 @@ export function AdminRegisterClient({
   return (
     <AdminCrudPage<AdminTrainingRecord>
       title={titles[kind]}
-      description="Select a company to scope the Workforce candidate list. Candidate selection still auto-fills register numbers. Saving Pass/Fail updates the Training Matrix for that person."
+      description={descriptions[kind]}
       columns={columnsFor(kind)}
       fields={fieldsFor(kind)}
       companies={companies}
@@ -296,8 +388,11 @@ export function AdminRegisterClient({
         (row) => row.nporsNumber,
         (row) => row.nporsCategory,
         (row) => row.eusrNumber,
+        (row) => row.eusrCategory,
         (row) => row.swqrNumber,
         (row) => row.course,
+        (row) => row.streetworksCategory,
+        (row) => row.certificateCategory,
         (row) => row.trainingAddress,
         (row) => row.assessorTrainer,
       ]}

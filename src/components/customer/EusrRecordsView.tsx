@@ -27,6 +27,11 @@ const columns: TrainingRecordColumn<CustomerEusrRecord>[] = [
     render: (row) => formatTextCell(row.eusrCategory),
   },
   {
+    key: "cardType",
+    header: "Card Type",
+    render: (row) => formatTextCell(row.cardType),
+  },
+  {
     key: "trainingDate",
     header: "Training Date",
     render: (row) => formatDate(row.trainingDate),
@@ -66,6 +71,7 @@ export function EusrRecordsView({ companyName, records }: Props) {
           row.candidateName,
           row.eusrNumber,
           row.eusrCategory,
+          row.cardType,
           row.trainingAddress,
           row.outcome,
         ]

@@ -15,6 +15,7 @@ export function computeEventSyncHash(input: {
   trainingAddress: string | null | undefined;
   companyName: string | null | undefined;
   companyId: string | null | undefined;
+  bookingStatus?: string | null | undefined;
 }): string {
   const normalize = (value: string | null | undefined) =>
     (value ?? "").trim().replace(/\s+/g, " ").toLowerCase();
@@ -27,6 +28,7 @@ export function computeEventSyncHash(input: {
     normalize(input.description),
     normalize(input.trainingAddress),
     normalize(input.companyId) || normalize(input.companyName),
+    normalize(input.bookingStatus),
   ].join("|");
 
   return createHash("sha256").update(payload).digest("hex").slice(0, 40);

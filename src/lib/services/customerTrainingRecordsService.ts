@@ -8,6 +8,7 @@ import {
 import { getCompanyById } from "@/lib/services/companyService";
 import {
   asBoolean,
+  asMultiChoiceText,
   asNullableString,
   asString,
   buildFieldLookupIdEqualsFilter,
@@ -89,7 +90,7 @@ function mapNpors(
       asNullableString(fields[nporsFields.trainingAddress]),
     ),
     noviceOrEwt: asNullableString(fields[nporsFields.noviceOrEwt]),
-    nporsCategory: asNullableString(fields[nporsFields.nporsCategory]),
+    nporsCategory: asMultiChoiceText(fields[nporsFields.nporsCategory]),
     outcome: toCustomerOutcome(
       asNullableString(fields[nporsFields.trainingOutcome]),
     ),
@@ -116,7 +117,8 @@ function mapEusr(
     candidateName,
     workforceId: resolveWorkforceId(candidateName, workforceIds),
     eusrNumber: asNullableString(fields[eusrFields.eusrNumber]),
-    eusrCategory: asNullableString(fields[eusrFields.eusrCategory]),
+    eusrCategory: asMultiChoiceText(fields[eusrFields.eusrCategory]),
+    cardType: asNullableString(fields[eusrFields.cardType]),
     trainingDate: asNullableString(fields[eusrFields.trainingDate]),
     trainingAddress: stripSharePointHtml(
       asNullableString(fields[eusrFields.trainingAddress]),
@@ -142,17 +144,21 @@ function mapStreetworks(
     return null;
   }
 
+  const rawNotes = asNullableString(fields[streetworksFields.outcomeNotes]);
+  const endMatch = rawNotes?.match(/\[TrainingEnd:(\d{4}-\d{2}-\d{2})\]/i);
+
   return {
     id,
     candidateName,
     workforceId: resolveWorkforceId(candidateName, workforceIds),
     swqrNumber: asNullableString(fields[streetworksFields.swqrNumber]),
     trainingDate: asNullableString(fields[streetworksFields.trainingDate]),
+    trainingDateEnd: endMatch?.[1] ?? null,
     trainingAddress: stripSharePointHtml(
       asNullableString(fields[streetworksFields.trainingAddress]),
     ),
     course: asNullableString(fields[streetworksFields.course]),
-    streetworksCategory: asNullableString(
+    streetworksCategory: asMultiChoiceText(
       fields[streetworksFields.streetworksCategory],
     ),
     outcome: toCustomerOutcome(
@@ -176,9 +182,10 @@ function mapInHouse(
     return null;
   }
 
+  // Prefer Certificate Category (live SharePoint choice); fall back to legacy CourseCategory.
   const course =
-    asNullableString(fields[inHouseFields.courseCategory]) ??
-    asNullableString(fields[inHouseFields.certificateCategory]);
+    asNullableString(fields[inHouseFields.certificateCategory]) ??
+    asNullableString(fields[inHouseFields.courseCategory]);
 
   return {
     id,

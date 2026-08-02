@@ -11,7 +11,10 @@ import {
   getSharePointListId,
   getSharePointSiteApiRoot,
 } from "@/lib/config/sharepoint";
-import { getGraphClient } from "@/lib/graph/graphClient";
+import {
+  getGraphClient,
+  withGraphReadRetry,
+} from "@/lib/graph/graphClient";
 import {
   getSharePointFields,
   type SharePointListKey,
@@ -82,9 +85,11 @@ async function hydrateEmptyItemFields(
     const results = await Promise.all(
       chunk.map(async (item) => {
         try {
-          const fields = (await client
-            .api(`${siteRoot}/lists/${listId}/items/${item.id}/fields`)
-            .get()) as SharePointFields;
+          const fields = (await withGraphReadRetry(() =>
+            client
+              .api(`${siteRoot}/lists/${listId}/items/${item.id}/fields`)
+              .get(),
+          )) as SharePointFields;
           return { id: item.id, fields };
         } catch (error) {
           console.warn(
@@ -120,23 +125,26 @@ async function fetchListItemsUncached(
   const hardCap = options?.top && options.top > 200 ? options.top : undefined;
 
   const items: SharePointListItem[] = [];
-  let request = client
-    .api(`${siteRoot}/lists/${listId}/items`)
-    .expand(
-      options?.selectFields?.length
-        ? `fields($select=${options.selectFields.join(",")})`
-        : "fields",
-    )
-    .top(pageSize)
-    .header("Prefer", "HonorNonIndexedQueriesWarningMayFailRandomly");
+  const getFirstPage = () => {
+    let request = client
+      .api(`${siteRoot}/lists/${listId}/items`)
+      .expand(
+        options?.selectFields?.length
+          ? `fields($select=${options.selectFields.join(",")})`
+          : "fields",
+      )
+      .top(pageSize)
+      .header("Prefer", "HonorNonIndexedQueriesWarningMayFailRandomly");
 
-  if (options?.filter) {
-    // GraphRequest.filter() does not encode; encode here so & and other
-    // reserved URL characters inside literal values stay inside $filter.
-    request = request.filter(encodeODataFilter(options.filter));
-  }
+    if (options?.filter) {
+      // GraphRequest.filter() does not encode; encode here so & and other
+      // reserved URL characters inside literal values stay inside $filter.
+      request = request.filter(encodeODataFilter(options.filter));
+    }
+    return request.get();
+  };
 
-  let response = (await request.get()) as {
+  let response = (await withGraphReadRetry(getFirstPage)) as {
     value?: Array<{
       id: string;
       createdDateTime?: string;
@@ -162,10 +170,12 @@ async function fetchListItemsUncached(
     const nextLink = response["@odata.nextLink"];
     if (!nextLink) break;
 
-    response = (await client
-      .api(nextLink.replace(/^https:\/\/graph\.microsoft\.com\/v1\.0/i, ""))
-      .header("Prefer", "HonorNonIndexedQueriesWarningMayFailRandomly")
-      .get()) as typeof response;
+    response = (await withGraphReadRetry(() =>
+      client
+        .api(nextLink.replace(/^https:\/\/graph\.microsoft\.com\/v1\.0/i, ""))
+        .header("Prefer", "HonorNonIndexedQueriesWarningMayFailRandomly")
+        .get(),
+    )) as typeof response;
   }
 
   return hydrateEmptyItemFields(listId, items);
@@ -179,10 +189,12 @@ async function fetchListItemByIdUncached(
   const client = getGraphClient();
 
   try {
-    const item = (await client
-      .api(`${siteRoot}/lists/${listId}/items/${itemId}`)
-      .expand("fields")
-      .get()) as {
+    const item = (await withGraphReadRetry(() =>
+      client
+        .api(`${siteRoot}/lists/${listId}/items/${itemId}`)
+        .expand("fields")
+        .get(),
+    )) as {
       id: string;
       createdDateTime?: string;
       lastModifiedDateTime?: string;
@@ -315,6 +327,41 @@ export function asNullableString(value: unknown): string | null {
   return asString(value) ?? null;
 }
 
+/**
+ * Formats SharePoint MultiChoice (string[], choice objects, or delimited text)
+ * as a comma-separated display string.
+ */
+export function asMultiChoiceText(value: unknown): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((entry) => {
+        if (typeof entry === "string") return entry.trim();
+        if (entry && typeof entry === "object") {
+          const record = entry as {
+            LookupValue?: unknown;
+            Label?: unknown;
+            Title?: unknown;
+          };
+          return (
+            asString(record.LookupValue) ??
+            asString(record.Label) ??
+            asString(record.Title) ??
+            ""
+          ).trim();
+        }
+        return String(entry ?? "").trim();
+      })
+      .filter(Boolean);
+    return parts.length ? parts.join(", ") : null;
+  }
+
+  return asLookupOrString(value) ?? asNullableString(value);
+}
+
 /** Resolves plain strings or SharePoint lookup objects to display text. */
 export function asLookupOrString(value: unknown): string | null {
   const direct = asString(value);
@@ -387,14 +434,18 @@ export async function getListItemFileContent(
   const client = getGraphClient();
 
   try {
-    const driveItem = (await client
-      .api(`${siteRoot}/lists/${listId}/items/${itemId}/driveItem`)
-      .get()) as { name?: string; file?: { mimeType?: string } };
+    const driveItem = (await withGraphReadRetry(() =>
+      client
+        .api(`${siteRoot}/lists/${listId}/items/${itemId}/driveItem`)
+        .get(),
+    )) as { name?: string; file?: { mimeType?: string } };
 
-    const content = (await client
-      .api(`${siteRoot}/lists/${listId}/items/${itemId}/driveItem/content`)
-      .responseType(ResponseType.ARRAYBUFFER)
-      .get()) as ArrayBuffer;
+    const content = (await withGraphReadRetry(() =>
+      client
+        .api(`${siteRoot}/lists/${listId}/items/${itemId}/driveItem/content`)
+        .responseType(ResponseType.ARRAYBUFFER)
+        .get(),
+    )) as ArrayBuffer;
 
     return {
       content,
@@ -502,10 +553,12 @@ export async function getListColumnNames(
     [sharePointListTag(listKey)],
     async () => {
       const client = getGraphClient();
-      const response = (await client
-        .api(`${siteRoot}/lists/${listId}/columns`)
-        .top(200)
-        .get()) as { value?: Array<{ name?: string }> };
+      const response = (await withGraphReadRetry(() =>
+        client
+          .api(`${siteRoot}/lists/${listId}/columns`)
+          .top(200)
+          .get(),
+      )) as { value?: Array<{ name?: string }> };
 
       return (response.value ?? [])
         .map((column) => column.name?.trim())

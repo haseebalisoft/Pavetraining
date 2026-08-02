@@ -21,6 +21,8 @@ export type OutlookEventPayload = {
   endIso: string;
   location: string | null;
   timeZone: string;
+  /** Outlook free/busy — tentative for offered dates, busy when confirmed. */
+  showAs: "tentative" | "busy";
 };
 
 export type OutlookEventResult = {

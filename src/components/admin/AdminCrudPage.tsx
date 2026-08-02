@@ -20,6 +20,7 @@ export type AdminFieldType =
   | "datetime"
   | "textarea"
   | "select"
+  | "multiselect"
   | "boolean"
   | "company"
   | "workforce";
@@ -31,6 +32,7 @@ export interface AdminWorkforceOption {
   nporsNumbers?: string | null;
   eusrNumber?: string | null;
   swqrNumber?: string | null;
+  inHouseCertificationNumber?: string | null;
 }
 
 export interface AdminFieldConfig {
@@ -804,7 +806,7 @@ export function AdminCrudPage<T extends { id: string }>({
                     (row) =>
                       row.companyName.trim().toLowerCase() === selectedCompany,
                   )
-                : workforce;
+                : [];
               const filteredWorkforce = query
                 ? companyWorkforce.filter((row) =>
                     `${row.candidateName} ${row.companyName}`
@@ -812,23 +814,31 @@ export function AdminCrudPage<T extends { id: string }>({
                       .includes(query),
                   )
                 : companyWorkforce;
+              const candidateDisabled = field.readOnly || !selectedCompany;
               control = (
                 <label className={styles.field}>
                   <span className={styles.fieldLabel}>
-                    {field.label} (scoped to selected company)
+                    {field.label}
+                    {selectedCompany
+                      ? " (scoped to selected company)"
+                      : " — select a company first"}
                   </span>
                   <input
                     className={`${styles.input} ${styles.workforceFilter}`}
                     type="search"
                     value={workforceQuery}
-                    placeholder="Type to search Workforce…"
-                    disabled={field.readOnly}
+                    placeholder={
+                      selectedCompany
+                        ? "Type to search Workforce…"
+                        : "Select a company first…"
+                    }
+                    disabled={candidateDisabled}
                     onChange={(event) => setWorkforceQuery(event.target.value)}
                   />
                   <select
                     className={styles.select}
                     value={selectedId}
-                    disabled={field.readOnly}
+                    disabled={candidateDisabled}
                     onChange={(event) => {
                       const hit = workforce.find(
                         (row) => row.id === event.target.value,
@@ -838,6 +848,10 @@ export function AdminCrudPage<T extends { id: string }>({
                           ...current,
                           candidateName: "",
                           companyName: current.companyName,
+                          nporsNumber: "",
+                          eusrNumber: "",
+                          swqrNumber: "",
+                          inHouseCertificationNumber: "",
                         }));
                         return;
                       }
@@ -845,29 +859,86 @@ export function AdminCrudPage<T extends { id: string }>({
                         ...current,
                         candidateName: hit.candidateName,
                         companyName: hit.companyName,
-                        nporsNumber:
-                          String(current.nporsNumber ?? "").trim() ||
-                          hit.nporsNumbers ||
-                          "",
-                        eusrNumber:
-                          String(current.eusrNumber ?? "").trim() ||
-                          hit.eusrNumber ||
-                          "",
-                        swqrNumber:
-                          String(current.swqrNumber ?? "").trim() ||
-                          hit.swqrNumber ||
-                          "",
+                        // Always refresh projected Workforce numbers for the chosen candidate.
+                        nporsNumber: hit.nporsNumbers || "",
+                        eusrNumber: hit.eusrNumber || "",
+                        swqrNumber: hit.swqrNumber || "",
+                        inHouseCertificationNumber:
+                          hit.inHouseCertificationNumber || "",
                       }));
                     }}
                   >
-                    <option value="">Select candidate…</option>
+                    <option value="">
+                      {selectedCompany
+                        ? "Select candidate…"
+                        : "Select a company first…"}
+                    </option>
                     {filteredWorkforce.map((row) => (
                       <option key={row.id} value={row.id}>
-                        {row.candidateName} — {row.companyName}
+                        {row.candidateName}
                       </option>
                     ))}
                   </select>
                 </label>
+              );
+            } else if (field.type === "multiselect") {
+              const selected = String(form[field.name] ?? "")
+                .split(/[;,|]+/)
+                .map((part) => part.trim())
+                .filter(Boolean);
+              const selectedSet = new Set(
+                selected.map((part) => part.toLowerCase()),
+              );
+              control = (
+                <fieldset className={styles.field}>
+                  <legend className={styles.fieldLabel}>{field.label}</legend>
+                  <div className={styles.multiSelectList}>
+                    {(field.options ?? []).map((option) => {
+                      const checked = selectedSet.has(
+                        option.value.trim().toLowerCase(),
+                      );
+                      return (
+                        <label
+                          key={option.value}
+                          className={styles.multiSelectOption}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={field.readOnly}
+                            onChange={() => {
+                              setForm((current) => {
+                                const currentParts = String(
+                                  current[field.name] ?? "",
+                                )
+                                  .split(/[;,|]+/)
+                                  .map((part) => part.trim())
+                                  .filter(Boolean);
+                                const exists = currentParts.some(
+                                  (part) =>
+                                    part.toLowerCase() ===
+                                    option.value.trim().toLowerCase(),
+                                );
+                                const nextParts = exists
+                                  ? currentParts.filter(
+                                      (part) =>
+                                        part.toLowerCase() !==
+                                        option.value.trim().toLowerCase(),
+                                    )
+                                  : [...currentParts, option.value];
+                                return {
+                                  ...current,
+                                  [field.name]: nextParts.join(", "),
+                                };
+                              });
+                            }}
+                          />
+                          <span>{option.label}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </fieldset>
               );
             } else if (field.type === "company" || field.type === "select") {
               const options =
@@ -930,6 +1001,7 @@ export function AdminCrudPage<T extends { id: string }>({
                                 nporsNumber: "",
                                 eusrNumber: "",
                                 swqrNumber: "",
+                                inHouseCertificationNumber: "",
                               }),
                         };
                       });

@@ -205,6 +205,7 @@ const eventsFields = {
   description: "Description",
   internalNotes: "InternalNotes",
   location: "Location",
+  freeBusy: "FreeBusy",
   outlookEventId: "OutlookEventId",
   outlookCalendarId: "OutlookCalendarId",
   outlookICalUid: "OutlookICalUid",

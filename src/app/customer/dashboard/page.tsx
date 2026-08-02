@@ -7,10 +7,12 @@ import {
   toCustomerCompanyProfile,
 } from "@/lib/services/companyService";
 import { getCustomerContext } from "@/lib/services/customerContextService";
-import { getCustomerDashboard } from "@/lib/services/customerDashboardService";
+import { getCustomerDashboardContent } from "@/lib/services/customerDashboardService";
 import type {
   CustomerCompanyProfile,
   CustomerContext,
+  CustomerEventRecord,
+  CustomerOfferRecord,
   DashboardStats,
 } from "@/types/models";
 
@@ -35,7 +37,7 @@ export default async function CustomerDashboardPage() {
   // waits for the slower of the two, not the sum of both.
   const [companyResult, statsResult] = await Promise.allSettled([
     getCompanyById(context.companyId),
-    getCustomerDashboard(context),
+    getCustomerDashboardContent(context),
   ]);
 
   let companyProfile: CustomerCompanyProfile | null = null;
@@ -44,8 +46,12 @@ export default async function CustomerDashboardPage() {
   }
 
   let stats: DashboardStats;
+  let offers: CustomerOfferRecord[] = [];
+  let upcomingEvents: CustomerEventRecord[] = [];
   if (statsResult.status === "fulfilled") {
-    stats = statsResult.value;
+    stats = statsResult.value.stats;
+    offers = statsResult.value.offers;
+    upcomingEvents = statsResult.value.upcomingEvents;
   } else {
     stats = {
       workforceCount: 0,
@@ -68,14 +74,9 @@ export default async function CustomerDashboardPage() {
   return (
     <CustomerDashboardView
       companyName={context.companyName}
-      email={context.loggedInEmail}
-      permissionStatus={context.permissionStatus}
-      accessScope={context.accessScope}
-      roleLabel={context.roleLabel}
-      normalizedAccessScope={context.normalizedAccessScope}
-      departmentScopes={context.departmentScopes}
-      canDownload={context.canDownload}
       stats={stats}
+      offers={offers}
+      upcomingEvents={upcomingEvents}
       companyProfile={companyProfile}
     />
   );

@@ -42,6 +42,7 @@ export function mapSharePointEventToOutlookPayload(input: {
   description: string | null;
   trainingAddress: string | null;
   companyName: string | null;
+  bookingStatus?: "Tentative" | "Confirmed" | null;
 }): OutlookEventPayload {
   const description = stripSharePointHtml(input.description) ?? "";
   const trainingAddress = stripSharePointHtml(input.trainingAddress) ?? "";
@@ -57,6 +58,11 @@ export function mapSharePointEventToOutlookPayload(input: {
       `<p><strong>Training address:</strong> ${escapeHtml(trainingAddress.trim()).replace(/\n/g, "<br/>")}</p>`,
     );
   }
+  const statusLabel =
+    input.bookingStatus === "Confirmed" ? "Confirmed" : "Tentative (offered)";
+  parts.push(
+    `<p><strong>Booking status:</strong> ${escapeHtml(statusLabel)}</p>`,
+  );
   parts.push(
     `<p><em>Synced from PAVE Training Portal (SharePoint Events).</em></p>`,
   );
@@ -75,5 +81,7 @@ export function mapSharePointEventToOutlookPayload(input: {
     endIso,
     location: input.location?.trim() || null,
     timeZone: "UTC",
+    showAs:
+      input.bookingStatus === "Confirmed" ? "busy" : "tentative",
   };
 }

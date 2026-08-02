@@ -124,6 +124,11 @@ const eusrColumns: TrainingRecordColumn<CustomerEusrRecord>[] = [
     render: (row) => formatTextCell(row.eusrCategory),
   },
   {
+    key: "cardType",
+    header: "Card Type",
+    render: (row) => formatTextCell(row.cardType),
+  },
+  {
     key: "trainingDate",
     header: "Training Date",
     render: (row) => formatDate(row.trainingDate),
@@ -149,7 +154,13 @@ const streetworksColumns: TrainingRecordColumn<CustomerStreetworksRecord>[] = [
   {
     key: "trainingDate",
     header: "Training Date",
-    render: (row) => formatDate(row.trainingDate),
+    render: (row) => {
+      const from = formatDate(row.trainingDate);
+      if (row.trainingDateEnd?.trim()) {
+        return `${from} → ${formatDate(row.trainingDateEnd)}`;
+      }
+      return from;
+    },
   },
   {
     key: "trainingAddress",
@@ -176,7 +187,7 @@ const streetworksColumns: TrainingRecordColumn<CustomerStreetworksRecord>[] = [
 const inHouseColumns: TrainingRecordColumn<CustomerInHouseRecord>[] = [
   {
     key: "course",
-    header: "Course",
+    header: "Certificate Category",
     render: (row) => formatTextCell(row.course),
   },
   {
@@ -486,7 +497,7 @@ export function CandidateProfileView({
           columns={eusrColumns}
           embedded
           getSearchText={(row) =>
-            [row.eusrNumber, row.eusrCategory, row.trainingAddress, row.outcome]
+            [row.eusrNumber, row.eusrCategory, row.cardType, row.trainingAddress, row.outcome]
               .filter(Boolean)
               .join(" ")
           }

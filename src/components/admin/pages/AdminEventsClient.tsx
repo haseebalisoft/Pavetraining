@@ -34,6 +34,7 @@ interface EventFormState {
   description: string;
   internalNotes: string;
   customerVisible: boolean;
+  bookingStatus: "Tentative" | "Confirmed";
   doNotSync: boolean;
 }
 
@@ -69,6 +70,7 @@ function createForm(date = new Date()): EventFormState {
     description: "",
     internalNotes: "",
     customerVisible: true,
+    bookingStatus: "Tentative",
     doNotSync: false,
   };
 }
@@ -84,6 +86,7 @@ function editForm(row: AdminEventRecord): EventFormState {
     description: row.description ?? "",
     internalNotes: row.internalNotes ?? "",
     customerVisible: row.customerVisible,
+    bookingStatus: row.bookingStatus ?? "Tentative",
     doNotSync: row.doNotSync,
   };
 }
@@ -102,6 +105,16 @@ const columns: AdminColumn<AdminEventRecord>[] = [
     render: (row) => formatDateTime(row.endDate),
   },
   { key: "location", header: "Location", render: (row) => row.location ?? "—" },
+  {
+    key: "bookingStatus",
+    header: "Booking",
+    render: (row) => (
+      <StatusBadge
+        label={row.bookingStatus === "Confirmed" ? "Confirmed" : "Tentative"}
+        tone={row.bookingStatus === "Confirmed" ? "ok" : "warn"}
+      />
+    ),
+  },
   {
     key: "visible",
     header: "Customer Visible",
@@ -156,6 +169,16 @@ const fields: AdminFieldConfig[] = [
     name: "internalNotes",
     label: "Internal notes — never shown to customers",
     type: "textarea",
+  },
+  {
+    name: "bookingStatus",
+    label: "Booking status",
+    type: "select",
+    options: [
+      { value: "Tentative", label: "Tentative (offered dates)" },
+      { value: "Confirmed", label: "Confirmed (busy + email TMs)" },
+    ],
+    section: "Booking",
   },
   { name: "customerVisible", label: "Customer Visible", type: "boolean" },
   {
@@ -470,6 +493,22 @@ export function AdminEventsClient({
           <label className={`${styles.field} ${styles.fieldFull}`}>
             <span className={styles.fieldLabel}>Internal notes — never shown to customers</span>
             <textarea className={styles.input} rows={5} value={form.internalNotes} onChange={(event) => setForm((current) => ({ ...current, internalNotes: event.target.value }))} />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Booking status</span>
+            <select
+              className={styles.select}
+              value={form.bookingStatus}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  bookingStatus: event.target.value as "Tentative" | "Confirmed",
+                }))
+              }
+            >
+              <option value="Tentative">Tentative (offered dates)</option>
+              <option value="Confirmed">Confirmed (busy + email TMs)</option>
+            </select>
           </label>
           <label className={styles.checkboxRow}>
             <input type="checkbox" checked={form.customerVisible} onChange={(event) => setForm((current) => ({ ...current, customerVisible: event.target.checked }))} />
