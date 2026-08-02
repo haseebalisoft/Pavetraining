@@ -2,8 +2,8 @@
   min-height: 100vh;
   padding: 2rem clamp(1.25rem, 4vw, 3rem) 3rem;
   background:
-    radial-gradient(ellipse 80% 50% at 100% 0%, rgba(141, 198, 63, 0.1), transparent 55%),
-    radial-gradient(ellipse 60% 40% at 0% 100%, rgba(74, 74, 74, 0.05), transparent 50%),
+    radial-gradient(ellipse 80% 50% at 100% 0%, rgba(var(--pave-lime-rgb), 0.1), transparent 55%),
+    radial-gradient(ellipse 60% 40% at 0% 100%, rgba(var(--pave-charcoal-rgb), 0.05), transparent 50%),
     var(--pave-bg);
   color: var(--pave-charcoal);
   font-family: var(--pave-font-family);
@@ -155,7 +155,7 @@
 }
 
 .input:focus {
-  outline: 2px solid rgba(141, 198, 63, 0.35);
+  outline: 2px solid rgba(var(--pave-lime-rgb), 0.35);
   outline-offset: 1px;
   border-color: var(--pave-lime);
 }
@@ -210,11 +210,11 @@
 }
 
 .completedRow {
-  background: rgba(141, 198, 63, 0.12);
+  background: rgba(var(--pave-lime-rgb), 0.12);
 }
 
 .completedRow:hover {
-  background: rgba(141, 198, 63, 0.18);
+  background: rgba(var(--pave-lime-rgb), 0.18);
 }
 
 .muted {
@@ -319,7 +319,7 @@
 .notice {
   margin: 0 0 1rem;
   padding: 0.75rem 0.9rem;
-  border: 1px solid rgba(141, 198, 63, 0.35);
+  border: 1px solid rgba(var(--pave-lime-rgb), 0.35);
   background: var(--pave-lime-tint);
   color: var(--pave-charcoal);
   font-size: 0.9rem;

@@ -6,25 +6,27 @@
   gap: 1rem;
   padding: 2rem;
   background:
-    radial-gradient(circle at top, #f1f8e7 0%, transparent 45%),
-    #f7f7f7;
-  color: #4a4a4a;
+    radial-gradient(circle at top, var(--pave-lime-tint) 0%, transparent 45%),
+    var(--pave-bg);
+  color: var(--pave-charcoal);
   text-align: center;
   font-family: var(--pave-font-family, "Segoe UI", system-ui, sans-serif);
 }
 
 .title {
   margin: 0;
-  font-size: clamp(1.4rem, 3vw, 1.85rem);
-  font-weight: 800;
-  letter-spacing: -0.02em;
+  font-family: var(--font-display);
+  font-size: var(--pave-font-size-title);
+  font-weight: var(--font-display-weight);
+  letter-spacing: var(--font-display-tracking);
 }
 
 .copy {
   margin: 0;
   max-width: 28rem;
-  line-height: 1.5;
-  color: #6b6b6b;
+  font-size: var(--pave-font-size-body);
+  line-height: var(--pave-line-height-body);
+  color: var(--pave-charcoal-light);
 }
 
 .button {
@@ -34,13 +36,14 @@
   margin-top: 0.5rem;
   min-height: 2.75rem;
   padding: 0.65rem 1.25rem;
-  border-radius: 0.65rem;
-  background: #8dc63f;
-  color: #1f2a10;
+  border-radius: var(--radius-md);
+  background: var(--pave-lime);
+  color: var(--pave-charcoal);
   font-weight: 700;
   text-decoration: none;
 }
 
 .button:hover {
-  background: #7ab536;
+  background: var(--pave-lime-hover);
+  color: var(--pave-surface);
 }

@@ -1,97 +1,254 @@
+/* Login — split brand panel + form */
+
 .page {
+  --login-radius: 12px;
+
   min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
-  place-items: center;
-  padding: 1.5rem;
-  background:
-    radial-gradient(circle at top left, rgba(141, 198, 63, 0.16), transparent 42%),
-    radial-gradient(circle at bottom right, rgba(74, 74, 74, 0.08), transparent 46%),
-    var(--pave-bg);
-  font-family: var(--pave-font-family);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  font-family: var(--pave-font-body);
+  color: var(--pave-charcoal);
+  background: var(--pave-surface);
+  overflow-x: hidden;
 }
 
-.panel {
-  width: min(100%, 28rem);
-  padding: 2.35rem 2rem 2.15rem;
-  border: 1px solid var(--pave-border);
-  border-radius: var(--radius-lg);
+/* ——— Left / top brand panel ——— */
+
+.brandPanel {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 3.5rem 3.25rem;
+  background:
+    radial-gradient(
+      ellipse 80% 60% at 20% 10%,
+      rgba(var(--pave-lime-rgb), 0.14),
+      transparent 55%
+    ),
+    var(--pave-charcoal);
+  color: var(--pave-surface);
+  position: relative;
+  overflow: hidden;
+}
+
+/*
+  Logo PNG has a baked-in white background (not transparent).
+  Chip wraps it tightly so it reads as intentional on charcoal.
+*/
+.brandLogoWrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 0 2.25rem;
+  padding: 0.85rem 1rem;
   background: var(--pave-surface);
-  box-shadow: var(--shadow-lg);
-  text-align: center;
+  border-radius: var(--login-radius);
+  line-height: 0;
+}
+
+.brandLogoWrap img {
+  display: block;
+  width: min(100%, 9.75rem);
+  height: auto;
+  max-width: 100%;
+}
+
+.brandHeadline {
+  position: relative;
+  margin: 0 0 1rem;
+  font-family: var(--pave-font-heading);
+  font-size: clamp(2.1rem, 4vw, 3.2rem);
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--pave-surface);
+}
+
+.brandHeadlineAccent {
+  display: block;
+  color: var(--pave-lime);
+}
+
+.brandCopy {
+  position: relative;
+  margin: 0 0 1.75rem;
+  max-width: 22rem;
+  font-size: var(--pave-font-size-body);
+  font-weight: 400;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.roadStripe {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.25rem;
+}
+
+.roadStripe span {
+  display: block;
+  width: 1.35rem;
+  height: 0.28rem;
+  border-radius: 2px;
+  background: var(--pave-lime);
+  transform-origin: left center;
+  animation: roadStripeIn 420ms ease both;
+}
+
+.roadStripe span:nth-child(1) {
+  animation-delay: 0ms;
+}
+.roadStripe span:nth-child(2) {
+  animation-delay: 100ms;
+}
+.roadStripe span:nth-child(3) {
+  animation-delay: 200ms;
+}
+.roadStripe span:nth-child(4) {
+  animation-delay: 300ms;
+}
+.roadStripe span:nth-child(5) {
+  animation-delay: 400ms;
+}
+
+@keyframes roadStripeIn {
+  from {
+    opacity: 0;
+    transform: scaleX(0.35) scaleY(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: scaleX(1) scaleY(1);
+  }
+}
+
+/* ——— Right / bottom form panel ——— */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  padding: 2.5rem clamp(1.25rem, 4vw, 3.5rem);
+  background: var(--pave-surface);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  text-align: left;
+}
+
+.formInner {
+  width: 100%;
+  max-width: 400px;
+  margin: 0 auto;
 }
 
 .logoWrap {
-  display: grid;
-  place-items: center;
-  margin-bottom: 0.85rem;
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 1.35rem;
+  line-height: 0;
+}
+
+.logoWrap img {
+  display: block;
+  width: min(100%, 10.5rem);
+  height: auto;
 }
 
 .tagline {
-  margin: 0 0 1.35rem;
+  margin: 0 0 0.75rem;
   font-size: var(--pave-font-size-caption);
-  font-weight: var(--pave-font-weight-caption);
-  line-height: var(--pave-line-height-caption);
-  letter-spacing: 0.08em;
+  font-weight: 600;
+  line-height: 1.55;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--pave-lime-dark);
+  color: var(--pave-charcoal-muted);
 }
 
 .title {
   margin: 0 0 0.65rem;
-  font-size: var(--pave-font-size-heading);
-  font-weight: var(--pave-font-weight-heading);
-  line-height: var(--pave-line-height-heading);
-  letter-spacing: -0.02em;
+  font-family: var(--pave-font-heading);
+  font-size: 34px;
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
   color: var(--pave-charcoal);
 }
 
 .copy {
   margin: 0 0 1.6rem;
-  color: var(--pave-charcoal-muted);
   font-size: var(--pave-font-size-body);
-  line-height: var(--pave-line-height-body);
+  font-weight: 400;
+  line-height: 1.55;
+  color: var(--pave-charcoal-muted);
 }
 
 .button {
   width: 100%;
   border: 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--login-radius);
   padding: 0.9rem 1rem;
   background: var(--pave-charcoal);
-  color: #fff;
+  color: var(--pave-surface);
   font-size: 0.95rem;
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
-  transition:
-    background 140ms ease,
-    transform 140ms ease,
-    box-shadow 140ms ease;
-  box-shadow: var(--shadow-sm);
+  transition: background 160ms ease;
+  box-shadow: none;
 }
 
-.button:hover {
-  background: var(--pave-charcoal-deep);
-  box-shadow: inset 0 0 0 2px var(--pave-lime);
+.button:hover:not(:disabled) {
+  background: var(--pave-charcoal-light);
 }
 
-.button:active {
-  transform: translateY(1px);
+.button:focus-visible {
+  outline: 2px solid var(--pave-lime);
+  outline-offset: 2px;
+}
+
+.button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
 }
 
 .secondaryButton {
   width: 100%;
-  border: 1px solid var(--pave-border);
-  border-radius: var(--radius-md);
-  padding: 0.85rem 1rem;
-  background: #fff;
+  border: 0;
+  border-radius: var(--login-radius);
+  padding: 0.9rem 1rem;
+  background: var(--pave-lime);
   color: var(--pave-charcoal);
   font-size: 0.95rem;
   font-weight: 700;
   cursor: pointer;
+  transition:
+    background 160ms ease,
+    color 160ms ease;
 }
 
-.secondaryButton:hover {
-  border-color: var(--pave-charcoal);
+.secondaryButton:hover:not(:disabled) {
+  background: var(--pave-lime-hover);
+  color: var(--pave-surface);
+}
+
+.secondaryButton:focus-visible {
+  outline: 2px solid var(--pave-charcoal);
+  outline-offset: 2px;
+}
+
+.secondaryButton:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
 }
 
 .otpBlock {
@@ -104,11 +261,12 @@
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 0.75rem;
-  margin: 0 0 1.1rem;
+  margin: 0 0 1.15rem;
   color: var(--pave-charcoal-muted);
-  font-size: 0.8rem;
+  font-size: 11.5px;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.12em;
 }
 
 .divider::before,
@@ -126,49 +284,103 @@
 }
 
 .otpHint {
-  margin: 0 0 0.9rem;
-  font-size: 0.85rem;
+  margin: 0 0 0.95rem;
+  font-size: 0.875rem;
+  font-weight: 400;
+  line-height: 1.55;
   color: var(--pave-charcoal-muted);
-  line-height: 1.4;
+}
+
+.otpHint strong {
+  color: var(--pave-charcoal-light);
+  font-weight: 600;
 }
 
 .otpForm {
   display: grid;
-  gap: 0.65rem;
+  gap: 0.7rem;
   margin-bottom: 0.85rem;
 }
 
 .field {
   display: grid;
-  gap: 0.35rem;
+  gap: 0.4rem;
 }
 
 .fieldLabel {
   font-size: 0.8rem;
   font-weight: 600;
-  color: var(--pave-charcoal-muted);
+  color: var(--pave-charcoal-light);
 }
 
 .input {
   width: 100%;
-  border: 1px solid var(--pave-border);
-  border-radius: var(--radius-md);
-  padding: 0.75rem 0.85rem;
-  font: inherit;
+  box-sizing: border-box;
+  border: 1.5px solid var(--pave-border);
+  border-radius: var(--login-radius);
+  padding: 0.8rem 0.9rem;
+  font-size: 0.95rem;
   color: var(--pave-charcoal);
-  background: #fff;
+  background: var(--pave-bg);
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.input::placeholder {
+  color: var(--pave-charcoal-muted);
+  opacity: 0.85;
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--pave-lime);
+  background: var(--pave-surface);
+  box-shadow: 0 0 0 3px var(--pave-lime-tint);
+}
+
+.input:focus-visible {
+  outline: 2px solid var(--pave-lime);
+  outline-offset: 2px;
 }
 
 .success {
-  margin: 0.35rem 0 0;
-  font-size: 0.85rem;
-  color: #2f6b1b;
+  margin: 0.5rem 0 0;
+  padding: 0.55rem 0.85rem;
+  border: 1px solid var(--pave-border);
+  border-radius: 999px;
+  background: var(--pave-lime-tint);
+  font-size: 0.825rem;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--pave-charcoal-light);
 }
 
-.formError {
-  margin: 0.35rem 0 0;
-  font-size: 0.85rem;
-  color: #9b1c1c;
+.formError,
+.error {
+  margin: 0.5rem 0 0;
+  padding: 0.55rem 0.85rem;
+  border: 1px solid rgba(var(--pave-red-rgb), 0.35);
+  border-radius: var(--login-radius);
+  background: var(--pave-red-tint);
+  font-size: 0.825rem;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--pave-red);
+}
+
+.message {
+  margin: 0.5rem 0 0;
+  font-size: 0.825rem;
+  color: var(--pave-charcoal-muted);
+}
+
+.hint {
+  margin: 0.65rem 0 0;
+  color: var(--pave-charcoal-muted);
+  font-size: 0.8rem;
+  line-height: 1.4;
 }
 
 .otpActions {
@@ -181,16 +393,116 @@
 .linkButton {
   border: 0;
   background: none;
-  padding: 0;
+  padding: 0.15rem 0;
+  border-radius: 4px;
   color: var(--pave-charcoal);
-  font: inherit;
   font-size: 0.85rem;
   font-weight: 600;
   text-decoration: underline;
+  text-underline-offset: 2px;
   cursor: pointer;
+}
+
+.linkButton:hover:not(:disabled) {
+  color: var(--pave-lime-dark);
+}
+
+.linkButton:focus-visible {
+  outline: 2px solid var(--pave-lime);
+  outline-offset: 2px;
 }
 
 .linkButton:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+/* ——— Responsive ——— */
+
+@media (max-width: 899px) {
+  .page {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+
+  .brandPanel {
+    padding: 1.35rem 1.25rem 1.5rem;
+    justify-content: flex-start;
+  }
+
+  .brandLogoWrap {
+    margin-bottom: 1rem;
+    padding: 0.65rem 0.75rem;
+  }
+
+  .brandLogoWrap img {
+    width: min(100%, 7.5rem);
+  }
+
+  .brandHeadline {
+    font-size: clamp(1.65rem, 6.5vw, 2.1rem);
+    margin-bottom: 0.55rem;
+  }
+
+  .brandCopy {
+    margin-bottom: 1rem;
+    font-size: 0.875rem;
+    max-width: none;
+  }
+
+  .roadStripe span {
+    width: 1.05rem;
+    height: 0.22rem;
+  }
+
+  .panel {
+    padding: 1.75rem 1.25rem 2.25rem;
+    justify-content: flex-start;
+  }
+
+  .title {
+    font-size: 30px;
+  }
+}
+
+@media (max-width: 360px) {
+  .brandPanel {
+    padding: 1.1rem 1rem 1.25rem;
+  }
+
+  .brandLogoWrap {
+    padding: 0.55rem 0.65rem;
+  }
+
+  .brandLogoWrap img {
+    width: min(100%, 6.75rem);
+  }
+
+  .panel {
+    padding: 1.35rem 1rem 2rem;
+  }
+
+  .title {
+    font-size: 28px;
+  }
+
+  .copy,
+  .otpHint,
+  .brandCopy {
+    font-size: 0.85rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .roadStripe span {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+
+  .button,
+  .secondaryButton,
+  .input {
+    transition: none;
+  }
 }

@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 
 import { CustomerPageHeader } from "@/components/customer/CustomerPageHeader";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import { formatDisplayDate } from "@/lib/training/expiryFilters";
+import { formatDate } from "@/lib/utils/formatDate";
 import type { CustomerOfferRecord } from "@/types/models";
 
 import styles from "./customer.module.css";
@@ -88,9 +88,9 @@ export function OffersView({ companyName, records }: Props) {
               />
               <h2 style={{ marginTop: "0.55rem" }}>{row.title}</h2>
               <p className={sectionStyles.cardMeta}>
-                {row.startDate ? formatDisplayDate(row.startDate) : "Start TBC"}
+                {row.startDate ? formatDate(row.startDate) : "Start TBC"}
                 {" – "}
-                {row.endDate ? formatDisplayDate(row.endDate) : "End TBC"}
+                {row.endDate ? formatDate(row.endDate) : "End TBC"}
               </p>
               <p className={sectionStyles.cardBody}>
                 {row.description?.trim() || "No description provided."}

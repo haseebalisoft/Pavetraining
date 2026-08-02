@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 
 import { Breadcrumbs } from "@/components/ui/Breadcrumbs";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import { formatDisplayDate } from "@/lib/training/expiryFilters";
+import { formatDate } from "@/lib/utils/formatDate";
 import type { WorkforceCandidate } from "@/types/models";
 
 import styles from "./customer.module.css";
@@ -106,7 +106,7 @@ export function CandidatesView({ companyName, candidates }: Props) {
                       <span>{row.candidateName}</span>
                       {row.dateOfBirth?.trim() ? (
                         <span className={styles.dobSecondary}>
-                          DOB {formatDisplayDate(row.dateOfBirth)}
+                          DOB {formatDate(row.dateOfBirth)}
                         </span>
                       ) : null}
                     </div>

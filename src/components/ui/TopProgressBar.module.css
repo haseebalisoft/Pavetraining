@@ -1,0 +1,45 @@
+.bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 3px;
+  width: 0;
+  z-index: 9999;
+  background: var(--pave-lime);
+  box-shadow: 0 0 10px rgba(var(--pave-lime-rgb), 0.7);
+  pointer-events: none;
+  opacity: 0;
+}
+
+/* Creeps toward 90% while the next route is being fetched, so a click always
+   produces immediate visible feedback even on slow SharePoint round-trips. */
+.loading {
+  opacity: 1;
+  width: 90%;
+  animation: creep 10s cubic-bezier(0.1, 0.6, 0.3, 1) forwards;
+}
+
+/* Snaps to 100% and fades once the new route commits. */
+.done {
+  width: 100%;
+  opacity: 0;
+  transition:
+    width 180ms ease,
+    opacity 360ms ease 160ms;
+}
+
+@keyframes creep {
+  from {
+    width: 0;
+  }
+  to {
+    width: 90%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading {
+    animation-duration: 0s;
+    width: 80%;
+  }
+}

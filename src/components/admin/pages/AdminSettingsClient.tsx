@@ -6,6 +6,7 @@ import { useAdminToast } from "@/components/admin/AdminToast";
 import { Breadcrumbs } from "@/components/ui/Breadcrumbs";
 import { LoadingState } from "@/components/ui/States";
 import { readPublicApiError } from "@/lib/errors/publicMessages";
+import { formatDateTime } from "@/lib/utils/formatDate";
 import type {
   CalendarSyncDirection,
   PortalSettings,
@@ -209,7 +210,7 @@ export function AdminSettingsClient() {
           ? " · list configured"
           : " · Portal Settings list not found"}
         {payload?.updatedAt
-          ? ` · updated ${new Date(payload.updatedAt).toLocaleString()}`
+          ? ` · updated ${formatDateTime(payload.updatedAt)}`
           : ""}
       </div>
 

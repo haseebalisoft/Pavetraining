@@ -21,7 +21,9 @@ import {
 } from "../services/portalDataService";
 import { normalizeSharePointUserEmail } from "../services/sharePointListService";
 import type { PermissionProfile } from "../types/models";
+import { AdminBulkUpload } from "./AdminBulkUpload";
 import { AdminDataTable } from "./AdminDataTable";
+import { AdminHubDashboard } from "./AdminHubDashboard";
 import { CustomerPortalView } from "./CustomerPortalView";
 import {
   ADMIN_NAV,
@@ -31,6 +33,8 @@ import {
 } from "./nav";
 import styles from "./portal.module.scss";
 import type { SharePointListKey } from "../schema/sharepointSchema";
+
+const paveLogo: string = require("../assets/pave-logo.png");
 
 export type PortalMode = "admin" | "customer";
 
@@ -89,14 +93,25 @@ const ADMIN_VIEWS: Record<AdminViewId, ViewSpec> = {
   },
   "training-matrix": {
     title: "Training Matrix",
-    subtitle: "Matrix rows and expiry dates",
+    subtitle: "Training Matrix Update — wide expiry grid (same list as Next.js admin)",
     listKey: "trainingMatrix",
-    headers: ["Candidate", "Company", "Status", "Next expiry"],
+    headers: [
+      "Name",
+      "DOB",
+      "CSCS Expiry",
+      "SSSTS Expiry",
+      "SMSTS Expiry",
+      "NRSWA Expiry",
+      "EUSR Expiry",
+    ],
     columns: [
-      "CandidateName",
-      "Company_x0020_Name",
-      "OverallStatus",
-      "NextExpiryDate",
+      "Title",
+      "DOB",
+      "CSCSExpiry",
+      "SSSTSExpiry",
+      "SMSTSExpiry",
+      "NRSWAExpiry",
+      "EUSRExpiry",
     ],
   },
   "training-records": {
@@ -143,6 +158,10 @@ const ADMIN_VIEWS: Record<AdminViewId, ViewSpec> = {
     headers: ["Email", "Role", "Status", "Scope"],
     columns: ["UserEmail", "RoleType", "Status", "AccessScope"],
   },
+  "bulk-upload": {
+    title: "Bulk upload",
+    subtitle: "Import CSV into SharePoint lists (same types as Next.js admin)",
+  },
   automation: {
     title: "Automation",
     subtitle: "Automation rules and sync controls",
@@ -164,11 +183,10 @@ const CUSTOMER_VIEWS: Record<CustomerViewId, ViewSpec> = {
   },
   "training-matrix": {
     title: "Training Matrix",
-    subtitle: "Your company's matrix rows",
+    subtitle: "Your company's matrix rows (Training Matrix Update)",
     listKey: "trainingMatrix",
-    headers: ["Candidate", "Status", "Next expiry"],
-    columns: ["CandidateName", "OverallStatus", "NextExpiryDate"],
-    companyField: "Company_x0020_Name",
+    headers: ["Name", "CSCS Expiry", "EUSR Expiry", "NRSWA Expiry"],
+    columns: ["Title", "CSCSExpiry", "EUSRExpiry", "NRSWAExpiry"],
     customerScoped: true,
   },
   candidates: {
@@ -290,6 +308,7 @@ export const PortalShell: React.FC<PortalShellProps> = (props) => {
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [refreshTick, setRefreshTick] = React.useState(0);
+  const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
 
   const nav = mode === "admin" ? ADMIN_NAV : CUSTOMER_NAV;
   const views: Record<string, ViewSpec> =
@@ -364,7 +383,8 @@ export const PortalShell: React.FC<PortalShellProps> = (props) => {
             if (!cancelled) {
               const scopedMatrix = filterPortalRowsByAccess(
                 dash.matrixRows,
-                permission
+                permission,
+                { candidateNameField: "Title" }
               );
               setCustomerDash({
                 ...dash,
@@ -381,12 +401,8 @@ export const PortalShell: React.FC<PortalShellProps> = (props) => {
                 matrix: scopedMatrix.length,
               });
               setRows(scopedMatrix);
-              setHeaders(["Candidate", "Status", "Next expiry"]);
-              setColumns([
-                "CandidateName",
-                "OverallStatus",
-                "NextExpiryDate",
-              ]);
+              setHeaders(["Name", "Status", "CSCS Expiry"]);
+              setColumns(["Title", "Status", "CSCSExpiry"]);
               setActiveListKey(null);
             }
           } else {
@@ -512,7 +528,9 @@ export const PortalShell: React.FC<PortalShellProps> = (props) => {
 
         let cols = spec.columns;
         let headerLabels = spec.headers;
-        if (mode === "admin" && spec.listKey) {
+        // Admin tables: use full schema except Training Matrix Update (too wide —
+        // keep curated display columns; edit form still gets full schema fields).
+        if (mode === "admin" && spec.listKey && spec.listKey !== "trainingMatrix") {
           const schema = getAdminSchemaColumns(spec.listKey);
           cols = schema.columns;
           headerLabels = schema.headers;
@@ -524,6 +542,44 @@ export const PortalShell: React.FC<PortalShellProps> = (props) => {
             setHeaders([]);
             setColumns([]);
             setActiveListKey(null);
+          }
+          return;
+        }
+
+        // Training Matrix Update has no company column — scope via Workforce names.
+        if (
+          mode === "customer" &&
+          spec.listKey === "trainingMatrix" &&
+          permission.companyDisplayName
+        ) {
+          const workforce = getSharePointFields("workforce");
+          const wf = await loadPortalListRows(client, "workforce", {
+            columns: [workforce.candidateName],
+            companyName: permission.companyDisplayName,
+            companyFieldInternalName: workforce.companyName,
+            loadAll: true,
+          });
+          const nameSet: { [name: string]: boolean } = {};
+          for (let i = 0; i < wf.length; i++) {
+            const n = (wf[i].cells[0] || "").trim().toLowerCase();
+            if (n) nameSet[n] = true;
+          }
+          const allMatrix = await loadPortalListRows(client, "trainingMatrix", {
+            columns: cols,
+            loadAll: true,
+          });
+          const scopedMatrix = allMatrix.filter((row) => {
+            const title = (row.cells[0] || "").trim().toLowerCase();
+            return Boolean(title && nameSet[title]);
+          });
+          const accessFiltered = filterPortalRowsByAccess(scopedMatrix, permission, {
+            candidateNameField: "Title",
+          });
+          if (!cancelled) {
+            setHeaders(headerLabels);
+            setColumns(cols);
+            setActiveListKey("trainingMatrix");
+            setRows(accessFiltered);
           }
           return;
         }
@@ -560,7 +616,10 @@ export const PortalShell: React.FC<PortalShellProps> = (props) => {
           (spec.listKey === "workforce" ||
             spec.listKey === "trainingMatrix" ||
             spec.listKey === "nvqRegister")
-            ? filterPortalRowsByAccess(data, permission)
+            ? filterPortalRowsByAccess(data, permission, {
+                candidateNameField:
+                  spec.listKey === "trainingMatrix" ? "Title" : undefined,
+              })
             : data;
 
         if (!cancelled) {
@@ -585,6 +644,21 @@ export const PortalShell: React.FC<PortalShellProps> = (props) => {
       cancelled = true;
     };
   }, [permission, view, recordTab, mode, client, views, refreshTick]);
+
+  React.useEffect(() => {
+    setMobileNavOpen(false);
+  }, [view]);
+
+  React.useEffect(() => {
+    if (!mobileNavOpen) {
+      return;
+    }
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [mobileNavOpen]);
 
   if (loadingPerm) {
     return <div className={styles.muted}>Checking permissions…</div>;
@@ -672,85 +746,153 @@ export const PortalShell: React.FC<PortalShellProps> = (props) => {
   }
 
   return (
-    <div className={styles.shell}>
-      <aside className={styles.sidebar}>
-        <p className={styles.brand}>PAVE</p>
-        <p className={styles.tagline}>Paving the way in industry</p>
-        <span className={styles.chip}>Admin operations</span>
-        {nav.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className={`${styles.navBtn} ${
-              view === item.id ? styles.navBtnActive : ""
-            }`}
-            onClick={() => setView(item.id)}
-          >
-            {item.label}
-          </button>
-        ))}
-      </aside>
-      <main className={styles.main}>
-        <h1 className={styles.title}>{spec.title}</h1>
-        <p className={styles.subtitle}>
-          {spec.subtitle}
-          {view !== "dashboard" && !spec.stub && !loading
-            ? " · " + rows.length + " rows"
-            : ""}
-        </p>
-
-        {view === "dashboard" && (
-          <div className={styles.stats}>
-            {Object.keys(counts).map((key) => (
-              <div key={key} className={styles.stat}>
-                <p className={styles.statValue}>{counts[key]}</p>
-                <p className={styles.statLabel}>{key}</p>
-              </div>
-            ))}
+    <div className={`${styles.shell} ${styles.adminShell}`}>
+      <header className={styles.adminTopNav}>
+        <div className={styles.adminTopNavBar}>
+          <div className={styles.adminBrandBlock}>
+            <img
+              className={styles.adminBrandLogo}
+              src={paveLogo}
+              alt="PAVE Training"
+            />
+            <p className={styles.tagline}>Admin operations</p>
           </div>
-        )}
 
-        {view === "training-records" && (
-          <div className={styles.toolbar}>
-            {RECORD_SUBNAV.map((tab) => (
+          <nav className={styles.adminNavDesktop} aria-label="Admin">
+            {nav.map((item) => (
               <button
-                key={tab.id}
+                key={item.id}
                 type="button"
-                className={
-                  recordTab === tab.id ? styles.toolbarBtnActive : undefined
-                }
-                onClick={() => setRecordTab(tab.id)}
+                className={`${styles.adminNavLink} ${
+                  view === item.id ? styles.adminNavLinkActive : ""
+                }`}
+                onClick={() => setView(item.id)}
               >
-                {tab.label}
+                {item.label}
               </button>
             ))}
-          </div>
-        )}
+          </nav>
 
-        {spec.stub ? (
-          <div className={styles.panel}>
-            <p className={styles.muted}>{spec.stub}</p>
+          <div className={styles.adminTopNavTrailing}>
+            <span className={styles.adminUserChip} title={permission.userEmail}>
+              {permission.userEmail}
+            </span>
+            <button
+              type="button"
+              className={styles.adminMenuToggle}
+              aria-expanded={mobileNavOpen}
+              aria-controls="pave-admin-mobile-nav"
+              onClick={() => setMobileNavOpen((open) => !open)}
+            >
+              {mobileNavOpen ? "Close" : "Menu"}
+            </button>
           </div>
-        ) : view !== "dashboard" ? (
-          activeListKey ? (
-            <AdminDataTable
-              client={client}
-              listKey={activeListKey}
-              title={spec.title}
-              headers={headers}
-              columns={columns}
-              rows={rows}
-              loading={loading}
-              error={error}
-              onRefresh={() => setRefreshTick((n) => n + 1)}
-            />
-          ) : (
-            <div className={styles.panel}>
-              {loading && <p className={styles.muted}>Loading…</p>}
-              {error && <p className={styles.error}>{error}</p>}
-            </div>
-          )
+        </div>
+
+        {mobileNavOpen ? (
+          <div
+            className={styles.adminMobileScrim}
+            onClick={() => setMobileNavOpen(false)}
+            aria-hidden
+          />
         ) : null}
+
+        <div
+          id="pave-admin-mobile-nav"
+          className={`${styles.adminMobileDrawer} ${
+            mobileNavOpen ? styles.adminMobileDrawerOpen : ""
+          }`}
+          hidden={!mobileNavOpen}
+        >
+          <p className={styles.adminMobileTitle}>All options</p>
+          <nav className={styles.adminMobileNav} aria-label="Admin mobile">
+            {nav.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className={`${styles.adminMobileLink} ${
+                  view === item.id ? styles.adminMobileLinkActive : ""
+                }`}
+                onClick={() => {
+                  setView(item.id);
+                  setMobileNavOpen(false);
+                }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
+        </div>
+      </header>
+
+      <main className={styles.main}>
+        {view === "dashboard" ? (
+          <AdminHubDashboard
+            userEmail={permission.userEmail}
+            counts={counts}
+            onNavigate={(id) => setView(id)}
+          />
+        ) : (
+          <>
+            <header className={styles.pageHeader}>
+              <div>
+                <p className={styles.eyebrow}>Admin</p>
+                <h1 className={styles.title}>{spec.title}</h1>
+                <p className={styles.subtitle}>
+                  {spec.subtitle}
+                  {!spec.stub && !loading ? " · " + rows.length + " rows" : ""}
+                </p>
+              </div>
+            </header>
+
+            {view === "training-records" && (
+              <div className={styles.toolbar}>
+                {RECORD_SUBNAV.map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    className={
+                      recordTab === tab.id ? styles.toolbarBtnActive : undefined
+                    }
+                    onClick={() => setRecordTab(tab.id)}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {spec.stub ? (
+              <div className={styles.panel}>
+                <p className={styles.muted}>{spec.stub}</p>
+              </div>
+            ) : view === "bulk-upload" ? (
+              <AdminBulkUpload client={client} />
+            ) : activeListKey ? (
+              <AdminDataTable
+                client={client}
+                listKey={activeListKey}
+                title={spec.title}
+                headers={headers}
+                columns={columns}
+                rows={rows}
+                loading={loading}
+                error={error}
+                onRefresh={() => setRefreshTick((n) => n + 1)}
+                formColumns={
+                  activeListKey === "trainingMatrix"
+                    ? getAdminSchemaColumns("trainingMatrix").columns
+                    : undefined
+                }
+              />
+            ) : (
+              <div className={styles.panel}>
+                {loading && <p className={styles.muted}>Loading…</p>}
+                {error && <p className={styles.error}>{error}</p>}
+              </div>
+            )}
+          </>
+        )}
       </main>
     </div>
   );

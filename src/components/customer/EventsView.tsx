@@ -2,8 +2,13 @@
 
 import { useMemo, useState } from "react";
 
+import {
+  CalendarGrid,
+  type CalendarGridEvent,
+  type CalendarView,
+} from "@/components/calendar/CalendarGrid";
 import { CustomerPageHeader } from "@/components/customer/CustomerPageHeader";
-import { formatDisplayDate } from "@/lib/training/expiryFilters";
+import { formatDate, formatTime } from "@/lib/utils/formatDate";
 import type { CustomerEventRecord } from "@/types/models";
 
 import styles from "./customer.module.css";
@@ -14,51 +19,26 @@ interface Props {
   records: CustomerEventRecord[];
 }
 
-function formatTime(value: string | null | undefined): string | null {
-  if (!value?.trim()) {
-    return null;
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return null;
-  }
-  return new Intl.DateTimeFormat("en-GB", {
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-}
+type EventsViewMode = "list" | CalendarView;
 
 function formatTimeRange(row: CustomerEventRecord): string {
   const start = formatTime(row.eventDate);
   const end = formatTime(row.endDate);
   if (start && end) return `${start} – ${end}`;
-  if (start) return start;
-  if (end) return end;
-  return "Time TBC";
+  return start ?? end ?? "Time TBC";
 }
 
 export function EventsView({ companyName, records }: Props) {
   const [search, setSearch] = useState("");
-  const [view, setView] = useState<"list" | "calendar">("list");
-  const [monthCursor, setMonthCursor] = useState(() => {
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth(), 1);
-  });
-  const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [view, setView] = useState<EventsViewMode>("month");
+  const [cursor, setCursor] = useState(() => new Date());
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
-    if (!query) {
-      return records;
-    }
+    if (!query) return records;
     return records.filter((row) =>
-      [
-        row.title,
-        row.description,
-        row.trainingAddress,
-        row.location,
-        row.company,
-      ]
+      [row.title, row.description, row.trainingAddress, row.location, row.company]
         .filter(Boolean)
         .join(" ")
         .toLowerCase()
@@ -66,47 +46,20 @@ export function EventsView({ companyName, records }: Props) {
     );
   }, [records, search]);
 
-  const calendarDays = useMemo(() => {
-    const year = monthCursor.getFullYear();
-    const month = monthCursor.getMonth();
-    const firstDay = new Date(year, month, 1);
-    const startPad = (firstDay.getDay() + 6) % 7; // Monday-first
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    const cells: Array<{ key: string; date: Date | null; count: number }> = [];
+  const calendarEvents = useMemo<CalendarGridEvent[]>(
+    () =>
+      filtered.map((row) => ({
+        id: row.id,
+        title: row.title,
+        start: row.eventDate,
+        end: row.endDate,
+        company: row.company,
+        location: row.location,
+      })),
+    [filtered],
+  );
 
-    for (let i = 0; i < startPad; i += 1) {
-      cells.push({ key: `pad-${i}`, date: null, count: 0 });
-    }
-
-    for (let day = 1; day <= daysInMonth; day += 1) {
-      const date = new Date(year, month, day);
-      const key = date.toISOString().slice(0, 10);
-      const count = filtered.filter((row) => {
-        if (!row.eventDate) return false;
-        const eventDay = new Date(row.eventDate);
-        if (Number.isNaN(eventDay.getTime())) return false;
-        return eventDay.toISOString().slice(0, 10) === key;
-      }).length;
-      cells.push({ key, date, count });
-    }
-
-    return cells;
-  }, [filtered, monthCursor]);
-
-  const selectedEvents = useMemo(() => {
-    if (!selectedDay) return [];
-    return filtered.filter((row) => {
-      if (!row.eventDate) return false;
-      const eventDay = new Date(row.eventDate);
-      if (Number.isNaN(eventDay.getTime())) return false;
-      return eventDay.toISOString().slice(0, 10) === selectedDay;
-    });
-  }, [filtered, selectedDay]);
-
-  const monthLabel = new Intl.DateTimeFormat("en-GB", {
-    month: "long",
-    year: "numeric",
-  }).format(monthCursor);
+  const selected = filtered.find((row) => row.id === selectedId) ?? null;
 
   function renderEventCard(row: CustomerEventRecord) {
     return (
@@ -115,9 +68,7 @@ export function EventsView({ companyName, records }: Props) {
         <dl className={styles.eventMetaList}>
           <div>
             <dt>Date</dt>
-            <dd>
-              {row.eventDate ? formatDisplayDate(row.eventDate) : "Date TBC"}
-            </dd>
+            <dd>{row.eventDate ? formatDate(row.eventDate) : "Date TBC"}</dd>
           </div>
           <div>
             <dt>Time</dt>
@@ -147,12 +98,12 @@ export function EventsView({ companyName, records }: Props) {
           { label: "Events" },
         ]}
         title="Events"
-        subtitle="Only your company’s booked days — free days have nothing scheduled for you."
+        subtitle="Your company’s customer-visible training events."
       />
 
       <p className={styles.companyMeta}>
-        Busy / free calendar for <strong>{companyName}</strong> only. Other
-        companies’ bookings are not shown.
+        Calendar for <strong>{companyName}</strong>. Private events and other
+        companies’ bookings are not included.
       </p>
 
       <div className={styles.toolbar}>
@@ -167,32 +118,24 @@ export function EventsView({ companyName, records }: Props) {
           />
         </label>
         <div className={styles.viewToggle} role="group" aria-label="View mode">
-          <button
-            type="button"
-            className={
-              view === "list" ? styles.viewToggleActive : styles.viewToggleButton
-            }
-            onClick={() => setView("list")}
-          >
-            List
-          </button>
-          <button
-            type="button"
-            className={
-              view === "calendar"
-                ? styles.viewToggleActive
-                : styles.viewToggleButton
-            }
-            onClick={() => setView("calendar")}
-          >
-            Calendar
-          </button>
+          {(["list", "month", "week"] as const).map((option) => (
+            <button
+              key={option}
+              type="button"
+              className={
+                view === option ? styles.viewToggleActive : styles.viewToggleButton
+              }
+              aria-pressed={view === option}
+              onClick={() => setView(option)}
+            >
+              {option[0].toUpperCase() + option.slice(1)}
+            </button>
+          ))}
         </div>
       </div>
 
       <p className={styles.resultCount}>
-        {filtered.length} of {records.length} event
-        {records.length === 1 ? "" : "s"}
+        {filtered.length} of {records.length} event{records.length === 1 ? "" : "s"}
       </p>
 
       {filtered.length === 0 ? (
@@ -200,7 +143,7 @@ export function EventsView({ companyName, records }: Props) {
           <h2>No events found</h2>
           <p>
             {records.length === 0
-              ? "No upcoming events have been shared with your company yet."
+              ? "No events have been shared with your company yet."
               : "Try adjusting your search to find matching events."}
           </p>
         </div>
@@ -209,78 +152,22 @@ export function EventsView({ companyName, records }: Props) {
           {filtered.map(renderEventCard)}
         </section>
       ) : (
-        <div className={styles.eventCalendar}>
-          <div className={styles.eventCalendarHeader}>
-            <button
-              type="button"
-              className={styles.viewToggleButton}
-              onClick={() =>
-                setMonthCursor(
-                  (current) =>
-                    new Date(current.getFullYear(), current.getMonth() - 1, 1),
-                )
-              }
-            >
-              Previous
-            </button>
-            <h2>{monthLabel}</h2>
-            <button
-              type="button"
-              className={styles.viewToggleButton}
-              onClick={() =>
-                setMonthCursor(
-                  (current) =>
-                    new Date(current.getFullYear(), current.getMonth() + 1, 1),
-                )
-              }
-            >
-              Next
-            </button>
-          </div>
-          <div className={styles.eventCalendarWeekdays}>
-            {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => (
-              <span key={day}>{day}</span>
-            ))}
-          </div>
-          <div className={styles.eventCalendarGrid}>
-            {calendarDays.map((cell) =>
-              cell.date ? (
-                <button
-                  key={cell.key}
-                  type="button"
-                  className={
-                    selectedDay === cell.key
-                      ? styles.eventCalendarDayActive
-                      : styles.eventCalendarDay
-                  }
-                  onClick={() => setSelectedDay(cell.key)}
-                >
-                  <span>{cell.date.getDate()}</span>
-                  {cell.count > 0 ? (
-                    <em className={styles.eventCalendarBusy}>Busy</em>
-                  ) : (
-                    <em className={styles.eventCalendarFree}>Free</em>
-                  )}
-                </button>
-              ) : (
-                <span key={cell.key} className={styles.eventCalendarPad} />
-              ),
-            )}
-          </div>
+        <>
+          <CalendarGrid
+            events={calendarEvents}
+            view={view}
+            cursor={cursor}
+            onCursorChange={setCursor}
+            onEventClick={(event) => setSelectedId(event.id)}
+          />
           <div className={styles.eventCalendarSelected}>
-            {selectedDay ? (
-              selectedEvents.length > 0 ? (
-                <section className={styles.cardGrid} aria-label="Selected day">
-                  {selectedEvents.map(renderEventCard)}
-                </section>
-              ) : (
-                <p className={styles.muted}>No events on this day.</p>
-              )
+            {selected ? (
+              renderEventCard(selected)
             ) : (
-              <p className={styles.muted}>Select a day to view events.</p>
+              <p className={styles.muted}>Select an event to view its details.</p>
             )}
           </div>
-        </div>
+        </>
       )}
     </div>
   );

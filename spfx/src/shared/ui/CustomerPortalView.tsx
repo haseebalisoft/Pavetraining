@@ -6,6 +6,7 @@ import type {
 } from "../services/portalDataService";
 import { accessScopeBadgeLabel } from "../services/permissionService";
 import type { PermissionProfile } from "../types/models";
+import { formatDate, formatDateTime } from "../utils/formatDate";
 import type { CustomerViewId } from "./nav";
 import styles from "./customerPortal.module.scss";
 
@@ -256,14 +257,26 @@ function navIcon(id: CustomerViewId): React.ReactNode {
 }
 
 function parseEventDate(raw: string): { month: string; day: string } {
-  const d = new Date(raw);
-  if (!isNaN(d.getTime())) {
+  const formatted = formatDate(raw);
+  const parts = /^(\d{2})\/(\d{2})\/\d{4}$/.exec(formatted);
+  if (parts) {
     return {
-      month: d.toLocaleString("en-GB", { month: "short" }).toUpperCase(),
-      day: String(d.getDate()),
+      month: parts[2],
+      day: parts[1],
     };
   }
   return { month: "—", day: "—" };
+}
+
+function formatCustomerTableCell(
+  value: string,
+  view: CustomerViewId,
+  columnIndex: number
+): string {
+  if (!/^\d{4}-\d{2}-\d{2}(?:T|$)/.test(value)) return value;
+  return view === "events" && columnIndex === 1
+    ? formatDateTime(value)
+    : formatDate(value);
 }
 
 /**
@@ -879,7 +892,7 @@ function MatrixTable(props: {
           {rows.map((row) => {
             const name = row.cells[0] || "—";
             const status = row.cells[1] || "";
-            const expiry = row.cells[2] || "—";
+            const expiry = formatDate(row.cells[2]) || "—";
             const kind = statusKind(status);
             const pillClass =
               kind === "bad"
@@ -985,7 +998,9 @@ function ListBody(props: {
                   rows.map((row) => (
                     <tr key={row.id}>
                       {row.cells.map((c, i) => (
-                        <td key={row.id + "-" + i}>{c}</td>
+                        <td key={row.id + "-" + i}>
+                          {formatCustomerTableCell(c, view, i)}
+                        </td>
                       ))}
                     </tr>
                   ))
@@ -1027,7 +1042,7 @@ function DocumentsTable(props: { rows: PortalTableRow[] }): React.ReactElement {
             const name = row.cells[0] || "—";
             const type = row.cells[1] || "—";
             const candidate = row.cells[2] || "—";
-            const modified = row.cells[3] || "—";
+            const modified = formatDate(row.cells[3]) || "—";
             const viewUrl =
               (row.fields && (row.fields.__docViewUrl as string)) ||
               row.cells[4] ||

@@ -9,6 +9,7 @@ import {
 import styles from "@/components/admin/admin.module.css";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import type { AdminNvqRecord } from "@/lib/services/adminCrudService";
+import { formatDate } from "@/lib/utils/formatDate";
 import type { Company } from "@/types/models";
 
 const columns: AdminColumn<AdminNvqRecord>[] = [
@@ -29,22 +30,22 @@ const columns: AdminColumn<AdminNvqRecord>[] = [
   {
     key: "completed",
     header: "Completed date",
-    render: (row) => row.completedDate ?? "—",
+    render: (row) => formatDate(row.completedDate),
   },
 ];
 
 const fields: AdminFieldConfig[] = [
   {
-    name: "candidateName",
-    label: "Candidate",
-    type: "workforce",
+    name: "companyName",
+    label: "Company",
+    type: "company",
     required: true,
     section: "Candidate",
   },
   {
-    name: "companyName",
-    label: "Company",
-    type: "company",
+    name: "candidateName",
+    label: "Candidate",
+    type: "workforce",
     required: true,
     section: "Candidate",
   },
@@ -95,7 +96,7 @@ export function AdminNvqClient({
   return (
     <AdminCrudPage<AdminNvqRecord>
       title="NVQ"
-      description="Pick a Workforce candidate to auto-fill name and company. Track NVQ stages, notes, and completion dates."
+      description="Select a company to scope the Workforce candidate list, then track NVQ stages, notes, and completion dates."
       columns={columns}
       fields={fields}
       companies={companies}

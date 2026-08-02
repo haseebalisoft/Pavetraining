@@ -19,6 +19,18 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: path.join(__dirname),
   },
+  experimental: {
+    // Reuse recently-visited routes from the client-side router cache so
+    // navigating back to a page you were just on is instant instead of
+    // re-fetching from SharePoint. `dynamic` defaults to 0 (no reuse) in
+    // Next 16, which is why every navigation currently refetches.
+    // Values are in seconds; kept modest so admins editing data don't see
+    // stale rows for long (server-side SharePoint cache TTL is ~45s).
+    staleTimes: {
+      dynamic: 30,
+      static: 180,
+    },
+  },
 };
 
 export default withSerwist(nextConfig);

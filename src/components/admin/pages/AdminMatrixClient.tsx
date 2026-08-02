@@ -22,28 +22,33 @@ import {
   matchesAnyExpiryFilter,
   type ExpiryFilter,
 } from "@/lib/training/expiryFilters";
+import {
+  matrixStatusLabel,
+  normalizeMatrixStatus,
+} from "@/lib/theme/paveBrand";
 import { toneForExpiryStatus } from "@/lib/ui/status";
+import { formatDate } from "@/lib/utils/formatDate";
 import type { Company } from "@/types/models";
-
-function formatDateCell(value: string | null | undefined): string {
-  if (!value?.trim()) return "—";
-  if (/^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10);
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toISOString().slice(0, 10);
-}
 
 function matrixCell(
   row: AdminMatrixRecord,
   header: string,
 ): ReactNode {
-  if (header === "Name") return row.candidateName || "—";
+  if (header === "Name") {
+    return (
+      <span className={styles.matrixNameCell}>
+        {row.candidateName?.trim() || "—"}
+      </span>
+    );
+  }
   if (header === "DOB") {
     const dob = row.columnValues?.DOB ?? row.dateOfBirth;
-    return formatDateCell(dob);
+    return (
+      <span className={styles.matrixTextCell}>{formatDate(dob)}</span>
+    );
   }
   const fromColumns = row.columnValues?.[header];
-  return <ExpiryDateBadge date={fromColumns} />;
+  return <ExpiryDateBadge date={fromColumns} fillCell />;
 }
 
 function rowExpiryDates(row: AdminMatrixRecord): Array<string | null> {
@@ -53,23 +58,34 @@ function rowExpiryDates(row: AdminMatrixRecord): Array<string | null> {
   return [row.nextExpiryDate, ...values];
 }
 
-/** Match Training matrix example.xlsx column order (same as SharePoint list display names). */
+/** Name first (sticky), then company, then template headers / status. */
 const columns: AdminColumn<AdminMatrixRecord>[] = [
+  {
+    key: "Name",
+    header: "Name",
+    render: (row) => matrixCell(row, "Name"),
+  },
   {
     key: "company",
     header: "Company",
-    render: (row) => row.companyName ?? "—",
+    render: (row) => (
+      <span className={styles.matrixTextCell}>
+        {row.companyName?.trim() || "—"}
+      </span>
+    ),
   },
-  ...CLIENT_MATRIX_DISPLAY_HEADERS.map((header) => ({
-    key: header,
-    header,
-    render: (row: AdminMatrixRecord) => matrixCell(row, header),
-  })),
+  ...CLIENT_MATRIX_DISPLAY_HEADERS.filter((header) => header !== "Name").map(
+    (header) => ({
+      key: header,
+      header,
+      render: (row: AdminMatrixRecord) => matrixCell(row, header),
+    }),
+  ),
   {
     key: "next",
     header: "Next expiry",
     render: (row: AdminMatrixRecord) => (
-      <ExpiryDateBadge date={row.nextExpiryDate} />
+      <ExpiryDateBadge date={row.nextExpiryDate} fillCell />
     ),
   },
   {
@@ -85,7 +101,18 @@ const columns: AdminColumn<AdminMatrixRecord>[] = [
   {
     key: "status",
     header: "Overall status",
-    render: (row: AdminMatrixRecord) => row.overallStatus ?? "—",
+    render: (row: AdminMatrixRecord) => {
+      const key = normalizeMatrixStatus(row.overallStatus);
+      const tone =
+        key === "compliant"
+          ? "ok"
+          : key === "expiringSoon"
+            ? "warn"
+            : key === "expired"
+              ? "danger"
+              : "missing";
+      return <StatusBadge label={matrixStatusLabel(key)} tone={tone} />;
+    },
   },
 ];
 
@@ -334,6 +361,9 @@ export function AdminMatrixClient({
         enableCompanyFilter
         getCompanyName={(row) => row.companyName}
         drawerWide
+        wideTable
+        stickyLeadColumns
+        tableClassName={styles.matrixTable}
         listUrl="/api/admin/training-matrix"
         updateUrl={(id) => `/api/admin/training-matrix/${id}`}
         allowCreate={false}
@@ -360,7 +390,7 @@ export function AdminMatrixClient({
                 <option value="all">All expiries</option>
                 <option value="within-3m">Expiring within 3 months</option>
                 <option value="within-6m">Expiring within 6 months</option>
-                <option value="within-9m">Expiring within 9 months</option>
+                <option value="9m-plus">9 months or more</option>
                 <option value="expired">Expired</option>
                 <option value="review">Records to Review</option>
               </select>

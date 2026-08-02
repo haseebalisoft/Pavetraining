@@ -7,6 +7,10 @@ import {
   type AdminWorkforceOption,
 } from "@/components/admin/AdminCrudPage";
 import { ExpiryDateBadge } from "@/components/ui/ExpiryDateBadge";
+import {
+  getEusrCardTypeOptions,
+  getEusrCategoryOptions,
+} from "@/lib/training/eusrOptions";
 import { getInHouseCourseOptions } from "@/lib/training/inHouseCourseOptions";
 import { getNporsCategoryOptions } from "@/lib/training/nporsCategoryOptions";
 import type { AdminTrainingRecord } from "@/lib/services/adminCrudService";
@@ -24,16 +28,16 @@ const titles: Record<RegisterKind, string> = {
 function fieldsFor(kind: RegisterKind): AdminFieldConfig[] {
   const people: AdminFieldConfig[] = [
     {
-      name: "candidateName",
-      label: "Candidate",
-      type: "workforce",
+      name: "companyName",
+      label: "Company",
+      type: "company",
       required: true,
       section: "Candidate",
     },
     {
-      name: "companyName",
-      label: "Company",
-      type: "company",
+      name: "candidateName",
+      label: "Candidate",
+      type: "workforce",
       required: true,
       section: "Candidate",
     },
@@ -137,14 +141,16 @@ function fieldsFor(kind: RegisterKind): AdminFieldConfig[] {
       {
         name: "eusrCategory",
         label: "EUSR category",
-        type: "text",
+        type: "select",
         section: "Training",
+        options: getEusrCategoryOptions(),
       },
       {
         name: "cardType",
         label: "Card type",
-        type: "text",
+        type: "select",
         section: "Training",
+        options: getEusrCardTypeOptions(),
       },
       ...outcome,
     ];
@@ -269,7 +275,7 @@ export function AdminRegisterClient({
   return (
     <AdminCrudPage<AdminTrainingRecord>
       title={titles[kind]}
-      description="Select a Workforce candidate (search box + dropdown) — name and company auto-fill like SharePoint. Saving Pass/Fail updates the Training Matrix for that person."
+      description="Select a company to scope the Workforce candidate list. Candidate selection still auto-fills register numbers. Saving Pass/Fail updates the Training Matrix for that person."
       columns={columnsFor(kind)}
       fields={fieldsFor(kind)}
       companies={companies}

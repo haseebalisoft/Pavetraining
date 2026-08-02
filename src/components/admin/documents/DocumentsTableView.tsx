@@ -2,21 +2,10 @@
 
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import type { AdminDocumentRecord } from "@/types/adminDocuments";
-import { formatDisplayDate } from "@/lib/training/expiryFilters";
+import { formatDate } from "@/lib/utils/formatDate";
 
 import { DocumentActionsMenu } from "./DocumentActionsMenu";
 import styles from "./documentsBrowse.module.css";
-
-function ukDate(value: string | null | undefined): string {
-  if (!value?.trim()) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  }).format(date);
-}
 
 function yesNo(value: boolean) {
   return (
@@ -129,8 +118,8 @@ export function DocumentsTableView({
                     <strong>{row.name}</strong>
                   )}
                 </td>
-                <td title={formatDisplayDate(row.modifiedDate)}>
-                  {ukDate(row.modifiedDate)}
+                <td title={formatDate(row.modifiedDate)}>
+                  {formatDate(row.modifiedDate)}
                 </td>
                 <td>{row.modifiedBy?.trim() || "—"}</td>
                 <td>{row.id}</td>

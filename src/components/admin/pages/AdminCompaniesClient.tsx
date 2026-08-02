@@ -6,6 +6,7 @@ import {
   type AdminFieldConfig,
 } from "@/components/admin/AdminCrudPage";
 import { ImageUploadButton } from "@/components/admin/ImageUploadButton";
+import { Thumbnail } from "@/components/ui/Thumbnail";
 import type { Company } from "@/types/models";
 
 function cell(value: string | null | undefined) {
@@ -94,17 +95,13 @@ const columns: AdminColumn<Company>[] = [
   {
     key: "companyLogo",
     header: "Company Logo",
-    render: (row) =>
-      row.companyLogo ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={row.companyLogo}
-          alt=""
-          style={{ width: 40, height: 40, objectFit: "contain" }}
-        />
-      ) : (
-        "—"
-      ),
+    render: (row) => (
+      <Thumbnail
+        src={row.companyLogo}
+        alt={row.companyName ? `${row.companyName} logo` : "Company logo"}
+        variant="company"
+      />
+    ),
   },
   {
     key: "status",
@@ -249,11 +246,11 @@ export function AdminCompaniesClient({
       emptyLabel="No companies found. Add your first company to begin."
       drawerWide
       wideTable
+      stickyColumnKey="companyName"
       extraActions={(row, { reload }) => (
         <ImageUploadButton
           uploadUrl={`/api/admin/companies/${row.id}/logo`}
           label="Upload logo"
-          currentUrl={row.companyLogo}
           onUploaded={reload}
         />
       )}

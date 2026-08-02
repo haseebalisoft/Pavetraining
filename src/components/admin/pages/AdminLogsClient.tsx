@@ -8,6 +8,7 @@ import { Breadcrumbs } from "@/components/ui/Breadcrumbs";
 import { LoadingState } from "@/components/ui/States";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { readPublicApiError } from "@/lib/errors/publicMessages";
+import { formatDateTime } from "@/lib/utils/formatDate";
 import type { AuditLogRecord } from "@/types/audit";
 
 import styles from "@/components/admin/admin.module.css";
@@ -233,7 +234,7 @@ export function AdminLogsClient() {
             <tbody>
               {payload!.logs.map((row) => (
                 <tr key={row.id}>
-                  <td>{new Date(row.timestamp).toLocaleString()}</td>
+                  <td>{formatDateTime(row.timestamp)}</td>
                   <td>
                     <div>{row.userEmail}</div>
                     <div className={styles.mutedNote}>{row.roleType ?? "—"}</div>
@@ -285,7 +286,10 @@ export function AdminLogsClient() {
       >
         {selected ? (
           <div className={styles.settingsFieldGrid}>
-            <Detail label="Timestamp" value={new Date(selected.timestamp).toLocaleString()} />
+            <Detail
+              label="Timestamp"
+              value={formatDateTime(selected.timestamp)}
+            />
             <Detail label="User email" value={selected.userEmail} />
             <Detail label="Role" value={selected.roleType ?? "—"} />
             <Detail label="Company" value={selected.company ?? "—"} />

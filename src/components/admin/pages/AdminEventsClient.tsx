@@ -1,30 +1,40 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import {
   AdminCrudPage,
   type AdminColumn,
   type AdminFieldConfig,
 } from "@/components/admin/AdminCrudPage";
+import { AdminDrawer } from "@/components/admin/AdminDrawer";
 import styles from "@/components/admin/admin.module.css";
 import { useAdminToast } from "@/components/admin/AdminToast";
+import {
+  CalendarGrid,
+  type CalendarGridEvent,
+  type CalendarView,
+} from "@/components/calendar/CalendarGrid";
+import { Breadcrumbs } from "@/components/ui/Breadcrumbs";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { readPublicApiError } from "@/lib/errors/publicMessages";
 import type { AdminEventRecord } from "@/lib/services/adminCrudService";
-import { formatDisplayDate } from "@/lib/training/expiryFilters";
+import { formatDateTime } from "@/lib/utils/formatDate";
 import type { Company } from "@/types/models";
 
-function formatDateTime(value: string | null | undefined): string {
-  if (!value?.trim()) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  const day = formatDisplayDate(value);
-  const time = new Intl.DateTimeFormat("en-GB", {
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-  return `${day} ${time}`;
+type EventsViewMode = "list" | CalendarView;
+
+interface EventFormState {
+  title: string;
+  companyId: string;
+  eventDate: string;
+  endDate: string;
+  location: string;
+  trainingAddress: string;
+  description: string;
+  internalNotes: string;
+  customerVisible: boolean;
+  doNotSync: boolean;
 }
 
 function syncTone(
@@ -34,8 +44,48 @@ function syncTone(
   if (normalized === "synced") return "ok";
   if (normalized === "pending") return "warn";
   if (normalized === "failed") return "danger";
-  if (normalized === "skipped") return "neutral";
   return "neutral";
+}
+
+function toDateTimeLocal(value: string | Date | null | undefined): string {
+  if (!value) return "";
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())}T${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`;
+}
+
+function createForm(date = new Date()): EventFormState {
+  const start = new Date(date);
+  start.setSeconds(0, 0);
+  const end = new Date(start.getTime() + 60 * 60 * 1000);
+  return {
+    title: "",
+    companyId: "",
+    eventDate: toDateTimeLocal(start),
+    endDate: toDateTimeLocal(end),
+    location: "",
+    trainingAddress: "",
+    description: "",
+    internalNotes: "",
+    customerVisible: true,
+    doNotSync: false,
+  };
+}
+
+function editForm(row: AdminEventRecord): EventFormState {
+  return {
+    title: row.title,
+    companyId: row.companyId ?? "",
+    eventDate: toDateTimeLocal(row.eventDate),
+    endDate: toDateTimeLocal(row.endDate),
+    location: row.location ?? "",
+    trainingAddress: row.trainingAddress ?? "",
+    description: row.description ?? "",
+    internalNotes: row.internalNotes ?? "",
+    customerVisible: row.customerVisible,
+    doNotSync: row.doNotSync,
+  };
 }
 
 const columns: AdminColumn<AdminEventRecord>[] = [
@@ -51,11 +101,7 @@ const columns: AdminColumn<AdminEventRecord>[] = [
     header: "End Date",
     render: (row) => formatDateTime(row.endDate),
   },
-  {
-    key: "location",
-    header: "Location",
-    render: (row) => row.location ?? "—",
-  },
+  { key: "location", header: "Location", render: (row) => row.location ?? "—" },
   {
     key: "visible",
     header: "Customer Visible",
@@ -81,14 +127,6 @@ const columns: AdminColumn<AdminEventRecord>[] = [
     header: "Last Synced At",
     render: (row) => formatDateTime(row.lastSyncedAt),
   },
-  {
-    key: "syncError",
-    header: "Sync Error",
-    render: (row) =>
-      row.syncStatus?.toLowerCase() === "failed"
-        ? row.syncError?.trim() || "—"
-        : "—",
-  },
 ];
 
 const fields: AdminFieldConfig[] = [
@@ -99,56 +137,66 @@ const fields: AdminFieldConfig[] = [
     required: true,
     section: "Event details",
   },
-  {
-    name: "companyId",
-    label: "Company",
-    type: "company",
-    required: true,
-  },
-  {
-    name: "customerVisible",
-    label: "Customer Visible",
-    type: "boolean",
-  },
+  { name: "companyId", label: "Company", type: "company", required: true },
   {
     name: "eventDate",
     label: "Start Date/Time",
     type: "datetime",
     required: true,
   },
-  {
-    name: "endDate",
-    label: "End Date/Time",
-    type: "datetime",
-  },
+  { name: "endDate", label: "End Date/Time", type: "datetime" },
   { name: "location", label: "Location", type: "text" },
   { name: "trainingAddress", label: "Training Address", type: "text" },
-  { name: "description", label: "Description", type: "textarea" },
+  {
+    name: "description",
+    label: "Description customers will see",
+    type: "textarea",
+  },
+  {
+    name: "internalNotes",
+    label: "Internal notes — never shown to customers",
+    type: "textarea",
+  },
+  { name: "customerVisible", label: "Customer Visible", type: "boolean" },
   {
     name: "doNotSync",
     label: "Do Not Sync",
     type: "boolean",
     section: "Outlook sync",
   },
-  {
-    name: "syncStatus",
-    label: "Sync Status",
-    type: "text",
-    readOnly: true,
-  },
+  { name: "syncStatus", label: "Sync Status", type: "text", readOnly: true },
   {
     name: "lastSyncedAt",
     label: "Last Synced At",
     type: "text",
     readOnly: true,
   },
-  {
-    name: "syncError",
-    label: "Sync Error",
-    type: "textarea",
-    readOnly: true,
-  },
+  { name: "syncError", label: "Sync Error", type: "textarea", readOnly: true },
 ];
+
+function ViewButtons({
+  view,
+  onChange,
+}: {
+  view: EventsViewMode;
+  onChange: (view: EventsViewMode) => void;
+}) {
+  return (
+    <div className={styles.syncToolbarActions} role="group" aria-label="Events view">
+      {(["list", "month", "week"] as const).map((option) => (
+        <button
+          key={option}
+          type="button"
+          className={view === option ? styles.primaryButton : styles.secondaryButton}
+          aria-pressed={view === option}
+          onClick={() => onChange(option)}
+        >
+          {option[0].toUpperCase() + option.slice(1)}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 export function AdminEventsClient({
   companies,
@@ -160,7 +208,39 @@ export function AdminEventsClient({
   warnings?: string[];
 }) {
   const { pushToast } = useAdminToast();
+  const [view, setView] = useState<EventsViewMode>("month");
+  const [rows, setRows] = useState(initialRows);
+  const [cursor, setCursor] = useState(() => new Date());
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [editing, setEditing] = useState<AdminEventRecord | null>(null);
+  const [form, setForm] = useState<EventFormState>(() => createForm());
+  const [formError, setFormError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const handleRowsChange = useCallback((nextRows: AdminEventRecord[]) => {
+    setRows(nextRows);
+  }, []);
+
+  const calendarEvents = useMemo<CalendarGridEvent[]>(
+    () =>
+      rows.map((row) => ({
+        id: row.id,
+        title: row.title,
+        start: row.eventDate,
+        end: row.endDate,
+        company: row.company,
+        location: row.location,
+      })),
+    [rows],
+  );
+
+  const reload = useCallback(async () => {
+    const response = await fetch("/api/admin/events", { cache: "no-store" });
+    if (!response.ok) throw new Error(await readPublicApiError(response));
+    const payload = (await response.json()) as { records?: AdminEventRecord[] };
+    setRows(payload.records ?? []);
+  }, []);
 
   const runSync = useCallback(
     async (row: AdminEventRecord, mode: "sync" | "retry") => {
@@ -171,163 +251,244 @@ export function AdminEventsClient({
       setBusyId(row.id);
       try {
         const response = await fetch(path, { method: "POST" });
-        if (!response.ok) {
-          throw new Error(await readPublicApiError(response));
-        }
+        if (!response.ok) throw new Error(await readPublicApiError(response));
         const payload = (await response.json()) as {
-          result?: {
-            status?: string;
-            error?: string | null;
-            reason?: string | null;
-          };
+          result?: { status?: string; error?: string | null; reason?: string | null };
         };
-        const result = payload.result;
-        const status = result?.status ?? "Unknown";
+        const status = payload.result?.status ?? "Unknown";
         if (status === "Failed") {
-          pushToast(
-            result?.error || `Sync failed for “${row.title}”.`,
-            "error",
-          );
+          pushToast(payload.result?.error || `Sync failed for “${row.title}”.`, "error");
         } else if (status === "Skipped") {
-          pushToast(result?.reason || `Sync skipped for “${row.title}”.`);
+          pushToast(payload.result?.reason || `Sync skipped for “${row.title}”.`);
         } else {
-          pushToast(
-            `Outlook sync ${status.toLowerCase()} for “${row.title}”.`,
-          );
+          pushToast(`Outlook sync ${status.toLowerCase()} for “${row.title}”.`);
         }
-      } catch (error) {
-        pushToast(
-          error instanceof Error ? error.message : "Sync request failed.",
-          "error",
-        );
-      } finally {
-        setBusyId(null);
-      }
-    },
-    [pushToast],
-  );
-
-  const markDoNotSync = useCallback(
-    async (row: AdminEventRecord, reload: () => Promise<void>) => {
-      setBusyId(row.id);
-      try {
-        const response = await fetch(`/api/admin/events/${row.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ doNotSync: true }),
-        });
-        if (!response.ok) {
-          throw new Error(await readPublicApiError(response));
-        }
-        pushToast(`“${row.title}” marked Do Not Sync.`);
         await reload();
       } catch (error) {
-        pushToast(
-          error instanceof Error
-            ? error.message
-            : "Failed to mark Do Not Sync.",
-          "error",
-        );
+        pushToast(error instanceof Error ? error.message : "Sync request failed.", "error");
       } finally {
         setBusyId(null);
       }
     },
-    [pushToast],
+    [pushToast, reload],
   );
 
+  function openCreate(date = new Date()) {
+    setEditing(null);
+    setForm(createForm(date));
+    setFormError(null);
+    setDrawerOpen(true);
+  }
+
+  function openEdit(row: AdminEventRecord) {
+    setEditing(row);
+    setForm(editForm(row));
+    setFormError(null);
+    setDrawerOpen(true);
+  }
+
+  async function saveEvent() {
+    if (!form.title.trim()) return setFormError("Title is required.");
+    if (!form.companyId) return setFormError("Company is required.");
+    if (!form.eventDate) return setFormError("Start date/time is required.");
+    if (form.endDate && new Date(form.endDate) < new Date(form.eventDate)) {
+      return setFormError("End date/time must be after the start.");
+    }
+
+    setSaving(true);
+    setFormError(null);
+    try {
+      const response = await fetch(
+        editing ? `/api/admin/events/${editing.id}` : "/api/admin/events",
+        {
+          method: editing ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(form),
+        },
+      );
+      if (!response.ok) throw new Error(await readPublicApiError(response));
+      pushToast(editing ? "Event updated." : "Event created.", "success");
+      setDrawerOpen(false);
+      await reload();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to save event.";
+      setFormError(message);
+      pushToast(message, "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const viewButtons = <ViewButtons view={view} onChange={setView} />;
+
+  if (view === "list") {
+    return (
+      <AdminCrudPage<AdminEventRecord>
+        title="Events"
+        description="Manage training events. SharePoint Events is the source of truth and customer-facing copy is kept separate from internal notes."
+        columns={columns}
+        fields={fields}
+        companies={companies}
+        initialRows={rows}
+        warnings={warnings}
+        enableCompanyFilter
+        getCompanyName={(row) => row.company}
+        drawerWide
+        emptyLabel="No events found. Create an event to begin."
+        listUrl="/api/admin/events"
+        createUrl="/api/admin/events"
+        updateUrl={(id) => `/api/admin/events/${id}`}
+        mapResponse={(payload) =>
+          ((payload as { records?: AdminEventRecord[] }).records ?? [])
+        }
+        onRowsChange={handleRowsChange}
+        toolbarExtra={viewButtons}
+        searchKeys={[
+          (row) => row.title,
+          (row) => row.company,
+          (row) => row.trainingAddress,
+          (row) => row.location,
+          (row) => row.description,
+          (row) => row.internalNotes,
+          (row) => row.syncStatus,
+          (row) => row.syncError,
+        ]}
+        extraActions={(row, { reload: reloadList }) => (
+          <>
+            <button
+              type="button"
+              className={styles.linkButton}
+              disabled={busyId === row.id || row.doNotSync}
+              onClick={() => void runSync(row, "sync").then(reloadList)}
+            >
+              {busyId === row.id ? "Working…" : "Sync now"}
+            </button>
+            {row.syncStatus?.toLowerCase() === "failed" ? (
+              <>
+                {" · "}
+                <button
+                  type="button"
+                  className={styles.linkButton}
+                  disabled={busyId === row.id || row.doNotSync}
+                  onClick={() => void runSync(row, "retry").then(reloadList)}
+                >
+                  Retry sync
+                </button>
+              </>
+            ) : null}
+          </>
+        )}
+      />
+    );
+  }
+
   return (
-    <AdminCrudPage<AdminEventRecord>
-      title="Events"
-      description="Manage training events. SharePoint Events is the source of truth. Sync pushes to the Pave Training Operations Outlook calendar (app + SharePoint + Outlook mobile). Customers only see busy/free for their own company."
-      columns={columns}
-      fields={fields}
-      companies={companies}
-      initialRows={initialRows}
-      warnings={warnings}
-      enableCompanyFilter
-      getCompanyName={(row) => row.company}
-      drawerWide
-      emptyLabel="No events found. Create an event to begin."
-      listUrl="/api/admin/events"
-      createUrl="/api/admin/events"
-      updateUrl={(id) => `/api/admin/events/${id}`}
-      mapResponse={(payload) =>
-        ((payload as { records?: AdminEventRecord[] }).records ?? [])
-      }
-      searchKeys={[
-        (row) => row.title,
-        (row) => row.company,
-        (row) => row.trainingAddress,
-        (row) => row.location,
-        (row) => row.description,
-        (row) => row.syncStatus,
-        (row) => row.syncError,
-      ]}
-      extraActions={(row, { reload }) => (
-        <>
-          <button
-            type="button"
-            className={styles.linkButton}
-            disabled={busyId === row.id || row.doNotSync}
-            onClick={() => {
-              void (async () => {
-                await runSync(row, "sync");
-                await reload();
-              })();
-            }}
-          >
-            {busyId === row.id ? "Working…" : "Sync now"}
-          </button>
-          {row.syncStatus?.toLowerCase() === "failed" ? (
-            <>
-              {" · "}
-              <button
-                type="button"
-                className={styles.linkButton}
-                disabled={busyId === row.id || row.doNotSync}
-                onClick={() => {
-                  void (async () => {
-                    await runSync(row, "retry");
-                    await reload();
-                  })();
-                }}
-              >
-                Retry sync
+    <div>
+      <header className={styles.pageHeader}>
+        <div>
+          <Breadcrumbs items={[{ label: "Admin", href: "/admin" }, { label: "Events" }]} />
+          <p className={styles.eyebrow}>Admin</p>
+          <h1 className={styles.title}>Events</h1>
+          <p className={styles.subtitle}>
+            Outlook-style calendar. Click an empty slot to create an event or an event to edit it.
+          </p>
+        </div>
+        <button type="button" className={styles.primaryButton} onClick={() => openCreate()}>
+          Add event
+        </button>
+      </header>
+
+      {warnings.length ? (
+        <div className={styles.schemaWarnings} role="alert">
+          {warnings.map((warning) => <p key={warning}>{warning}</p>)}
+        </div>
+      ) : null}
+
+      <div className={styles.crudToolbar}>{viewButtons}</div>
+      <CalendarGrid
+        events={calendarEvents}
+        view={view}
+        cursor={cursor}
+        onCursorChange={setCursor}
+        onSlotClick={openCreate}
+        onEventClick={(event) => {
+          const row = rows.find((candidate) => candidate.id === event.id);
+          if (row) openEdit(row);
+        }}
+        emptyLabel="No events in this period. Click an empty slot to create one."
+      />
+
+      <AdminDrawer
+        open={drawerOpen}
+        title={editing ? `Edit ${editing.title}` : "Add event"}
+        onClose={() => setDrawerOpen(false)}
+        wide
+        footer={
+          <>
+            <button type="button" className={styles.secondaryButton} onClick={() => setDrawerOpen(false)} disabled={saving}>
+              Cancel
+            </button>
+            <button type="button" className={styles.primaryButton} onClick={() => void saveEvent()} disabled={saving}>
+              {saving ? "Saving…" : editing ? "Save changes" : "Create event"}
+            </button>
+          </>
+        }
+      >
+        {formError ? <p className={styles.formError}>{formError}</p> : null}
+        <div className={styles.formGrid}>
+          <label className={`${styles.field} ${styles.fieldFull}`}>
+            <span className={styles.fieldLabel}>Title</span>
+            <input className={styles.input} value={form.title} onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))} />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Start date/time</span>
+            <input className={styles.input} type="datetime-local" value={form.eventDate} onChange={(event) => setForm((current) => ({ ...current, eventDate: event.target.value }))} />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>End date/time</span>
+            <input className={styles.input} type="datetime-local" value={form.endDate} onChange={(event) => setForm((current) => ({ ...current, endDate: event.target.value }))} />
+          </label>
+          <label className={`${styles.field} ${styles.fieldFull}`}>
+            <span className={styles.fieldLabel}>Company</span>
+            <select className={styles.select} value={form.companyId} onChange={(event) => setForm((current) => ({ ...current, companyId: event.target.value }))}>
+              <option value="">Select company…</option>
+              {companies.map((company) => <option key={company.id} value={company.id}>{company.companyName}</option>)}
+            </select>
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Location</span>
+            <input className={styles.input} value={form.location} onChange={(event) => setForm((current) => ({ ...current, location: event.target.value }))} />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Training address</span>
+            <input className={styles.input} value={form.trainingAddress} onChange={(event) => setForm((current) => ({ ...current, trainingAddress: event.target.value }))} />
+          </label>
+          <label className={`${styles.field} ${styles.fieldFull}`}>
+            <span className={styles.fieldLabel}>Description customers will see</span>
+            <textarea className={styles.input} rows={5} value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} />
+          </label>
+          <label className={`${styles.field} ${styles.fieldFull}`}>
+            <span className={styles.fieldLabel}>Internal notes — never shown to customers</span>
+            <textarea className={styles.input} rows={5} value={form.internalNotes} onChange={(event) => setForm((current) => ({ ...current, internalNotes: event.target.value }))} />
+          </label>
+          <label className={styles.checkboxRow}>
+            <input type="checkbox" checked={form.customerVisible} onChange={(event) => setForm((current) => ({ ...current, customerVisible: event.target.checked }))} />
+            Customer visible
+          </label>
+          <label className={styles.checkboxRow}>
+            <input type="checkbox" checked={form.doNotSync} onChange={(event) => setForm((current) => ({ ...current, doNotSync: event.target.checked }))} />
+            Do not sync to Outlook
+          </label>
+          {editing ? (
+            <div className={`${styles.fieldFull} ${styles.settingsActions}`}>
+              <StatusBadge label={editing.syncStatus?.trim() || "Not synced"} tone={syncTone(editing.syncStatus)} />
+              <button type="button" className={styles.secondaryButton} disabled={busyId === editing.id || editing.doNotSync} onClick={() => void runSync(editing, editing.syncStatus?.toLowerCase() === "failed" ? "retry" : "sync")}>
+                {busyId === editing.id ? "Syncing…" : "Sync now"}
               </button>
-            </>
+            </div>
           ) : null}
-          {row.syncError?.trim() &&
-          row.syncStatus?.toLowerCase() === "failed" ? (
-            <>
-              {" · "}
-              <button
-                type="button"
-                className={styles.linkButton}
-                onClick={() => {
-                  pushToast(row.syncError || "No sync error details.", "error");
-                }}
-              >
-                View sync error
-              </button>
-            </>
-          ) : null}
-          {!row.doNotSync ? (
-            <>
-              {" · "}
-              <button
-                type="button"
-                className={styles.linkButton}
-                disabled={busyId === row.id}
-                onClick={() => {
-                  void markDoNotSync(row, reload);
-                }}
-              >
-                Mark Do Not Sync
-              </button>
-            </>
-          ) : null}
-        </>
-      )}
-    />
+        </div>
+      </AdminDrawer>
+    </div>
   );
 }

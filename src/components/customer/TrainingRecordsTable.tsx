@@ -7,7 +7,6 @@ import { CustomerPageHeader } from "@/components/customer/CustomerPageHeader";
 import { ExpiryDateBadge } from "@/components/ui/ExpiryDateBadge";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import {
-  formatDisplayDate,
   matchesExpiryFilter,
   type ExpiryFilter,
 } from "@/lib/training/expiryFilters";
@@ -44,7 +43,7 @@ const EXPIRY_OPTIONS: { value: ExpiryFilter; label: string }[] = [
   { value: "all", label: "All expiries" },
   { value: "within-3m", label: "Expiring within 3 months" },
   { value: "within-6m", label: "Expiring within 6 months" },
-  { value: "within-9m", label: "Expiring within 9 months" },
+  { value: "9m-plus", label: "9 months or more" },
   { value: "expired", label: "Expired" },
   { value: "urgent", label: "Urgent (0–90 days)" },
   { value: "upcoming", label: "Upcoming (91–270 days)" },
@@ -78,13 +77,6 @@ export function formatOutcomeCell(outcome: CustomerOutcome | null): ReactNode {
 
 export function formatTextCell(value: string | null | undefined): ReactNode {
   return displayCell(value);
-}
-
-export function formatDateCell(value: string | null | undefined): ReactNode {
-  if (!value?.trim()) {
-    return <span className={styles.muted}>—</span>;
-  }
-  return formatDisplayDate(value);
 }
 
 export function TrainingRecordsTable<T extends { id: string }>({

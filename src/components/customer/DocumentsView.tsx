@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 
 import { CustomerPageHeader } from "@/components/customer/CustomerPageHeader";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import { formatDisplayDate } from "@/lib/training/expiryFilters";
+import { formatDate } from "@/lib/utils/formatDate";
 import type { CustomerDocumentRecord } from "@/types/models";
 
 import styles from "./customer.module.css";
@@ -183,7 +183,7 @@ export function DocumentsView({
                   <td>{cell(row.candidate)}</td>
                   <td>
                     {row.uploadedDate ? (
-                      formatDisplayDate(row.uploadedDate)
+                      formatDate(row.uploadedDate)
                     ) : (
                       <span className={styles.muted}>—</span>
                     )}

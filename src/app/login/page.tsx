@@ -21,27 +21,49 @@ export default async function LoginPage() {
 
   return (
     <main className={styles.page}>
-      <section className={styles.panel}>
-        <div className={styles.logoWrap}>
+      <aside className={styles.brandPanel}>
+        <div className={styles.brandLogoWrap}>
           <BrandLogo variant="full" priority />
         </div>
-        <p className={styles.tagline}>Paving the way in industry</p>
-        <h1 className={styles.title}>Sign in to your portal</h1>
-        <p className={styles.copy}>
-          Prefer Microsoft when you can. Customers without Microsoft can use an
-          email one-time code. Access still comes from Permissions.
+        <h2 className={styles.brandHeadline}>
+          Paving the way
+          <span className={styles.brandHeadlineAccent}>in industry</span>
+        </h2>
+        <p className={styles.brandCopy}>
+          Training, compliance, and workforce readiness — built for the people
+          who keep industry moving.
         </p>
-        <Suspense fallback={<p className={styles.copy}>Loading sign-in…</p>}>
-          <LoginClient
-            microsoftButton={
-              <form action={microsoftSignIn}>
-                <button className={styles.button} type="submit">
-                  Sign in with Microsoft
-                </button>
-              </form>
-            }
-          />
-        </Suspense>
+        <div className={styles.roadStripe} aria-hidden="true">
+          <span />
+          <span />
+          <span />
+          <span />
+          <span />
+        </div>
+      </aside>
+
+      <section className={styles.panel}>
+        <div className={styles.formInner}>
+          <div className={styles.logoWrap}>
+            <BrandLogo variant="full" priority />
+          </div>
+          <h1 className={styles.title}>Sign in to your portal</h1>
+          <p className={styles.copy}>
+            Prefer Microsoft when you can. Customers without Microsoft can use an
+            email one-time code. Access still comes from Permissions.
+          </p>
+          <Suspense fallback={<p className={styles.copy}>Loading sign-in…</p>}>
+            <LoginClient
+              microsoftButton={
+                <form action={microsoftSignIn}>
+                  <button className={styles.button} type="submit">
+                    Sign in with Microsoft
+                  </button>
+                </form>
+              }
+            />
+          </Suspense>
+        </div>
       </section>
     </main>
   );

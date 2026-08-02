@@ -10,12 +10,10 @@ import styles from "./admin.module.css";
 export function ImageUploadButton({
   uploadUrl,
   label = "Upload image",
-  currentUrl,
   onUploaded,
 }: {
   uploadUrl: string;
   label?: string;
-  currentUrl?: string | null;
   onUploaded?: () => Promise<void> | void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -47,14 +45,6 @@ export function ImageUploadButton({
 
   return (
     <span className={styles.imageUploadRow}>
-      {currentUrl ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={currentUrl}
-          alt=""
-          className={styles.imageUploadPreview}
-        />
-      ) : null}
       <input
         ref={inputRef}
         type="file"

@@ -6,14 +6,13 @@ import { Breadcrumbs } from "@/components/ui/Breadcrumbs";
 import { ExpiryDateBadge } from "@/components/ui/ExpiryDateBadge";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import {
-  formatDateCell,
   formatExpiryCell,
   formatOutcomeCell,
   formatTextCell,
   TrainingRecordsTable,
   type TrainingRecordColumn,
 } from "@/components/customer/TrainingRecordsTable";
-import { formatDisplayDate } from "@/lib/training/expiryFilters";
+import { formatDate } from "@/lib/utils/formatDate";
 import type {
   CustomerDocumentRecord,
   CustomerEusrRecord,
@@ -89,7 +88,7 @@ const nporsColumns: TrainingRecordColumn<CustomerNporsRecord>[] = [
   {
     key: "trainingDate",
     header: "Training Date",
-    render: (row) => formatDateCell(row.trainingDate),
+    render: (row) => formatDate(row.trainingDate),
   },
   {
     key: "trainingAddress",
@@ -127,7 +126,7 @@ const eusrColumns: TrainingRecordColumn<CustomerEusrRecord>[] = [
   {
     key: "trainingDate",
     header: "Training Date",
-    render: (row) => formatDateCell(row.trainingDate),
+    render: (row) => formatDate(row.trainingDate),
   },
   {
     key: "trainingAddress",
@@ -150,7 +149,7 @@ const streetworksColumns: TrainingRecordColumn<CustomerStreetworksRecord>[] = [
   {
     key: "trainingDate",
     header: "Training Date",
-    render: (row) => formatDateCell(row.trainingDate),
+    render: (row) => formatDate(row.trainingDate),
   },
   {
     key: "trainingAddress",
@@ -183,7 +182,7 @@ const inHouseColumns: TrainingRecordColumn<CustomerInHouseRecord>[] = [
   {
     key: "trainingDate",
     header: "Training Date",
-    render: (row) => formatDateCell(row.trainingDate),
+    render: (row) => formatDate(row.trainingDate),
   },
   {
     key: "trainingAddress",
@@ -247,19 +246,19 @@ function ProfileNvqSection({ records }: { records: CustomerNvqRecord[] }) {
                   <td>{row.boltOn?.trim() || "—"}</td>
                   <td>
                     {row.dateRegistered
-                      ? formatDisplayDate(row.dateRegistered)
+                      ? formatDate(row.dateRegistered)
                       : "—"}
                   </td>
                   <td>
                     {row.inductionDate
-                      ? formatDisplayDate(row.inductionDate)
+                      ? formatDate(row.inductionDate)
                       : "—"}
                   </td>
                   <td>{row.stageOfNvq?.trim() || "—"}</td>
                   <td>{row.notes?.trim() || "—"}</td>
                   <td>
                     {row.completedDate
-                      ? formatDisplayDate(row.completedDate)
+                      ? formatDate(row.completedDate)
                       : "—"}
                   </td>
                 </tr>
@@ -304,7 +303,7 @@ function ProfileDocumentsSection({
                   <td>{row.documentType?.trim() || "—"}</td>
                   <td>
                     {row.uploadedDate
-                      ? formatDisplayDate(row.uploadedDate)
+                      ? formatDate(row.uploadedDate)
                       : "—"}
                   </td>
                   <td>
@@ -387,7 +386,7 @@ export function CandidateProfileView({
             <h1 className={styles.title}>{candidate.candidateName}</h1>
             {candidate.dateOfBirth?.trim() ? (
               <p className={styles.dobSecondary}>
-                DOB {formatDisplayDate(candidate.dateOfBirth)}
+                DOB {formatDate(candidate.dateOfBirth)}
               </p>
             ) : null}
             <p className={styles.subtitle}>
@@ -415,7 +414,7 @@ export function CandidateProfileView({
           label="Date of birth"
           value={
             candidate.dateOfBirth
-              ? formatDisplayDate(candidate.dateOfBirth)
+              ? formatDate(candidate.dateOfBirth)
               : null
           }
         />

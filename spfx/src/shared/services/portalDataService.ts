@@ -5,6 +5,7 @@ import {
   getSharePointList,
   type SharePointListKey,
 } from "../schema/sharepointSchema";
+import { formatDateTime } from "../utils/formatDate";
 import {
   asBoolean,
   asString,
@@ -146,7 +147,7 @@ export async function loadDashboardCounts(
       maxItems: adminMax,
     }),
     getListItems(client, "trainingMatrix", {
-      filter: companyFilter(matrix.companyName),
+      // Training Matrix Update has no company column — count all (or filter later).
       top: adminTop,
       maxItems: adminMax,
     }),
@@ -177,9 +178,22 @@ export async function loadDashboardCounts(
     }),
   ]);
 
+  let matrixCount = m.length;
+  if (companyName) {
+    const names: { [n: string]: boolean } = {};
+    for (let i = 0; i < w.length; i++) {
+      const n = asString(w[i].fields[workforce.candidateName]);
+      if (n) names[n.trim().toLowerCase()] = true;
+    }
+    matrixCount = m.filter((item) => {
+      const title = asString(item.fields[matrix.title] || item.fields.Title);
+      return Boolean(title && names[title.trim().toLowerCase()]);
+    }).length;
+  }
+
   return {
     workforce: w.length,
-    matrix: m.length,
+    matrix: matrixCount,
     events: e.length,
     offers: o.filter((x) =>
       companyName ? asBoolean(x.fields[offers.customerVisible]) : true
@@ -304,7 +318,6 @@ export async function loadCustomerDashboardData(
     ),
     safe(
       getListItems(client, "trainingMatrix", {
-        filter: fieldEqualsFilter(matrix.companyName, companyName),
         top: 5000,
         maxItems: 5000,
       }),
@@ -347,27 +360,41 @@ export async function loadCustomerDashboardData(
     ),
   ]);
 
+  const workforceNames: { [n: string]: boolean } = {};
+  for (let i = 0; i < wItems.length; i++) {
+    const n = asString(wItems[i].fields[workforce.candidateName]);
+    if (n) workforceNames[n.trim().toLowerCase()] = true;
+  }
+
+  const companyMatrix = mItems.filter((item) => {
+    const title = asString(item.fields[matrix.title] || item.fields.Title);
+    return Boolean(title && workforceNames[title.trim().toLowerCase()]);
+  });
+
   let expiringSoon = 0;
   let missingData = 0;
-  const matrixRows: PortalTableRow[] = mItems.map((item) => {
-    const status = cell(item.fields[matrix.overallStatus]);
-    const expiry = cell(item.fields[matrix.nextExpiryDate]);
-    const needsReview = asBoolean(item.fields[matrix.needsReview]);
-    const days = expiry ? daysUntil(expiry) : null;
-    if (needsReview || /missing|review/i.test(status)) {
+  const matrixRows: PortalTableRow[] = companyMatrix.map((item) => {
+    const name = cell(item.fields[matrix.title] || item.fields.Title);
+    const cscs = cell(item.fields[matrix.cscsExpiry] || item.fields.CSCSExpiry);
+    const days = cscs ? daysUntil(cscs) : null;
+    if (!cscs) {
       missingData += 1;
     } else if (days !== null && days >= 0 && days <= 60) {
       expiringSoon += 1;
     } else if (days !== null && days < 0) {
       missingData += 1;
     }
+    const status =
+      days === null
+        ? "Missing Data"
+        : days < 0
+          ? "Expired"
+          : days <= 60
+            ? "Expiring Soon"
+            : "Compliant";
     return {
       id: item.id,
-      cells: [
-        cell(item.fields[matrix.candidateName]),
-        status || (needsReview ? "Missing Data" : "Compliant"),
-        expiry,
-      ],
+      cells: [name, status, cscs],
       fields: item.fields,
     };
   });
@@ -404,21 +431,10 @@ export async function loadCustomerDashboardData(
 
   const eventRows: CustomerDashboardEventRow[] = eItems.slice(0, 5).map((item) => {
     const dateRaw = cell(item.fields[events.eventDate]);
-    let when = dateRaw;
-    const d = new Date(dateRaw);
-    if (!isNaN(d.getTime())) {
-      when = d.toLocaleString("en-GB", {
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-    }
     return {
       id: item.id,
       title: cell(item.fields[events.title]) || "Event",
-      when: when,
+      when: formatDateTime(dateRaw),
       where: cell(item.fields[events.trainingAddress]) || "—",
       dateRaw: dateRaw,
     };

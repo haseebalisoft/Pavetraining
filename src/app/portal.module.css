@@ -2,7 +2,7 @@
   min-height: 100vh;
   padding: 2rem clamp(1.25rem, 4vw, 3rem) 3rem;
   background:
-    radial-gradient(circle at top right, rgba(141, 198, 63, 0.1), transparent 40%),
+    radial-gradient(circle at top right, rgba(var(--pave-lime-rgb), 0.1), transparent 40%),
     var(--pave-bg);
   color: var(--pave-charcoal);
   font-family: var(--pave-font-family);

@@ -1,21 +1,47 @@
 :root {
-  /* ── PAVE Training brand tokens ───────────────────────── */
-  --pave-charcoal: #4a4a4a;
-  --pave-charcoal-light: #6b6b6b;
-  --pave-charcoal-muted: #8a8a8a;
-  --pave-charcoal-deep: #3a3a3a;
+  /* ── PAVE Training brand tokens (website + portals) ───── */
+  --pave-charcoal: #333333;
+  --pave-charcoal-light: #555555;
+  --pave-charcoal-muted: #767876;
+  --pave-charcoal-deep: #1f1f1f;
 
-  --pave-lime: #8dc63f;
-  --pave-lime-hover: #7ab536;
-  --pave-lime-tint: #f1f8e7;
-  --pave-lime-dark: #5c8228;
+  --pave-lime: #81cf43;
+  --pave-lime-hover: #6bb536;
+  --pave-lime-tint: #eef9e4;
+  --pave-lime-dark: #4f8f22;
 
-  --pave-bg: #f7f7f7;
+  /* RGB channels for alpha composites */
+  --pave-lime-rgb: 129, 207, 67;
+  --pave-charcoal-rgb: 51, 51, 51;
+  --pave-amber-rgb: 240, 168, 40;
+  --pave-red-rgb: 225, 75, 75;
+
+  --pave-amber: #f0a828;
+  --pave-amber-tint: #fdf3dc;
+  --pave-red: #e14b4b;
+  --pave-red-tint: #fce8e8;
+
+  --pave-bg: #fafaf9;
   --pave-surface: #ffffff;
-  --pave-border: #e2e2e2;
+  --pave-border: #e5e7e5;
   --pave-border-strong: #c8c8c8;
 
-  --pave-font-family: var(--font-manrope), "Segoe UI", system-ui, sans-serif;
+  /* Matrix status (shared by admin + customer grids) */
+  --matrix-compliant-bg: var(--pave-lime-tint);
+  --matrix-compliant-text: var(--pave-charcoal);
+  --matrix-expiring-bg: var(--pave-amber-tint);
+  --matrix-expiring-text: var(--pave-charcoal);
+  --matrix-expired-bg: var(--pave-red-tint);
+  --matrix-expired-text: var(--pave-charcoal);
+  --matrix-na-bg: var(--pave-border);
+  --matrix-na-text: var(--pave-charcoal-muted);
+  --matrix-cell-min-width: 7.5rem;
+  --matrix-name-col-width: 11.25rem;
+  --matrix-company-col-width: 10rem;
+
+  --pave-font-body: var(--font-inter, Inter), "Segoe UI", system-ui, sans-serif;
+  --pave-font-heading: var(--font-barlow, "Barlow Condensed"), "Segoe UI", system-ui, sans-serif;
+  --pave-font-family: var(--pave-font-body);
 
   /* Type scale */
   --pave-font-size-title: clamp(1.4rem, 2.2vw, 1.85rem);
@@ -38,7 +64,10 @@
   --pave-font-weight-caption: 700;
   --pave-line-height-caption: 1.4;
 
-  /* ── Legacy aliases → pave tokens (admin + shared UI) ─── */
+  --space-section: 1.35rem;
+  --space-section-sm: 0.85rem;
+
+  /* Legacy aliases */
   --brand-green: var(--pave-lime);
   --brand-green-strong: var(--pave-lime-hover);
   --brand-charcoal: var(--pave-charcoal);
@@ -51,21 +80,22 @@
   --text: var(--pave-charcoal);
   --text-muted: var(--pave-charcoal-muted);
 
-  /* Semantic (kept separate from brand palette) */
   --success: var(--pave-lime);
-  --warning: #f59e0b;
-  --danger: #dc2626;
+  --warning: var(--pave-amber);
+  --danger: var(--pave-red);
   --info: var(--pave-charcoal-light);
 
   --radius-sm: 0.5rem;
   --radius-md: 0.75rem;
   --radius-lg: 1rem;
-  --shadow-sm: 0 1px 2px rgba(74, 74, 74, 0.06);
-  --shadow-md: 0 8px 24px rgba(74, 74, 74, 0.08);
-  --shadow-lg: 0 18px 40px rgba(74, 74, 74, 0.12);
+  --shadow-sm: 0 1px 2px rgba(var(--pave-charcoal-rgb), 0.06);
+  --shadow-md: 0 8px 24px rgba(var(--pave-charcoal-rgb), 0.08);
+  --shadow-lg: 0 18px 40px rgba(var(--pave-charcoal-rgb), 0.12);
 
-  --font-display: var(--pave-font-family);
-  --font-body: var(--pave-font-family);
+  --font-display: var(--pave-font-heading);
+  --font-display-weight: 700;
+  --font-display-tracking: 0.02em;
+  --font-body: var(--pave-font-body);
 
   --foreground: var(--text);
 }
@@ -85,6 +115,17 @@ body {
   line-height: var(--pave-line-height-body);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+h1,
+h2,
+h3,
+h4,
+.paveHeading {
+  font-family: var(--font-display);
+  font-weight: var(--font-display-weight);
+  letter-spacing: var(--font-display-tracking);
+  text-transform: uppercase;
 }
 
 * {

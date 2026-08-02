@@ -3,11 +3,43 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 0.4rem;
+  max-width: 100%;
+}
+
+.fill {
+  display: flex;
+  width: 100%;
+  min-height: 2.5rem;
+  min-width: var(--matrix-cell-min-width);
+  box-sizing: border-box;
+  padding: 0.35rem 0.45rem;
+  border-radius: 0.45rem;
+}
+
+.fillCompliant {
+  background: var(--matrix-compliant-bg);
+  color: var(--matrix-compliant-text);
+}
+
+.fillExpiring {
+  background: var(--matrix-expiring-bg);
+  color: var(--matrix-expiring-text);
+}
+
+.fillExpired {
+  background: var(--matrix-expired-bg);
+  color: var(--matrix-expired-text);
+}
+
+.fillNa {
+  background: var(--matrix-na-bg);
+  color: var(--matrix-na-text);
 }
 
 .date {
   font-size: var(--pave-font-size-caption);
   font-weight: 600;
-  color: var(--pave-charcoal);
+  color: inherit;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }

@@ -26,6 +26,15 @@ export function LoginClient({
   const [verifying, setVerifying] = useState(false);
 
   useEffect(() => {
+    const authError = searchParams.get("error")?.trim();
+    if (authError) {
+      setError(
+        authError === "Configuration" || authError === "CallbackRouteError"
+          ? "Microsoft sign-in timed out or could not reach Entra ID. Check your network and try again, or use an email one-time code below."
+          : "Sign-in failed. Try Microsoft again, or use an email one-time code.",
+      );
+    }
+
     const emailParam = searchParams.get("email")?.trim() || "";
     const codeParam = searchParams.get("code")?.trim() || "";
     const challengeParam = searchParams.get("challenge")?.trim() || "";

@@ -2976,6 +2976,7 @@ export interface AdminEventRecord {
   eventDate: string | null;
   endDate: string | null;
   description: string | null;
+  internalNotes: string | null;
   doNotSync: boolean;
   syncStatus: string | null;
   syncDirection: string | null;
@@ -3050,6 +3051,9 @@ function mapEvent(item: SharePointListItem): AdminEventRecord | null {
     description: stripSharePointHtml(
       asNullableString(item.fields[eventFields.description]),
     ),
+    internalNotes: stripSharePointHtml(
+      asNullableString(item.fields[eventFields.internalNotes]),
+    ),
     doNotSync: asBoolean(item.fields[eventFields.doNotSync]),
     syncStatus: asNullableString(item.fields[eventFields.syncStatus]),
     syncDirection: asNullableString(item.fields[eventFields.syncDirection]),
@@ -3107,13 +3111,23 @@ async function attachEventCompanyNames(
 
 export async function getEventsSchemaWarnings(): Promise<string[]> {
   try {
-    const hasEventCompany = await listHasColumn("events", "EventCompany");
-    if (hasEventCompany) {
-      return [];
+    const [hasEventCompany, hasInternalNotes] = await Promise.all([
+      listHasColumn("events", "EventCompany"),
+      listHasColumn("events", "InternalNotes"),
+    ]);
+    const warnings: string[] = [];
+    if (!hasEventCompany) warnings.push(EVENT_COMPANY_MISSING_WARNING);
+    if (!hasInternalNotes) {
+      warnings.push(
+        "Events list needs the InternalNotes multiple-lines text column.",
+      );
     }
-    return [EVENT_COMPANY_MISSING_WARNING];
+    return warnings;
   } catch {
-    return [EVENT_COMPANY_MISSING_WARNING];
+    return [
+      EVENT_COMPANY_MISSING_WARNING,
+      "Events list needs the InternalNotes multiple-lines text column.",
+    ];
   }
 }
 
@@ -3211,6 +3225,7 @@ export async function createAdminEvent(input: Record<string, unknown>) {
       eventDate: asDateTimeInput(input.eventDate),
       endDate: asDateTimeInput(input.endDate),
       description: optionalText(input.description),
+      internalNotes: optionalText(input.internalNotes),
       // Text column — boolean true/false causes Graph generalException.
       doNotSync: toDoNotSyncText(doNotSync),
       syncStatus: doNotSync ? "Skipped" : "Pending",
@@ -3276,6 +3291,10 @@ export async function updateAdminEvent(
         input.description === undefined
           ? undefined
           : optionalText(input.description),
+      internalNotes:
+        input.internalNotes === undefined
+          ? undefined
+          : optionalText(input.internalNotes),
       doNotSync: toDoNotSyncText(doNotSync),
     }),
   );

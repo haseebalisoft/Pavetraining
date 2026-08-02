@@ -1,13 +1,13 @@
 "use client";
 
 import {
-  formatDateCell,
   formatExpiryCell,
   formatOutcomeCell,
   formatTextCell,
   TrainingRecordsTable,
   type TrainingRecordColumn,
 } from "@/components/customer/TrainingRecordsTable";
+import { formatDate } from "@/lib/utils/formatDate";
 import type { CustomerNporsRecord } from "@/types/models";
 
 const columns: TrainingRecordColumn<CustomerNporsRecord>[] = [
@@ -24,7 +24,7 @@ const columns: TrainingRecordColumn<CustomerNporsRecord>[] = [
   {
     key: "trainingDate",
     header: "Training Date",
-    render: (row) => formatDateCell(row.trainingDate),
+    render: (row) => formatDate(row.trainingDate),
   },
   {
     key: "trainingAddress",

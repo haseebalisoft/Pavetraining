@@ -35,7 +35,7 @@ export function FolderCard({
       transition={{ duration: 0.22, delay: index * 0.05, ease: "easeOut" }}
       whileHover={{
         scale: 1.02,
-        boxShadow: "0 10px 28px rgba(74, 74, 74, 0.12)",
+        boxShadow: "0 10px 28px rgba(51, 51, 51, 0.12)",
         transition: springHover,
       }}
       whileTap={{ scale: 0.98, transition: { duration: 0.15 } }}

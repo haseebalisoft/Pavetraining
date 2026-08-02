@@ -23,7 +23,7 @@
   gap: 1.1rem;
   padding: 1.15rem 0.85rem 1.35rem;
   background:
-    radial-gradient(circle at top left, rgba(141, 198, 63, 0.16), transparent 42%),
+    radial-gradient(circle at top left, rgba(var(--pave-lime-rgb), 0.16), transparent 42%),
     linear-gradient(180deg, var(--pave-charcoal) 0%, var(--pave-charcoal-deep) 100%);
   color: #f0f0f0;
   border-right: 1px solid rgba(255, 255, 255, 0.04);
@@ -133,7 +133,7 @@
 }
 
 .navLinkActive {
-  background: rgba(141, 198, 63, 0.2);
+  background: rgba(var(--pave-lime-rgb), 0.2);
   color: #fff;
   box-shadow: inset 3px 0 0 var(--pave-lime);
 }
@@ -239,7 +239,7 @@
   min-width: 0;
   padding: 1.4rem clamp(1rem, 3vw, 2rem) 2.4rem;
   background:
-    radial-gradient(ellipse 60% 35% at 100% 0%, rgba(141, 198, 63, 0.08), transparent 55%),
+    radial-gradient(ellipse 60% 35% at 100% 0%, rgba(var(--pave-lime-rgb), 0.08), transparent 55%),
     var(--pave-bg);
 }
 
@@ -324,7 +324,7 @@
 }
 
 .statOk {
-  border-color: rgba(141, 198, 63, 0.35);
+  border-color: rgba(var(--pave-lime-rgb), 0.35);
 }
 
 .statDanger {
@@ -598,7 +598,7 @@
 
 .input:focus,
 .select:focus {
-  outline: 2px solid rgba(141, 198, 63, 0.35);
+  outline: 2px solid rgba(var(--pave-lime-rgb), 0.35);
   outline-offset: 1px;
   border-color: var(--pave-lime);
 }
@@ -658,11 +658,11 @@
 }
 
 .completedRow {
-  background: rgba(141, 198, 63, 0.12);
+  background: rgba(var(--pave-lime-rgb), 0.12);
 }
 
 .completedRow:hover {
-  background: rgba(141, 198, 63, 0.18);
+  background: rgba(var(--pave-lime-rgb), 0.18);
 }
 
 .muted {

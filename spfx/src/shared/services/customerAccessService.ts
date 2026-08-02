@@ -1,5 +1,6 @@
 import { getSharePointFields } from "../schema/sharepointSchema";
 import type { PermissionProfile } from "../types/models";
+import { formatDate } from "../utils/formatDate";
 import { accessScopeBadgeLabel } from "./permissionService";
 import {
   asBoolean,
@@ -71,17 +72,6 @@ function isSharePointFile(fields: Record<string, unknown>): boolean {
   const leaf = cell(fields[docs.fileLeafRef]);
   if (!leaf) return false;
   return leaf.indexOf(".") >= 0;
-}
-
-function formatDate(iso: string): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("en-GB", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
 }
 
 function departmentsFromWorkforce(fields: Record<string, unknown>): string[] {

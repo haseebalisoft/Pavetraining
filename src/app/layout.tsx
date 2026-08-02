@@ -1,12 +1,20 @@
 import type { Metadata, Viewport } from "next";
-import { Manrope } from "next/font/google";
+import { Barlow_Condensed, Inter } from "next/font/google";
+
+import { TopProgressBar } from "@/components/ui/TopProgressBar";
 
 import "./globals.css";
 
-const manrope = Manrope({
-  variable: "--font-manrope",
+const inter = Inter({
+  variable: "--font-inter",
   subsets: ["latin"],
-  weight: ["400", "500", "600", "700", "800"],
+  weight: ["400", "500", "600", "700"],
+});
+
+const barlow = Barlow_Condensed({
+  variable: "--font-barlow",
+  subsets: ["latin"],
+  weight: ["600", "700"],
 });
 
 const APP_NAME = "PAVE Training Portal";
@@ -44,7 +52,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#8dc63f",
+  themeColor: "#81cf43",
 };
 
 export default function RootLayout({
@@ -53,8 +61,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body className={manrope.variable}>{children}</body>
+    <html lang="en" className={`${inter.variable} ${barlow.variable} ${barlow.className}`}>
+      <body className={inter.className}>
+        <TopProgressBar />
+        {children}
+      </body>
     </html>
   );
 }

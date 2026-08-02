@@ -264,7 +264,8 @@ function Ensure-CoreEventsFields {
     Ensure-DateTimeField -ListTitle $listTitle -InternalName "EventDate" -DisplayName "Start Time"
     Ensure-DateTimeField -ListTitle $listTitle -InternalName "EndDate" -DisplayName "End Time"
     Ensure-TextField -ListTitle $listTitle -InternalName "Location" -DisplayName "Location"
-    Ensure-NoteField -ListTitle $listTitle -InternalName "Description" -DisplayName "Description"
+    Ensure-NoteField -ListTitle $listTitle -InternalName "Description" -DisplayName "Customer Description"
+    Ensure-NoteField -ListTitle $listTitle -InternalName "InternalNotes" -DisplayName "Internal Notes"
     Ensure-NoteField -ListTitle $listTitle -InternalName "TrainingAddress" -DisplayName "Training Address"
 
     $customerVisibleEncoded = Get-FieldSafe -ListTitle $listTitle -InternalName "Customer_x0020_Visible"
@@ -375,4 +376,4 @@ Write-Ok "Events schema check/update completed."
 
 Write-Host ""
 Write-Host "Run this to verify:" -ForegroundColor Cyan
-Write-Host 'Get-PnPField -List "Events" | Where-Object { $_.InternalName -in @("Title","EventDate","EndDate","Location","Description","TrainingAddress","EventCompany","Customer_x0020_Visible","OutlookEventId","OutlookCalendarId","OutlookICalUid","SyncStatus","SyncDirection","LastSyncedAt","LastSyncSource","SyncError","DoNotSync","SyncHash") } | Select Title, InternalName, TypeAsString' -ForegroundColor Gray
+Write-Host 'Get-PnPField -List "Events" | Where-Object { $_.InternalName -in @("Title","EventDate","EndDate","Location","Description","InternalNotes","TrainingAddress","EventCompany","Customer_x0020_Visible","OutlookEventId","OutlookCalendarId","OutlookICalUid","SyncStatus","SyncDirection","LastSyncedAt","LastSyncSource","SyncError","DoNotSync","SyncHash") } | Select Title, InternalName, TypeAsString' -ForegroundColor Gray

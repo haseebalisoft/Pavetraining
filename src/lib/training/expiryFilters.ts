@@ -4,9 +4,9 @@
  * Grey  = missing date → Records to Review
  * Red   = expired (< 0) or urgent (0–90 days / within 3 months)
  * Amber = upcoming (91–270 days / within 9 months)
- * Green = valid (271+ days / more than 9 months)
+ * Green = valid (271+ days / 9 months or more)
  *
- * Day-window filters (within-3m / 6m / 9m) are separate from colour buckets.
+ * The 3- and 6-month filters are cumulative; 9m-plus is open-ended from day 271.
  */
 
 export type ExpiryStatusCode =
@@ -19,11 +19,10 @@ export type ExpiryStatusCode =
 export type ExpiryColour = "grey" | "red" | "amber" | "green";
 
 export type ExpiryStatusLabel =
-  | "Records to Review"
+  | "Not applicable"
   | "Expired"
-  | "Urgent"
-  | "Upcoming"
-  | "Valid";
+  | "Expiring soon"
+  | "Compliant";
 
 export interface ExpiryStatus {
   status: ExpiryStatusCode;
@@ -51,13 +50,15 @@ export type ExpiryFilter =
   | "within-3m"
   /** Expires in 0–180 days (not yet expired). */
   | "within-6m"
-  /** Expires in 0–270 days (not yet expired). */
+  /** Expires in 271+ days, with no upper bound. */
+  | "9m-plus"
+  /** @deprecated Use "9m-plus". */
   | "within-9m"
   /** @deprecated Use "within-3m" or "urgent" */
   | "expiring-3m"
   /** @deprecated Use "within-6m" */
   | "expiring-6m"
-  /** @deprecated Use "within-9m" */
+  /** @deprecated Use "9m-plus" */
   | "expiring-9m";
 
 const MS_PER_DAY = 86_400_000;
@@ -66,7 +67,7 @@ const MS_PER_DAY = 86_400_000;
 export const EXPIRY_URGENT_DAYS = 90;
 /** End of 6-month window filter. */
 export const EXPIRY_WITHIN_6M_DAYS = 180;
-/** Upcoming band ends / within 9 months (inclusive). */
+/** Upcoming status ends here; the open-ended 9m-plus filter starts after it. */
 export const EXPIRY_UPCOMING_DAYS = 270;
 
 export function daysUntilExpiry(
@@ -111,7 +112,7 @@ export function getExpiryStatus(
   if (daysUntilExpiryValue === null) {
     return {
       status: "missing",
-      label: "Records to Review",
+      label: "Not applicable",
       colour: "grey",
       daysUntilExpiry: null,
     };
@@ -129,8 +130,8 @@ export function getExpiryStatus(
   if (daysUntilExpiryValue <= EXPIRY_URGENT_DAYS) {
     return {
       status: "urgent",
-      label: "Urgent",
-      colour: "red",
+      label: "Expiring soon",
+      colour: "amber",
       daysUntilExpiry: daysUntilExpiryValue,
     };
   }
@@ -138,7 +139,7 @@ export function getExpiryStatus(
   if (daysUntilExpiryValue <= EXPIRY_UPCOMING_DAYS) {
     return {
       status: "upcoming",
-      label: "Upcoming",
+      label: "Expiring soon",
       colour: "amber",
       daysUntilExpiry: daysUntilExpiryValue,
     };
@@ -146,7 +147,7 @@ export function getExpiryStatus(
 
   return {
     status: "valid",
-    label: "Valid",
+    label: "Compliant",
     colour: "green",
     daysUntilExpiry: daysUntilExpiryValue,
   };
@@ -174,14 +175,14 @@ export function getExpiryTone(
 function normalizeExpiryFilter(filter: ExpiryFilter): ExpiryFilter {
   if (filter === "expiring-3m") return "within-3m";
   if (filter === "expiring-6m") return "within-6m";
-  if (filter === "expiring-9m") return "within-9m";
+  if (filter === "within-9m" || filter === "expiring-9m") return "9m-plus";
   return filter;
 }
 
 /**
  * Filter matcher for a single expiry date.
- * Window filters (within-*) include dates that expire inside the window and
- * exclude already-expired dates (use "expired" for those).
+ * The within-3m / within-6m filters include non-expired dates inside their
+ * cumulative windows. The 9m-plus filter is open-ended from day 271.
  */
 export function matchesExpiryFilter(
   expiry: string | null | undefined,
@@ -202,8 +203,8 @@ export function matchesExpiryFilter(
   if (normalized === "within-6m") {
     return days !== null && days >= 0 && days <= EXPIRY_WITHIN_6M_DAYS;
   }
-  if (normalized === "within-9m") {
-    return days !== null && days >= 0 && days <= EXPIRY_UPCOMING_DAYS;
+  if (normalized === "9m-plus") {
+    return days !== null && days > EXPIRY_UPCOMING_DAYS;
   }
 
   return status === normalized;
@@ -240,23 +241,6 @@ export function earliestExpiryDate(
   return best?.value ?? null;
 }
 
-export function formatDisplayDate(value: string | null | undefined): string {
-  if (!value?.trim()) {
-    return "—";
-  }
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  }).format(date);
-}
-
 /** Legend copy for UIs — keep in sync with getExpiryStatus. */
 export const EXPIRY_STATUS_LEGEND: ReadonlyArray<{
   status: ExpiryStatusCode;
@@ -265,32 +249,26 @@ export const EXPIRY_STATUS_LEGEND: ReadonlyArray<{
   description: string;
 }> = [
   {
+    status: "valid",
+    label: "Compliant",
+    colour: "green",
+    description: "9 months or more remaining (271+ days; no upper limit)",
+  },
+  {
+    status: "upcoming",
+    label: "Expiring soon",
+    colour: "amber",
+    description: "Expires within 9 months (0–270 days)",
+  },
+  {
     status: "expired",
     label: "Expired",
     colour: "red",
     description: "Past the expiry date",
   },
   {
-    status: "urgent",
-    label: "Urgent",
-    colour: "red",
-    description: "Expires within 3 months (0–90 days)",
-  },
-  {
-    status: "upcoming",
-    label: "Upcoming",
-    colour: "amber",
-    description: "Expires within 3–9 months (91–270 days)",
-  },
-  {
-    status: "valid",
-    label: "Valid",
-    colour: "green",
-    description: "More than 9 months remaining (271+ days)",
-  },
-  {
     status: "missing",
-    label: "Records to Review",
+    label: "Not applicable",
     colour: "grey",
     description: "No expiry date recorded",
   },

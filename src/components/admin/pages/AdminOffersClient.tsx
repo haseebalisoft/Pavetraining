@@ -6,6 +6,7 @@ import {
   type AdminFieldConfig,
 } from "@/components/admin/AdminCrudPage";
 import type { AdminOfferRecord } from "@/lib/services/adminCrudService";
+import { formatDate } from "@/lib/utils/formatDate";
 
 const columns: AdminColumn<AdminOfferRecord>[] = [
   { key: "title", header: "Offer title", render: (row) => row.title },
@@ -14,8 +15,16 @@ const columns: AdminColumn<AdminOfferRecord>[] = [
     header: "Category",
     render: (row) => row.category ?? "—",
   },
-  { key: "start", header: "Start date", render: (row) => row.startDate ?? "—" },
-  { key: "end", header: "End date", render: (row) => row.endDate ?? "—" },
+  {
+    key: "start",
+    header: "Start date",
+    render: (row) => formatDate(row.startDate),
+  },
+  {
+    key: "end",
+    header: "End date",
+    render: (row) => formatDate(row.endDate),
+  },
   { key: "status", header: "Status", render: (row) => row.status ?? "—" },
   {
     key: "visible",

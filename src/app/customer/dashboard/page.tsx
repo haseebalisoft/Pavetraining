@@ -31,20 +31,22 @@ export default async function CustomerDashboardPage() {
     redirect("/access-denied");
   }
 
+  // These two reads are independent — run them concurrently so the dashboard
+  // waits for the slower of the two, not the sum of both.
+  const [companyResult, statsResult] = await Promise.allSettled([
+    getCompanyById(context.companyId),
+    getCustomerDashboard(context),
+  ]);
+
   let companyProfile: CustomerCompanyProfile | null = null;
-  try {
-    const company = await getCompanyById(context.companyId);
-    if (company) {
-      companyProfile = toCustomerCompanyProfile(company);
-    }
-  } catch {
-    companyProfile = null;
+  if (companyResult.status === "fulfilled" && companyResult.value) {
+    companyProfile = toCustomerCompanyProfile(companyResult.value);
   }
 
   let stats: DashboardStats;
-  try {
-    stats = await getCustomerDashboard(context);
-  } catch {
+  if (statsResult.status === "fulfilled") {
+    stats = statsResult.value;
+  } else {
     stats = {
       workforceCount: 0,
       trainingMatrixCount: 0,

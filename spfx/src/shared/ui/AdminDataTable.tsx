@@ -1,7 +1,10 @@
 import * as React from "react";
 
 import type { SharePointListKey } from "../schema/sharepointSchema";
-import { getSharePointList } from "../schema/sharepointSchema";
+import {
+  getSharePointList,
+  SHAREPOINT_LISTS,
+} from "../schema/sharepointSchema";
 import {
   thumbnailPreviewUrl,
   uploadAndSetListImage,
@@ -19,6 +22,7 @@ import {
   updateListItem,
   type SpListClient,
 } from "../services/sharePointListService";
+import { formatDate, formatDateTime } from "../utils/formatDate";
 import styles from "./portal.module.scss";
 
 export interface AdminDataTableProps {
@@ -31,6 +35,8 @@ export interface AdminDataTableProps {
   loading: boolean;
   error: string | null;
   onRefresh: () => void;
+  /** Optional: prefer these columns in the edit form (schema order). */
+  formColumns?: string[];
 }
 
 const READONLY_FIELDS: { [key: string]: boolean } = {
@@ -62,6 +68,34 @@ const BOOLEAN_HINTS = [
   "ReceiveExpiryNotifications",
   "ReceiveDocumentNotifications",
   "CustomerNotificationsEnabled",
+  "NeedsReview",
+];
+
+/** Choice fields — dropdowns instead of free text (matches Next.js admin). */
+const CHOICE_OPTIONS: { [internalName: string]: string[] } = {
+  RoleType: ["Admin", "Customer", "Candidate"],
+  AccessScope: ["Full Company", "Department Only", "Candidate Only"],
+  Status: ["Active", "Inactive"],
+  TrainingOutcome: ["Pass", "Fail"],
+  CompanySize: ["Small", "Medium", "Large", "Enterprise"],
+  OverallStatus: ["Compliant", "Expiring Soon", "Expired", "Missing Data"],
+  SyncStatus: ["Synced", "Pending", "Error", "Skipped"],
+  Category: ["Promotion", "Offer", "Announcement"],
+  NoviceorEwt: ["Novice", "EWT"],
+};
+
+const DATE_HINTS = [
+  /Date$/i,
+  /Expiry/i,
+  /^DOB$/i,
+  /EventDate/i,
+  /StartDate/i,
+  /EndDate/i,
+  /OutcomeDate/i,
+  /TrainingDate/i,
+  /CourseDate/i,
+  /Timestamp/i,
+  /LastSynced/i,
 ];
 
 function isBooleanField(internalName: string): boolean {
@@ -76,6 +110,42 @@ function isLookupIdField(internalName: string): boolean {
   );
 }
 
+function isDateField(internalName: string): boolean {
+  for (let i = 0; i < DATE_HINTS.length; i++) {
+    if (DATE_HINTS[i].test(internalName)) return true;
+  }
+  return false;
+}
+
+function friendlyLabel(
+  listKey: SharePointListKey,
+  internalName: string
+): string {
+  const list = SHAREPOINT_LISTS[listKey];
+  const fields = list.fields as Record<string, string>;
+  const labels = list.labels as Record<string, string>;
+  for (const key in fields) {
+    if (
+      Object.prototype.hasOwnProperty.call(fields, key) &&
+      fields[key] === internalName
+    ) {
+      return labels[key] || humanize(internalName);
+    }
+  }
+  return humanize(internalName);
+}
+
+function humanize(internalName: string): string {
+  return internalName
+    .replace(/_x0020_/g, " ")
+    .replace(/_x002d_/g, " - ")
+    .replace(/_x002f_/g, " / ")
+    .replace(/_x2013_/g, " – ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function fieldToFormValue(value: unknown): string {
   if (value === null || value === undefined) return "";
   if (typeof value === "boolean") return value ? "true" : "false";
@@ -83,7 +153,34 @@ function fieldToFormValue(value: unknown): string {
     const s = asString(value);
     return s || "";
   }
-  return String(value);
+  const raw = String(value);
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+  return raw;
+}
+
+function isDateTimeDisplayField(
+  listKey: SharePointListKey,
+  internalName: string
+): boolean {
+  if (listKey === "events") {
+    return ["EventDate", "EndDate", "LastSyncedAt"].indexOf(internalName) >= 0;
+  }
+  return listKey === "trainingManagerLogs" && internalName === "Timestamp";
+}
+
+function formatCellDisplay(
+  value: string,
+  listKey: SharePointListKey,
+  internalName: string
+): string {
+  if (!value) return "—";
+  if (isDateTimeDisplayField(listKey, internalName)) {
+    return formatDateTime(value);
+  }
+  if (isDateField(internalName) || /^\d{4}-\d{2}-\d{2}(?:T|$)/.test(value)) {
+    return formatDate(value);
+  }
+  return value;
 }
 
 function buildWritePayload(
@@ -124,6 +221,10 @@ function buildWritePayload(
 
     const text = (form[name] || "").trim();
     if (text === "") continue;
+    if (isDateField(name) && /^\d{4}-\d{2}-\d{2}$/.test(text)) {
+      payload[name] = text + "T00:00:00Z";
+      continue;
+    }
     payload[name] = text;
   }
 
@@ -141,6 +242,7 @@ export const AdminDataTable: React.FC<AdminDataTableProps> = (props) => {
     loading,
     error,
     onRefresh,
+    formColumns,
   } = props;
 
   const [drawerOpen, setDrawerOpen] = React.useState(false);
@@ -155,9 +257,23 @@ export const AdminDataTable: React.FC<AdminDataTableProps> = (props) => {
   const [localPreviewUrl, setLocalPreviewUrl] = React.useState<string | null>(
     null
   );
+  const [query, setQuery] = React.useState("");
 
   const listLabel = getSharePointList(listKey).displayName;
   const supportsCompanyLogo = listKey === "company";
+
+  const editableColumns = React.useMemo(() => {
+    const source = formColumns && formColumns.length ? formColumns : columns;
+    return source.filter((c) => !READONLY_FIELDS[c]);
+  }, [columns, formColumns]);
+
+  const filteredRows = React.useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter((row) =>
+      row.cells.some((c) => (c || "").toLowerCase().indexOf(q) >= 0)
+    );
+  }, [rows, query]);
 
   const clearLogoSelection = (): void => {
     if (localPreviewUrl) {
@@ -169,8 +285,14 @@ export const AdminDataTable: React.FC<AdminDataTableProps> = (props) => {
 
   const openCreate = (): void => {
     const blank: Record<string, string> = {};
-    for (let i = 0; i < columns.length; i++) {
-      if (!READONLY_FIELDS[columns[i]]) blank[columns[i]] = "";
+    for (let i = 0; i < editableColumns.length; i++) {
+      const name = editableColumns[i];
+      if (name === "Status") blank[name] = "Active";
+      else if (name === "RoleType") blank[name] = "Customer";
+      else if (name === "AccessScope") blank[name] = "Full Company";
+      else if (name === "TrainingOutcome") blank[name] = "Pass";
+      else if (isBooleanField(name)) blank[name] = "true";
+      else blank[name] = "";
     }
     setEditingId(null);
     setOriginal({});
@@ -190,9 +312,8 @@ export const AdminDataTable: React.FC<AdminDataTableProps> = (props) => {
       const item = await getListItem(client, listKey, row.id);
       const fields = item ? item.fields : row.fields || {};
       const next: Record<string, string> = {};
-      for (let i = 0; i < columns.length; i++) {
-        const name = columns[i];
-        if (READONLY_FIELDS[name]) continue;
+      for (let i = 0; i < editableColumns.length; i++) {
+        const name = editableColumns[i];
         const idKey = name + "Id";
         if (fields[idKey] !== undefined && fields[idKey] !== null) {
           next[name] = fieldToFormValue(fields[idKey]);
@@ -204,7 +325,8 @@ export const AdminDataTable: React.FC<AdminDataTableProps> = (props) => {
         if (
           Object.prototype.hasOwnProperty.call(fields, key) &&
           isLookupIdField(key) &&
-          !READONLY_FIELDS[key]
+          !READONLY_FIELDS[key] &&
+          next[key] === undefined
         ) {
           next[key] = fieldToFormValue(fields[key]);
         }
@@ -240,7 +362,7 @@ export const AdminDataTable: React.FC<AdminDataTableProps> = (props) => {
     setActionError(null);
     setActionOk(null);
     try {
-      const payload = buildWritePayload(columns, form, original);
+      const payload = buildWritePayload(editableColumns, form, original);
       for (const key in form) {
         if (
           Object.prototype.hasOwnProperty.call(form, key) &&
@@ -312,33 +434,109 @@ export const AdminDataTable: React.FC<AdminDataTableProps> = (props) => {
     }
   };
 
-  const exportRows = rows.map((r) => r.cells);
-  const formKeys = Object.keys(form).sort();
+  const exportRows = filteredRows.map((r) => r.cells);
+  const formKeys = editableColumns.filter(
+    (k) => Object.prototype.hasOwnProperty.call(form, k) || true
+  );
   const previewSrc = localPreviewUrl || logoPreview;
+
+  const renderFieldControl = (key: string): React.ReactNode => {
+    const choices = CHOICE_OPTIONS[key];
+    if (choices) {
+      return (
+        <select
+          value={form[key] || ""}
+          onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+          disabled={busy}
+        >
+          <option value="">Select…</option>
+          {choices.map((opt) => (
+            <option key={opt} value={opt}>
+              {opt}
+            </option>
+          ))}
+        </select>
+      );
+    }
+    if (isBooleanField(key)) {
+      return (
+        <select
+          value={form[key] || "false"}
+          onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+          disabled={busy}
+        >
+          <option value="true">Yes</option>
+          <option value="false">No</option>
+        </select>
+      );
+    }
+    if (isDateField(key)) {
+      return (
+        <input
+          type="date"
+          value={(form[key] || "").slice(0, 10)}
+          onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+          disabled={busy}
+        />
+      );
+    }
+    if (key === "UserEmail" || /Email$/i.test(key)) {
+      return (
+        <input
+          type="email"
+          value={form[key] || ""}
+          onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+          disabled={busy}
+          placeholder="name@company.com"
+        />
+      );
+    }
+    return (
+      <input
+        type="text"
+        value={form[key] || ""}
+        onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+        disabled={busy}
+        placeholder={
+          isLookupIdField(key) || original[key + "Id"] !== undefined
+            ? "SharePoint item ID"
+            : undefined
+        }
+      />
+    );
+  };
 
   return (
     <div className={styles.panel}>
       <div className={styles.toolbar}>
         <button type="button" onClick={openCreate} disabled={busy}>
-          New
+          Add new
         </button>
         <button
           type="button"
           onClick={() => exportTableAsCsv(title, headers, exportRows)}
-          disabled={loading || rows.length === 0}
+          disabled={loading || filteredRows.length === 0}
         >
           Export CSV
         </button>
         <button
           type="button"
           onClick={() => exportTableAsExcel(title, headers, exportRows)}
-          disabled={loading || rows.length === 0}
+          disabled={loading || filteredRows.length === 0}
         >
           Export Excel
         </button>
         <button type="button" onClick={onRefresh} disabled={busy || loading}>
           Refresh
         </button>
+        <input
+          className={styles.tableSearch}
+          type="search"
+          placeholder="Search rows…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          aria-label="Search table"
+        />
       </div>
 
       {actionError && <p className={styles.error}>{actionError}</p>}
@@ -347,67 +545,93 @@ export const AdminDataTable: React.FC<AdminDataTableProps> = (props) => {
       {error && <p className={styles.error}>{error}</p>}
 
       {!loading && !error && (
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th className={styles.actionsCol}>Actions</th>
-              {headers.map((h) => (
-                <th key={h}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 ? (
+        <div className={styles.tableWrap}>
+          <table className={styles.table}>
+            <thead>
               <tr>
-                <td
-                  colSpan={(headers.length || 0) + 1}
-                  className={styles.muted}
-                >
-                  No rows found.
-                </td>
+                <th className={styles.actionsCol}>Actions</th>
+                {headers.map((h) => (
+                  <th key={h} title={h}>
+                    {h}
+                  </th>
+                ))}
               </tr>
-            ) : (
-              rows.map((row) => (
-                <tr key={row.id}>
-                  <td className={styles.actionsCol}>
-                    <button
-                      type="button"
-                      className={styles.linkBtn}
-                      onClick={() => {
-                        openEdit(row).catch(() => undefined);
-                      }}
-                      disabled={busy}
-                    >
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      className={styles.linkBtnDanger}
-                      onClick={() => {
-                        remove(row).catch(() => undefined);
-                      }}
-                      disabled={busy}
-                    >
-                      Delete
-                    </button>
+            </thead>
+            <tbody>
+              {filteredRows.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={(headers.length || 0) + 1}
+                    className={styles.muted}
+                  >
+                    No rows found.
                   </td>
-                  {row.cells.map((c, i) => (
-                    <td key={row.id + "-" + i}>{c}</td>
-                  ))}
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+              ) : (
+                filteredRows.map((row) => (
+                  <tr key={row.id}>
+                    <td className={styles.actionsCol}>
+                      <button
+                        type="button"
+                        className={styles.linkBtn}
+                        onClick={() => {
+                          openEdit(row).catch(() => undefined);
+                        }}
+                        disabled={busy}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.linkBtnDanger}
+                        onClick={() => {
+                          remove(row).catch(() => undefined);
+                        }}
+                        disabled={busy}
+                      >
+                        Delete
+                      </button>
+                    </td>
+                    {row.cells.map((c, i) => {
+                      const display = formatCellDisplay(
+                        c,
+                        listKey,
+                        columns[i] || ""
+                      );
+                      return (
+                        <td key={row.id + "-" + i} title={display}>
+                          {display}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {drawerOpen && (
-        <div className={styles.drawerBackdrop}>
-          <div className={styles.drawer} role="dialog" aria-modal="true">
+        <div
+          className={styles.drawerBackdrop}
+          onClick={() => {
+            if (!busy) {
+              clearLogoSelection();
+              setDrawerOpen(false);
+            }
+          }}
+        >
+          <div
+            className={styles.drawer}
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className={styles.drawerHeader}>
               <h2 className={styles.title}>
-                {editingId ? "Edit item #" + editingId : "New item"} —{" "}
-                {listLabel}
+                {editingId ? "Edit" : "Add"} {listLabel}
+                {editingId ? " #" + editingId : ""}
               </h2>
               <button
                 type="button"
@@ -422,8 +646,8 @@ export const AdminDataTable: React.FC<AdminDataTableProps> = (props) => {
               </button>
             </div>
             <p className={styles.muted}>
-              Fill Company Name (required). Blank fields are skipped. Lookup
-              columns: enter the SharePoint item ID.
+              Use the fields below. Choice fields use dropdowns. Blank fields
+              are skipped on save.
             </p>
             {actionError && <p className={styles.error}>{actionError}</p>}
 
@@ -467,33 +691,14 @@ export const AdminDataTable: React.FC<AdminDataTableProps> = (props) => {
               {formKeys.map((key) => (
                 <label key={key} className={styles.field}>
                   <span className={styles.fieldLabel}>
-                    {key}
-                    {isBooleanField(key) ? " (yes/no)" : ""}
-                    {original[key + "Id"] !== undefined
+                    {friendlyLabel(listKey, key)}
+                    {CHOICE_OPTIONS[key] ? "" : ""}
+                    {isLookupIdField(key) ||
+                    original[key + "Id"] !== undefined
                       ? " (lookup ID)"
                       : ""}
                   </span>
-                  {isBooleanField(key) ? (
-                    <select
-                      value={form[key] || "false"}
-                      onChange={(e) =>
-                        setForm({ ...form, [key]: e.target.value })
-                      }
-                      disabled={busy}
-                    >
-                      <option value="true">Yes</option>
-                      <option value="false">No</option>
-                    </select>
-                  ) : (
-                    <input
-                      type="text"
-                      value={form[key] || ""}
-                      onChange={(e) =>
-                        setForm({ ...form, [key]: e.target.value })
-                      }
-                      disabled={busy}
-                    />
-                  )}
+                  {renderFieldControl(key)}
                 </label>
               ))}
             </div>

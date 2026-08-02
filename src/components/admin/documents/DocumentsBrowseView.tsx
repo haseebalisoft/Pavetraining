@@ -2,7 +2,7 @@
 
 import { AnimatePresence, motion } from "framer-motion";
 
-import { formatDisplayDate } from "@/lib/training/expiryFilters";
+import { formatDate } from "@/lib/utils/formatDate";
 import type {
   AdminDocumentRecord,
   DocumentMetadataStatus,
@@ -358,7 +358,7 @@ export function DocumentsBrowseView({
                             Modified:{" "}
                             <strong>
                               {row.modifiedDate
-                                ? formatDisplayDate(row.modifiedDate)
+                                ? formatDate(row.modifiedDate)
                                 : "—"}
                             </strong>
                           </li>

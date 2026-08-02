@@ -7,16 +7,19 @@
 }
 
 .full {
-  width: min(100%, 13.75rem);
+  width: min(100%, 11rem);
   height: auto;
+  aspect-ratio: 1 / 1;
 }
 
 .compact {
-  width: min(100%, 8.75rem);
+  width: min(100%, 7.25rem);
   height: auto;
+  aspect-ratio: 1 / 1;
 }
 
 .mark {
   width: 2.5rem;
-  height: 2.5rem;
+  height: auto;
+  aspect-ratio: 1 / 1;
 }

@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 
 import { CustomerPageHeader } from "@/components/customer/CustomerPageHeader";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import { formatDisplayDate } from "@/lib/training/expiryFilters";
+import { formatDate } from "@/lib/utils/formatDate";
 import type { CustomerNvqRecord } from "@/types/models";
 
 import styles from "./customer.module.css";
@@ -27,7 +27,7 @@ function dateCell(value: string | null | undefined) {
   if (!value?.trim()) {
     return <span className={styles.muted}>—</span>;
   }
-  return formatDisplayDate(value);
+  return formatDate(value);
 }
 
 export function NvqProgressView({ companyName, records }: Props) {

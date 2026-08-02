@@ -15,9 +15,9 @@ export function BrandLogo({
 }: BrandLogoProps) {
   const size =
     variant === "full"
-      ? { width: 220, height: 88 }
+      ? { width: 220, height: 220 }
       : variant === "compact"
-        ? { width: 148, height: 58 }
+        ? { width: 148, height: 148 }
         : { width: 40, height: 40 };
 
   return (

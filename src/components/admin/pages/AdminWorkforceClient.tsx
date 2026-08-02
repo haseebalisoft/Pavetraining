@@ -6,20 +6,13 @@ import {
   type AdminFieldConfig,
 } from "@/components/admin/AdminCrudPage";
 import { ImageUploadButton } from "@/components/admin/ImageUploadButton";
+import { Thumbnail } from "@/components/ui/Thumbnail";
 import type {
   AdminPermissionRecord,
   AdminWorkforceRecord,
 } from "@/lib/services/adminCrudService";
+import { formatDate } from "@/lib/utils/formatDate";
 import type { Company } from "@/types/models";
-
-function formatDateCell(value: string | null | undefined): string {
-  if (!value?.trim()) return "—";
-  // SharePoint often returns ISO datetime — show date only.
-  if (/^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10);
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toISOString().slice(0, 10);
-}
 
 function text(value: string | null | undefined): string {
   return value?.trim() ? value : "—";
@@ -30,17 +23,13 @@ const columns: AdminColumn<AdminWorkforceRecord>[] = [
   {
     key: "photo",
     header: "Photo",
-    render: (row) =>
-      row.photoUrl ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={row.photoUrl}
-          alt=""
-          style={{ width: 40, height: 40, objectFit: "cover", borderRadius: 6 }}
-        />
-      ) : (
-        "—"
-      ),
+    render: (row) => (
+      <Thumbnail
+        src={row.photoUrl}
+        alt={row.candidateName ? `${row.candidateName} photo` : "Candidate photo"}
+        variant="person"
+      />
+    ),
   },
   {
     key: "workforceNumber",
@@ -90,7 +79,7 @@ const columns: AdminColumn<AdminWorkforceRecord>[] = [
   {
     key: "dateOfBirth",
     header: "Date of birth",
-    render: (row) => formatDateCell(row.dateOfBirth),
+    render: (row) => formatDate(row.dateOfBirth),
   },
   {
     key: "niNumber",
@@ -110,7 +99,7 @@ const columns: AdminColumn<AdminWorkforceRecord>[] = [
   {
     key: "cscsExpiry",
     header: "Cscs Expiry",
-    render: (row) => formatDateCell(row.cscsExpiry),
+    render: (row) => formatDate(row.cscsExpiry),
   },
   {
     key: "swqrNumber",
@@ -120,7 +109,7 @@ const columns: AdminColumn<AdminWorkforceRecord>[] = [
   {
     key: "swqrExpiry",
     header: "Swqr Expiry",
-    render: (row) => formatDateCell(row.swqrExpiry),
+    render: (row) => formatDate(row.swqrExpiry),
   },
   {
     key: "eusrNumber",
@@ -130,7 +119,7 @@ const columns: AdminColumn<AdminWorkforceRecord>[] = [
   {
     key: "eusrExpiry",
     header: "Eusr Expiry",
-    render: (row) => formatDateCell(row.eusrExpiry),
+    render: (row) => formatDate(row.eusrExpiry),
   },
   {
     key: "inHouseCertificationNumber",
@@ -295,11 +284,11 @@ export function AdminWorkforceClient({
       mapResponse={(payload) =>
         ((payload as { records?: AdminWorkforceRecord[] }).records ?? [])
       }
+      stickyColumnKey="candidateName"
       extraActions={(row, { reload }) => (
         <ImageUploadButton
           uploadUrl={`/api/admin/workforce/${row.id}/photo`}
           label="Upload photo"
-          currentUrl={row.photoUrl}
           onUploaded={reload}
         />
       )}

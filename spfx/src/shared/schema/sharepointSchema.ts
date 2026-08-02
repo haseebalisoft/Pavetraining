@@ -25,12 +25,14 @@ export interface SharePointListDefinition<TFields extends SharePointFieldMap> {
   listName: string;
   /** Customer/admin facing label when different from listName. */
   displayName: string;
+  /** Optional SharePoint list GUID (preferred for REST). */
+  listId?: string;
   /** Environment variable that holds the Graph list ID. */
   listIdEnvVar: string;
   /** Internal field name map. */
   fields: TFields;
   /** Optional UI labels keyed by the same property keys as `fields`. */
-  labels: Readonly<Record<keyof TFields & string, string>>;
+  labels: Readonly<Record<string, string>>;
 }
 
 const companyFields = {
@@ -77,25 +79,13 @@ const workforceFields = {
   inHouseCertificationNumber: "InHouseCertificationNumber",
 } as const;
 
-const trainingMatrixFields = {
-  id: "ID",
-  candidateName: "CandidateName",
-  matrixCompany: "MatrixCompany",
-  companyName: "Company_x0020_Name",
-  department: "Department",
-  overallStatus: "OverallStatus",
-  needsReview: "NeedsReview",
-  matrixNotes: "MatrixNotes",
-  nextExpiryDate: "NextExpiryDate",
-  n001Expiry: "N001Expiry",
-  n003Expiry: "N003Expiry",
-  n004Expiry: "N004Expiry",
-  n010Expiry: "N010Expiry",
-  n020Expiry: "N020Expiry",
-  n021Expiry: "N021Expiry",
-  n027Expiry: "N027Expiry",
-  n100Expiry: "N100Expiry",
-} as const;
+import {
+  trainingMatrixUpdateFields,
+  trainingMatrixUpdateLabels,
+} from "./trainingMatrixUpdateFields";
+
+/** Live wide matrix list — same as Next.js admin ("Training Matrix Update"). */
+const trainingMatrixFields = trainingMatrixUpdateFields;
 
 const nporsRegisterFields = {
   id: "ID",
@@ -213,6 +203,7 @@ const eventsFields = {
   eventDate: "EventDate",
   endDate: "EndDate",
   description: "Description",
+  internalNotes: "InternalNotes",
   location: "Location",
   outlookEventId: "OutlookEventId",
   outlookCalendarId: "OutlookCalendarId",
@@ -340,29 +331,13 @@ export const SHAREPOINT_LISTS = {
 
   trainingMatrix: {
     key: "trainingMatrix",
-    listName: "Training Matrix",
-    displayName: "Training Matrix",
-    listIdEnvVar: "SHAREPOINT_TRAINING_MATRIX_LIST_ID",
+    listName: "Training Matrix Update",
+    displayName: "Training Matrix Update",
+    /** GUID avoids title mismatch with the legacy "Training Matrix" list. */
+    listId: "c6fcd53d-fc00-41ad-84b6-8fe409a1897d",
+    listIdEnvVar: "SHAREPOINT_TRAINING_MATRIX_EXAMPLE_LIST_ID",
     fields: trainingMatrixFields,
-    labels: {
-      id: "ID",
-      candidateName: "Candidate name",
-      matrixCompany: "Matrix company",
-      companyName: "Company name",
-      department: "Department",
-      overallStatus: "Overall status",
-      needsReview: "Needs review",
-      matrixNotes: "Matrix notes",
-      nextExpiryDate: "Next expiry date",
-      n001Expiry: "N001 expiry",
-      n003Expiry: "N003 expiry",
-      n004Expiry: "N004 expiry",
-      n010Expiry: "N010 expiry",
-      n020Expiry: "N020 expiry",
-      n021Expiry: "N021 expiry",
-      n027Expiry: "N027 expiry",
-      n100Expiry: "N100 expiry",
-    },
+    labels: trainingMatrixUpdateLabels,
   },
 
   nporsRegister: {
@@ -526,7 +501,8 @@ export const SHAREPOINT_LISTS = {
       trainingAddress: "Training address",
       eventDate: "Start date / time",
       endDate: "End date / time",
-      description: "Description",
+      description: "Customer description",
+      internalNotes: "Internal notes",
       location: "Location",
       outlookEventId: "Outlook event ID",
       outlookCalendarId: "Outlook calendar ID",

@@ -68,6 +68,8 @@ interface AdminCrudPageProps<T extends { id: string }> {
   deleteConfirmExtra?: string;
   initialRows: T[];
   mapResponse: (payload: unknown) => T[];
+  /** Receives refreshed rows so alternate views can share the same data. */
+  onRowsChange?: (rows: T[]) => void;
   companies?: Company[];
   /** Workforce options for type="workforce" fields (auto-fills name/company). */
   workforce?: AdminWorkforceOption[];
@@ -91,6 +93,15 @@ interface AdminCrudPageProps<T extends { id: string }> {
   breadcrumbs?: Array<{ label: string; href?: string }>;
   /** Horizontal scroll for many columns (Company List / Excel-width tables). */
   wideTable?: boolean;
+  /** Freeze first two data columns while scrolling horizontally. */
+  stickyLeadColumns?: boolean;
+  /**
+   * Pin a single identity column (e.g. Company Name / Candidate Name) to the
+   * left edge while scrolling horizontally. Pass the matching `column.key`.
+   */
+  stickyColumnKey?: string;
+  /** Extra table class (e.g. matrix grid layout). */
+  tableClassName?: string;
 }
 
 type FormState = Record<string, string | boolean>;
@@ -173,6 +184,7 @@ export function AdminCrudPage<T extends { id: string }>({
   deleteConfirmExtra,
   initialRows,
   mapResponse,
+  onRowsChange,
   companies = [],
   workforce = [],
   enableCompanyFilter = false,
@@ -190,6 +202,9 @@ export function AdminCrudPage<T extends { id: string }>({
   extraActions,
   breadcrumbs,
   wideTable = false,
+  stickyLeadColumns = false,
+  stickyColumnKey,
+  tableClassName,
 }: AdminCrudPageProps<T>) {
   const { pushToast } = useAdminToast();
   const router = useRouter();
@@ -239,7 +254,9 @@ export function AdminCrudPage<T extends { id: string }>({
         throw new Error(await readError(response));
       }
       const payload = await response.json();
-      setRows(mapResponse(payload));
+      const nextRows = mapResponse(payload);
+      setRows(nextRows);
+      onRowsChange?.(nextRows);
     } catch (error) {
       pushToast(
         error instanceof Error ? error.message : "Failed to load records",
@@ -248,7 +265,7 @@ export function AdminCrudPage<T extends { id: string }>({
     } finally {
       setLoading(false);
     }
-  }, [listUrl, mapResponse, pushToast]);
+  }, [listUrl, mapResponse, onRowsChange, pushToast]);
 
   const filtered = useMemo(() => {
     let next = rows;
@@ -592,11 +609,20 @@ export function AdminCrudPage<T extends { id: string }>({
           <p>{emptyLabel}</p>
         </div>
       ) : (
-        <div className={styles.tableWrap}>
+        <div
+          className={`${styles.tableWrap}${
+            wideTable ? ` ${styles.tableWrapWide}` : ""
+          }`}
+        >
           <table
-            className={`${styles.dataTable}${
-              wideTable ? ` ${styles.companiesWideTable}` : ""
-            }`}
+            className={[
+              styles.dataTable,
+              wideTable ? styles.companiesWideTable : "",
+              stickyLeadColumns ? styles.stickyLeadColumns : "",
+              tableClassName || "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
           >
             <thead>
               <tr>
@@ -614,7 +640,15 @@ export function AdminCrudPage<T extends { id: string }>({
                   </th>
                 ) : null}
                 {columns.map((column) => (
-                  <th key={column.key} scope="col">
+                  <th
+                    key={column.key}
+                    scope="col"
+                    className={
+                      stickyColumnKey && column.key === stickyColumnKey
+                        ? styles.stickyIdentityCell
+                        : undefined
+                    }
+                  >
                     {column.header}
                   </th>
                 ))}
@@ -638,7 +672,16 @@ export function AdminCrudPage<T extends { id: string }>({
                     </td>
                   ) : null}
                   {columns.map((column) => (
-                    <td key={column.key}>{column.render(row)}</td>
+                    <td
+                      key={column.key}
+                      className={
+                        stickyColumnKey && column.key === stickyColumnKey
+                          ? styles.stickyIdentityCell
+                          : undefined
+                      }
+                    >
+                      {column.render(row)}
+                    </td>
                   ))}
                   <td>
                     {updateUrl ? (
@@ -752,18 +795,27 @@ export function AdminCrudPage<T extends { id: string }>({
               );
             } else if (field.type === "workforce") {
               const selectedId = matchWorkforceId(form, workforce);
+              const selectedCompany = String(
+                form.companyName ?? "",
+              ).trim().toLowerCase();
               const query = workforceQuery.trim().toLowerCase();
+              const companyWorkforce = selectedCompany
+                ? workforce.filter(
+                    (row) =>
+                      row.companyName.trim().toLowerCase() === selectedCompany,
+                  )
+                : workforce;
               const filteredWorkforce = query
-                ? workforce.filter((row) =>
+                ? companyWorkforce.filter((row) =>
                     `${row.candidateName} ${row.companyName}`
                       .toLowerCase()
                       .includes(query),
                   )
-                : workforce;
+                : companyWorkforce;
               control = (
                 <label className={styles.field}>
                   <span className={styles.fieldLabel}>
-                    {field.label} (auto-fills name & company)
+                    {field.label} (scoped to selected company)
                   </span>
                   <input
                     className={`${styles.input} ${styles.workforceFilter}`}
@@ -836,12 +888,52 @@ export function AdminCrudPage<T extends { id: string }>({
                     className={styles.select}
                     value={String(form[field.name] ?? "")}
                     disabled={field.readOnly}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        [field.name]: event.target.value,
-                      }))
-                    }
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setForm((current) => {
+                        if (field.type !== "company" || field.name !== "companyName") {
+                          return { ...current, [field.name]: value };
+                        }
+
+                        const candidateName = String(
+                          current.candidateName ?? "",
+                        ).trim().toLowerCase();
+                        const currentCompany = String(
+                          current.companyName ?? "",
+                        ).trim().toLowerCase();
+                        const selectedCandidate =
+                          workforce.find(
+                            (row) =>
+                              row.candidateName.trim().toLowerCase() ===
+                                candidateName &&
+                              row.companyName.trim().toLowerCase() ===
+                                currentCompany,
+                          ) ??
+                          workforce.find(
+                            (row) =>
+                              row.candidateName.trim().toLowerCase() ===
+                              candidateName,
+                          );
+                        const candidateStillMatches =
+                          !selectedCandidate ||
+                          !value ||
+                          selectedCandidate.companyName.trim().toLowerCase() ===
+                            value.trim().toLowerCase();
+
+                        return {
+                          ...current,
+                          [field.name]: value,
+                          ...(candidateStillMatches
+                            ? {}
+                            : {
+                                candidateName: "",
+                                nporsNumber: "",
+                                eusrNumber: "",
+                                swqrNumber: "",
+                              }),
+                        };
+                      });
+                    }}
                   >
                     <option value="">Select…</option>
                     {options.map((option) => (

@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { Suspense, type ReactNode } from "react";
 
 import { AdminProviders } from "@/components/admin/AdminProviders";
-import { AdminSidebar } from "@/components/admin/AdminSidebar";
+import { AdminTopNav } from "@/components/admin/AdminTopNav";
 import { LoadingState } from "@/components/ui/States";
 import { auth, signOut } from "@/auth";
 import { getAdminContext } from "@/lib/services/customerContextService";
@@ -49,7 +49,7 @@ export default async function AdminLayout({
 
   return (
     <div className={styles.shell}>
-      <AdminSidebar email={context.loggedInEmail} signOutAction={signOutAction} />
+      <AdminTopNav email={context.loggedInEmail} signOutAction={signOutAction} />
       <main className={styles.main}>
         <AdminProviders>
           <Suspense fallback={<LoadingState label="Loading admin…" />}>

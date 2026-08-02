@@ -193,7 +193,10 @@ export interface TrainingEvent {
   trainingAddress: string | null;
   eventDate: string | null;
   endDate: string | null;
+  /** Customer-facing copy; this is the only description exposed publicly. */
   description: string | null;
+  /** Admin-only notes. Never include in customer API payloads. */
+  internalNotes: string | null;
   location: string | null;
   outlookEventId: string | null;
   outlookCalendarId: string | null;

@@ -9,11 +9,11 @@ import { ExpiryDateBadge } from "@/components/ui/ExpiryDateBadge";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import {
   EXPIRY_STATUS_LEGEND,
-  formatDisplayDate,
   getExpiryStatus,
   matchesAnyExpiryFilter,
   type ExpiryFilter,
 } from "@/lib/training/expiryFilters";
+import { formatDate } from "@/lib/utils/formatDate";
 import type { CustomerMatrixRecord } from "@/types/models";
 import type { StatusTone } from "@/lib/ui/status";
 
@@ -23,7 +23,7 @@ type MatrixExpiryFilter =
   | "all"
   | "within-3m"
   | "within-6m"
-  | "within-9m"
+  | "9m-plus"
   | "expired"
   | "valid"
   | "missing"
@@ -163,7 +163,7 @@ function CandidateNameCell({
       {name}
       {row.dateOfBirth?.trim() ? (
         <span className={styles.dobSecondary}>
-          DOB {formatDisplayDate(row.dateOfBirth)}
+          DOB {formatDate(row.dateOfBirth)}
         </span>
       ) : null}
     </div>
@@ -174,7 +174,7 @@ function parseFilter(raw: string | null): MatrixExpiryFilter {
   if (
     raw === "within-3m" ||
     raw === "within-6m" ||
-    raw === "within-9m" ||
+    raw === "9m-plus" ||
     raw === "expired" ||
     raw === "valid" ||
     raw === "missing" ||
@@ -187,7 +187,7 @@ function parseFilter(raw: string | null): MatrixExpiryFilter {
   }
   if (raw === "expiring" || raw === "expiring-3m") return "within-3m";
   if (raw === "expiring-6m") return "within-6m";
-  if (raw === "expiring-9m") return "within-9m";
+  if (raw === "within-9m" || raw === "expiring-9m") return "9m-plus";
   return "all";
 }
 
@@ -474,7 +474,7 @@ export function TrainingMatrixView({
             <option value="all">All expiries</option>
             <option value="within-3m">Expiring within 3 months</option>
             <option value="within-6m">Expiring within 6 months</option>
-            <option value="within-9m">Expiring within 9 months</option>
+            <option value="9m-plus">9 months or more</option>
             <option value="expired">Expired</option>
             <option value="valid">Valid</option>
             <option value="missing">Records to Review</option>
@@ -653,7 +653,7 @@ export function TrainingMatrixView({
                   <p className={styles.matrixCardTitle}>{row.candidateName}</p>
                   {row.dateOfBirth?.trim() ? (
                     <p className={styles.dobSecondary}>
-                      DOB {formatDisplayDate(row.dateOfBirth)}
+                      DOB {formatDate(row.dateOfBirth)}
                     </p>
                   ) : null}
                   <p className={styles.matrixCardMeta}>

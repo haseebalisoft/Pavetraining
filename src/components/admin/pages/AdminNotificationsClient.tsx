@@ -6,6 +6,7 @@ import { useAdminToast } from "@/components/admin/AdminToast";
 import { Breadcrumbs } from "@/components/ui/Breadcrumbs";
 import { LoadingState } from "@/components/ui/States";
 import { readPublicApiError } from "@/lib/errors/publicMessages";
+import { formatDateTime } from "@/lib/utils/formatDate";
 import type {
   ExpiryNotificationRunResult,
   NotificationLogEntry,
@@ -348,7 +349,7 @@ export function AdminNotificationsClient() {
               ) : (
                 data!.failedLogs.map((entry) => (
                   <tr key={entry.id}>
-                    <td>{new Date(entry.createdAt).toLocaleString()}</td>
+                    <td>{formatDateTime(entry.createdAt)}</td>
                     <td>{entry.type}</td>
                     <td>{entry.recipientEmail ?? "—"}</td>
                     <td>{entry.subject}</td>
@@ -388,7 +389,7 @@ export function AdminNotificationsClient() {
               ) : (
                 data!.logs.map((entry) => (
                   <tr key={entry.id}>
-                    <td>{new Date(entry.createdAt).toLocaleString()}</td>
+                    <td>{formatDateTime(entry.createdAt)}</td>
                     <td>{entry.type}</td>
                     <td>{entry.status}</td>
                     <td>{entry.recipientEmail ?? "—"}</td>
