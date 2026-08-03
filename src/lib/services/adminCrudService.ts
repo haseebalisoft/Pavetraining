@@ -4009,8 +4009,11 @@ function mapPermission(item: SharePointListItem): AdminPermissionRecord | null {
         )
       : null) ??
     null;
-  const accessScope =
+  const accessScopeRaw =
     asNullableString(item.fields[permissionFields.accessScope]) ?? null;
+  const accessScope =
+    normalizeAccessScopeChoice(accessScopeRaw) ??
+    (accessScopeRaw?.trim() || null);
   const customerRole = resolveCustomerRole(
     sharePointRoleType,
     accessScope || "Full Company",
@@ -4048,7 +4051,8 @@ function mapPermission(item: SharePointListItem): AdminPermissionRecord | null {
     status: asNullableString(item.fields[permissionFields.status]) ?? "Inactive",
     companyId,
     companyName: asLookupOrString(item.fields[permissionFields.company]),
-    accessScope,
+    // Blank/legacy SharePoint values break the required Access scope select.
+    accessScope: accessScope || "Full Company",
     departmentScopes,
     // Prefer LookupIds for the admin multiselect form; fall back to names.
     departmentsAllowed: departmentAllowedIds.length
@@ -4086,10 +4090,19 @@ export async function listAdminPermissions() {
 function normalizeAccessScopeChoice(value: unknown): string | null {
   const raw = optionalText(value);
   if (!raw) return null;
-  const s = raw.toLowerCase();
+  const s = raw.toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
   if (s.includes("candidate")) return "Candidate Only";
   if (s.includes("department")) return "Department Only";
-  if (s.includes("full") || s === "company") return "Full Company";
+  if (
+    s.includes("full") ||
+    s === "company" ||
+    s === "all" ||
+    s.includes("all compan") ||
+    s === "company wide" ||
+    s === "companywide"
+  ) {
+    return "Full Company";
+  }
   return raw;
 }
 

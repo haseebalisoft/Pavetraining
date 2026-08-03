@@ -172,12 +172,44 @@ function buildInitialForm(
   const state: FormState = {};
   for (const field of fields) {
     if (row && field.name in row) {
-      state[field.name] = toFormValue(row[field.name], field.type);
+      let value = toFormValue(row[field.name], field.type);
+      // SharePoint AccessScope may be blank or legacy wording — map to form choices.
+      if (field.name === "accessScope" && field.type === "select") {
+        const raw = String(value ?? "").trim().toLowerCase();
+        if (!raw) {
+          value = "Full Company";
+        } else if (raw.includes("candidate")) {
+          value = "Candidate Only";
+        } else if (raw.includes("department")) {
+          value = "Department Only";
+        } else if (
+          raw.includes("full") ||
+          raw === "company" ||
+          raw === "all" ||
+          raw.includes("all compan")
+        ) {
+          value = "Full Company";
+        } else if (
+          field.options?.length &&
+          !field.options.some(
+            (option) =>
+              option.value.trim().toLowerCase() === raw ||
+              option.value === value,
+          )
+        ) {
+          value = "Full Company";
+        }
+      }
+      state[field.name] = value;
     } else if (field.type === "boolean") {
       state[field.name] =
         field.name === "customerVisible" || field.name === "canView";
     } else if (field.name === "status" && field.type === "select") {
       state[field.name] = "Active";
+    } else if (field.name === "accessScope" && field.type === "select") {
+      state[field.name] = "Full Company";
+    } else if (field.name === "permissionRole" && field.type === "select") {
+      state[field.name] = "Admin";
     } else if (field.name === "trainingOutcome") {
       state[field.name] = "Pass";
     } else if (field.name === "roleType") {

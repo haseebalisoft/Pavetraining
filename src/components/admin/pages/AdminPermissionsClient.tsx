@@ -82,14 +82,14 @@ const fields: AdminFieldConfig[] = [
     type: "select",
     required: true,
     options: [
-      { value: "Full Company", label: "Full Company" },
+      { value: "Full Company", label: "Full Company (all candidates in company)" },
       {
         value: "Department Only",
-        label: "Department Only (recommended for Enterprise TMs)",
+        label: "Department Only (Enterprise TMs — tick departments below)",
       },
       {
         value: "Candidate Only",
-        label: "Candidate Only",
+        label: "Candidate Only (own records)",
       },
     ],
   },
