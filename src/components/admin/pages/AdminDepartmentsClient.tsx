@@ -5,8 +5,8 @@ import {
   type AdminColumn,
   type AdminFieldConfig,
 } from "@/components/admin/AdminCrudPage";
-import type { AdminDepartmentRecord } from "@/lib/services/departmentService";
-import { MAX_DEPARTMENTS_PER_COMPANY } from "@/lib/services/departmentService";
+import type { AdminDepartmentRecord } from "@/lib/services/departmentTypes";
+import { MAX_DEPARTMENTS_PER_COMPANY } from "@/lib/services/departmentTypes";
 import type { Company } from "@/types/models";
 
 const columns: AdminColumn<AdminDepartmentRecord>[] = [

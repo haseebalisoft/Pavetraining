@@ -6,7 +6,7 @@ import {
   type AdminFieldConfig,
 } from "@/components/admin/AdminCrudPage";
 import type { AdminPermissionRecord } from "@/lib/services/adminCrudService";
-import type { AdminDepartmentRecord } from "@/lib/services/departmentService";
+import type { AdminDepartmentRecord } from "@/lib/services/departmentTypes";
 import type { Company } from "@/types/models";
 
 const columns: AdminColumn<AdminPermissionRecord>[] = [

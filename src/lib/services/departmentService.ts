@@ -19,18 +19,17 @@ import {
   updateListItemFieldsByKey,
   type SharePointFields,
 } from "@/lib/services/sharePointListService";
+import {
+  MAX_DEPARTMENTS_PER_COMPANY,
+  type AdminDepartmentRecord,
+} from "@/lib/services/departmentTypes";
+
+export {
+  MAX_DEPARTMENTS_PER_COMPANY,
+  type AdminDepartmentRecord,
+} from "@/lib/services/departmentTypes";
 
 const fields = getSharePointFields("departments");
-
-/** Soft cap for Enterprise companies — keep allocation simple. */
-export const MAX_DEPARTMENTS_PER_COMPANY = 10;
-
-export type AdminDepartmentRecord = {
-  id: string;
-  name: string;
-  companyId: string | null;
-  companyName: string | null;
-};
 
 function departmentKey(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");

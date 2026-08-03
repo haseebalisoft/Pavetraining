@@ -14,7 +14,7 @@ import type {
   AdminPermissionRecord,
   AdminWorkforceRecord,
 } from "@/lib/services/adminCrudService";
-import type { AdminDepartmentRecord } from "@/lib/services/departmentService";
+import type { AdminDepartmentRecord } from "@/lib/services/departmentTypes";
 import { formatDate } from "@/lib/utils/formatDate";
 import type { Company } from "@/types/models";
 
