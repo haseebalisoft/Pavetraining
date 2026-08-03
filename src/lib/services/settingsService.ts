@@ -36,7 +36,7 @@ export function getDefaultSettings(): PortalSettings {
     suppressNotificationsDuringBulkUpload: true,
 
     urgentWindowDays: 90,
-    upcomingWindowDays: 270,
+    upcomingWindowDays: 180,
     send3MonthReminders: true,
     send6MonthReminders: true,
     sendExpiredReminders: false,

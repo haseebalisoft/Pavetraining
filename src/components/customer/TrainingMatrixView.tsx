@@ -24,6 +24,7 @@ type MatrixExpiryFilter =
   | "all"
   | "within-3m"
   | "within-6m"
+  | "6m-plus"
   | "9m-plus"
   | "expired"
   | "valid"
@@ -175,6 +176,7 @@ function parseFilter(raw: string | null): MatrixExpiryFilter {
   if (
     raw === "within-3m" ||
     raw === "within-6m" ||
+    raw === "6m-plus" ||
     raw === "9m-plus" ||
     raw === "expired" ||
     raw === "valid" ||
@@ -184,11 +186,11 @@ function parseFilter(raw: string | null): MatrixExpiryFilter {
     raw === "review" ||
     raw === "all"
   ) {
-    return raw;
+    return raw === "9m-plus" ? "6m-plus" : raw;
   }
   if (raw === "expiring" || raw === "expiring-3m") return "within-3m";
   if (raw === "expiring-6m") return "within-6m";
-  if (raw === "within-9m" || raw === "expiring-9m") return "9m-plus";
+  if (raw === "within-9m" || raw === "expiring-9m") return "6m-plus";
   return "all";
 }
 
@@ -312,8 +314,11 @@ export function TrainingMatrixView({
   const profileHref = (row: CustomerMatrixRecord) => {
     if (!row.candidateId) return null;
     const params = new URLSearchParams();
-    if (returnQuery) params.set("return", `/customer?${returnQuery}`);
-    else params.set("return", "/customer");
+    if (returnQuery) {
+      params.set("return", `/customer?${returnQuery}`);
+    } else {
+      params.set("return", "/customer");
+    }
     const qs = params.toString();
     return `/customer/candidates/${row.candidateId}${qs ? `?${qs}` : ""}`;
   };
@@ -421,15 +426,11 @@ export function TrainingMatrixView({
           }
         >
           <option value="all">All expiries</option>
+          <option value="expired">Expired</option>
           <option value="within-3m">Expiring within 3 months</option>
           <option value="within-6m">Expiring within 6 months</option>
-          <option value="9m-plus">9 months or more</option>
-          <option value="expired">Expired</option>
-          <option value="valid">Valid</option>
-          <option value="missing">Records to Review</option>
-          <option value="urgent">Urgent (status)</option>
-          <option value="upcoming">Upcoming (status)</option>
-          <option value="review">Flagged for review</option>
+          <option value="6m-plus">6 months or more / in date</option>
+          <option value="review">Records to Review</option>
         </select>
       </label>
     </>
@@ -440,14 +441,10 @@ export function TrainingMatrixView({
       <header className={`${styles.pageHeader} ${styles.matrixHeader}`}>
         <div className={styles.matrixBreadcrumbs}>
           <Breadcrumbs
-            items={
-              isLanding
-                ? [{ label: "Customer" }, { label: "Training Matrix" }]
-                : [
-                    { label: "Customer", href: "/customer" },
-                    { label: "Training Matrix" },
-                  ]
-            }
+            items={[
+              { label: "Customer", href: "/customer" },
+              { label: "Training Matrix" },
+            ]}
           />
         </div>
         <div className={styles.matrixTitleRow}>

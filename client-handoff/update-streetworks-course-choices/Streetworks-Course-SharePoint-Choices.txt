@@ -1,0 +1,15 @@
+Streetworks (NRSWA Register) — Course choices for SharePoint
+
+List: NRSWA Register
+Column: Course (Choice)
+
+Replace ALL existing choices with these 4 lines only:
+
+--- BEGIN CHOICES ---
+Operative
+Supervisor
+Operative Reassessment
+Supervisor Reassessment
+--- END CHOICES ---
+
+Count: 4

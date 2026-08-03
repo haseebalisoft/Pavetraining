@@ -1,7 +1,7 @@
 import { CLIENT_MATRIX_CATEGORY_COLUMNS } from "@/lib/services/bulkUpload/clientTemplateHeaders";
 
 const EXTRA_IN_HOUSE_COURSES = [
-  "Face Fitting",
+  "Face Fit",
   "Asbestos Awareness",
 ] as const;
 

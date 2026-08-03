@@ -1,0 +1,10 @@
+{
+  "name": "pave-update-npors-category-choices",
+  "private": true,
+  "type": "module",
+  "description": "Site Owner script: expand NPORS Category MultiChoice on NPORS Register",
+  "dependencies": {
+    "@azure/identity": "^4.9.1",
+    "@microsoft/microsoft-graph-client": "^3.0.7"
+  }
+}

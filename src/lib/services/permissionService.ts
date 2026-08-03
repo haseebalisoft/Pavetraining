@@ -243,6 +243,28 @@ function mapPermissionItem(
   const candidateScopeName =
     asString(fields[permissionFields.name])?.trim() || null;
 
+  // TM with department coverage → portal sees only those departments (not whole company).
+  let normalizedAccessScope = normalizeAccessScopeValue(
+    resolvedAccessScope,
+    customerRole,
+    isAdminOnly,
+  );
+  if (
+    customerRole === "TrainingManager" &&
+    departmentScopes.length > 0 &&
+    normalizedAccessScope === "Company"
+  ) {
+    normalizedAccessScope = "Department";
+  }
+  if (
+    customerRole === "TrainingManager" &&
+    resolvedAccessScope.toLowerCase().includes("department") &&
+    departmentScopes.length === 0
+  ) {
+    // Explicit Department Only with no coverage → empty set (not company-wide).
+    normalizedAccessScope = "Department";
+  }
+
   return {
     id,
     userEmail: userEmail.toLowerCase(),
@@ -254,11 +276,7 @@ function mapPermissionItem(
     companyId,
     companyDisplayName: resolveCompanyDisplayName(fields),
     accessScope: resolvedAccessScope,
-    normalizedAccessScope: normalizeAccessScopeValue(
-      resolvedAccessScope,
-      customerRole,
-      isAdminOnly,
-    ),
+    normalizedAccessScope,
     departmentScopes,
     candidateScopeName,
     canView: asBoolean(fields[permissionFields.canView]),

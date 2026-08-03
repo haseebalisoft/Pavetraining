@@ -24,13 +24,16 @@ export async function POST(request: Request) {
     "POST /api/admin/training-records/npors",
     async (context, req) => {
       const body = (await req.json()) as Record<string, unknown>;
-      const record = await createAdminRegister("nporsRegister", body);
+      const { record, choiceWarnings } = await createAdminRegister(
+        "nporsRegister",
+        body,
+      );
       const matrixSync = await triggerMatrixSyncAfterRegister(
         "nporsRegister",
         record,
         context.loggedInEmail,
       );
-      return { record, matrixSync };
+      return { record, matrixSync, choiceWarnings };
     },
     { errorMessage: "Failed to create NPORS record" },
     request,

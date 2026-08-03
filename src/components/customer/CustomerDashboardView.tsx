@@ -20,6 +20,11 @@ const SECTIONS = [
     description: "Workforce competency overview and upcoming renewals.",
   },
   {
+    href: "/customer/courses",
+    title: "PAVE Training Courses",
+    description: "Everything PAVE can deliver — NPORS, Streetworks, EUSR, NVQ and more.",
+  },
+  {
     href: "/customer/candidates",
     title: "Candidates",
     description: "Browse people in your organisation.",
@@ -48,6 +53,11 @@ const SECTIONS = [
     href: "/customer/offers",
     title: "Offers",
     description: "Current promotions shared with your company.",
+  },
+  {
+    href: "/customer/support",
+    title: "Support",
+    description: "Contact PAVE Training with a form or call us.",
   },
 ] as const;
 
@@ -83,17 +93,17 @@ export function CustomerDashboardView({
       show: stats.expiredCount > 0,
     },
     {
-      href: "/customer?filter=urgent",
+      href: "/customer?filter=within-3m",
       title: "Urgent",
       value: stats.expiringSoonCount,
       detail: "Renewals due in the next 90 days",
       show: stats.expiringSoonCount > 0,
     },
     {
-      href: "/customer?filter=upcoming",
+      href: "/customer?filter=within-6m",
       title: "Upcoming",
       value: stats.upcomingExpiryCount,
-      detail: "Renewals due in 91–270 days",
+      detail: "Renewals due in 91–180 days",
       show: stats.upcomingExpiryCount > 0,
     },
     {

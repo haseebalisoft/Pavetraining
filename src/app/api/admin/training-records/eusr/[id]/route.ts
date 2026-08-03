@@ -13,13 +13,17 @@ export async function PATCH(
     "PATCH /api/admin/training-records/eusr/[id]",
     async (adminContext, req) => {
       const body = (await req.json()) as Record<string, unknown>;
-      const record = await updateAdminRegister("eusrRegister", id, body);
+      const { record, choiceWarnings } = await updateAdminRegister(
+        "eusrRegister",
+        id,
+        body,
+      );
       const matrixSync = await triggerMatrixSyncAfterRegister(
         "eusrRegister",
         record,
         adminContext.loggedInEmail,
       );
-      return { record, matrixSync };
+      return { record, matrixSync, choiceWarnings };
     },
     { errorMessage: "Failed to update EUSR record" },
     request,

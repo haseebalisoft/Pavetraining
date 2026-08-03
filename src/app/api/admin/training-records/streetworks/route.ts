@@ -24,13 +24,16 @@ export async function POST(request: Request) {
     "POST /api/admin/training-records/streetworks",
     async (context, req) => {
       const body = (await req.json()) as Record<string, unknown>;
-      const record = await createAdminRegister("nrswaRegister", body);
+      const { record, choiceWarnings } = await createAdminRegister(
+        "nrswaRegister",
+        body,
+      );
       const matrixSync = await triggerMatrixSyncAfterRegister(
         "nrswaRegister",
         record,
         context.loggedInEmail,
       );
-      return { record, matrixSync };
+      return { record, matrixSync, choiceWarnings };
     },
     { errorMessage: "Failed to create Streetworks record" },
     request,

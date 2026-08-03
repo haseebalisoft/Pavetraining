@@ -133,19 +133,25 @@ export function candidateRecordAllowed(
     return false;
   }
 
-  // Department / AssignedCandidates
+  // Department / AssignedCandidates — match department coverage first.
+  if (context.departmentScopes.length > 0) {
+    const depts = splitDepartments(candidate.department);
+    if (
+      depts.some((dept) =>
+        context.departmentScopes.some((scope) => namesMatch(dept, scope)),
+      )
+    ) {
+      return true;
+    }
+  }
+
+  // Supervisors can also see candidates assigned to them by name.
   if (supervisorMatchesCandidate(candidate as WorkforceCandidate, context)) {
     return true;
   }
 
-  if (context.departmentScopes.length > 0) {
-    const depts = splitDepartments(candidate.department);
-    return depts.some((dept) =>
-      context.departmentScopes.some((scope) => namesMatch(dept, scope)),
-    );
-  }
-
-  return supervisorMatchesCandidate(candidate as WorkforceCandidate, context);
+  // Department-only with no scopes and no supervisor match → nothing visible.
+  return false;
 }
 
 export function filterCandidatesByAccess(

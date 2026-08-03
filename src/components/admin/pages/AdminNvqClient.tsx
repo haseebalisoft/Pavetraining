@@ -1,5 +1,7 @@
 "use client";
 
+import { useMemo, useState } from "react";
+
 import {
   AdminCrudPage,
   type AdminColumn,
@@ -17,6 +19,7 @@ const columns: AdminColumn<AdminNvqRecord>[] = [
   { key: "name", header: "Candidate name", render: (row) => row.candidateName },
   { key: "title", header: "NVQ title", render: (row) => row.nvqTitle ?? "—" },
   { key: "company", header: "Company", render: (row) => row.companyName ?? "—" },
+  { key: "boltOn", header: "Bolt on", render: (row) => row.boltOn ?? "—" },
   { key: "stage", header: "Stage", render: (row) => row.stageOfNvq ?? "—" },
   {
     key: "status",
@@ -27,6 +30,16 @@ const columns: AdminColumn<AdminNvqRecord>[] = [
         tone={row.status === "Completed" ? "ok" : "info"}
       />
     ),
+  },
+  {
+    key: "registered",
+    header: "Date registered",
+    render: (row) => formatDate(row.dateRegistered),
+  },
+  {
+    key: "induction",
+    header: "Induction date",
+    render: (row) => formatDate(row.inductionDate),
   },
   {
     key: "completed",
@@ -55,6 +68,13 @@ const fields: AdminFieldConfig[] = [
     required: true,
     section: "Candidate",
   },
+  {
+    name: "workforceNumber",
+    label: "Workforce number (from Workforce)",
+    type: "text",
+    readOnly: true,
+    section: "Candidate",
+  },
   { name: "nvqTitle", label: "NVQ title", type: "text", section: "NVQ" },
   { name: "boltOn", label: "Bolt on", type: "text", section: "NVQ" },
   {
@@ -65,7 +85,7 @@ const fields: AdminFieldConfig[] = [
   },
   {
     name: "inductionDate",
-    label: "Date induction booked",
+    label: "Induction date",
     type: "date",
     section: "NVQ",
   },
@@ -78,7 +98,7 @@ const fields: AdminFieldConfig[] = [
   },
   {
     name: "notes",
-    label: "Customer update notes",
+    label: "Notes / Customer update notes",
     type: "textarea",
     section: "NVQ",
   },
@@ -124,6 +144,8 @@ const fields: AdminFieldConfig[] = [
   },
 ];
 
+type NvqTab = "Active" | "Completed";
+
 export function AdminNvqClient({
   companies,
   workforce,
@@ -133,10 +155,17 @@ export function AdminNvqClient({
   workforce: AdminWorkforceOption[];
   initialRows: AdminNvqRecord[];
 }) {
+  const [tab, setTab] = useState<NvqTab>("Active");
+
+  const rowFilter = useMemo(
+    () => (row: AdminNvqRecord) => row.status === tab,
+    [tab],
+  );
+
   return (
     <AdminCrudPage<AdminNvqRecord>
       title="NVQ"
-      description="Select a company to scope candidates. Admin sees full NVQ fields; customers only see customer-visible progress."
+      description="Select a company to scope candidates. Completed date blank = Active; filled = Completed (green). Admin sees full NVQ fields; customers only see customer-visible progress."
       columns={columns}
       fields={fields}
       companies={companies}
@@ -150,13 +179,33 @@ export function AdminNvqClient({
       mapResponse={(payload) =>
         ((payload as { records?: AdminNvqRecord[] }).records ?? [])
       }
+      rowFilter={rowFilter}
       rowClassName={(row) =>
         row.status === "Completed" ? styles.completedRow : undefined
+      }
+      toolbarExtra={
+        <div className={styles.syncToolbarActions} role="tablist" aria-label="NVQ status">
+          {(["Active", "Completed"] as const).map((option) => (
+            <button
+              key={option}
+              type="button"
+              role="tab"
+              aria-selected={tab === option}
+              className={
+                tab === option ? styles.primaryButton : styles.secondaryButton
+              }
+              onClick={() => setTab(option)}
+            >
+              {option}
+            </button>
+          ))}
+        </div>
       }
       searchKeys={[
         (row) => row.candidateName,
         (row) => row.nvqTitle,
         (row) => row.companyName,
+        (row) => row.boltOn,
         (row) => row.stageOfNvq,
         (row) => row.notes,
       ]}

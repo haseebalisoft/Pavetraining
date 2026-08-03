@@ -1588,6 +1588,41 @@ th.stickyIdentityCell {
   white-space: nowrap;
 }
 
+.matrixNameLink {
+  display: block;
+  font-weight: 700;
+  color: var(--pave-charcoal);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.matrixNameLink:hover {
+  color: var(--pave-green, #2f5d3a);
+}
+
+.matrixExpiryCell {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.matrixManualBadge {
+  align-self: flex-start;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--pave-charcoal-muted);
+  border: 1px solid rgba(var(--pave-charcoal-rgb), 0.22);
+  padding: 0.05rem 0.35rem;
+  line-height: 1.2;
+}
+
 .matrixTextCell {
   display: block;
   color: var(--pave-charcoal);

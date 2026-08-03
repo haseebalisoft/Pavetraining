@@ -37,6 +37,8 @@ interface Props {
   inHouseRecords?: CustomerInHouseRecord[];
   nvqRecords?: CustomerNvqRecord[];
   documents?: CustomerDocumentRecord[];
+  /** Admin audit profile uses the same layout with admin nav/copy. */
+  variant?: "customer" | "admin";
 }
 
 function Item({
@@ -73,9 +75,14 @@ function ExpiryItem({
   );
 }
 
-function safeReturnHref(value: string | null | undefined): string {
-  if (!value?.trim()) return "/customer";
-  if (!value.startsWith("/customer")) return "/customer";
+function safeReturnHref(
+  value: string | null | undefined,
+  variant: "customer" | "admin",
+): string {
+  const fallback = variant === "admin" ? "/admin/workforce" : "/customer";
+  const prefix = variant === "admin" ? "/admin" : "/customer";
+  if (!value?.trim()) return fallback;
+  if (!value.startsWith(prefix)) return fallback;
   return value;
 }
 
@@ -212,7 +219,13 @@ const inHouseColumns: TrainingRecordColumn<CustomerInHouseRecord>[] = [
   },
 ];
 
-function ProfileNvqSection({ records }: { records: CustomerNvqRecord[] }) {
+function ProfileNvqSection({
+  records,
+  emptyLabel,
+}: {
+  records: CustomerNvqRecord[];
+  emptyLabel: string;
+}) {
   const active = records.filter((row) => row.status === "Active");
   const completed = records.filter((row) => row.status === "Completed");
 
@@ -223,7 +236,7 @@ function ProfileNvqSection({ records }: { records: CustomerNvqRecord[] }) {
         Active {active.length} · Completed {completed.length}
       </p>
       {records.length === 0 ? (
-        <p className={styles.muted}>No customer-visible NVQ records.</p>
+        <p className={styles.muted}>{emptyLabel}</p>
       ) : (
         <div className={styles.tableWrap}>
           <table className={styles.dataTable}>
@@ -284,17 +297,19 @@ function ProfileNvqSection({ records }: { records: CustomerNvqRecord[] }) {
 
 function ProfileDocumentsSection({
   records,
+  emptyLabel,
 }: {
   records: CustomerDocumentRecord[];
+  emptyLabel: string;
 }) {
   return (
     <section
       className={styles.profileSection}
-      aria-label="Customer-visible documents"
+      aria-label="Documents"
     >
       <h2 className={styles.profileSectionTitle}>Documents</h2>
       {records.length === 0 ? (
-        <p className={styles.muted}>No customer-visible documents.</p>
+        <p className={styles.muted}>{emptyLabel}</p>
       ) : (
         <div className={styles.tableWrap}>
           <table className={styles.dataTable}>
@@ -353,26 +368,39 @@ function ProfileDocumentsSection({
 export function CandidateProfileView({
   candidate,
   matrixRow = null,
-  matrixReturnHref = "/customer",
+  matrixReturnHref,
   nporsRecords = [],
   eusrRecords = [],
   streetworksRecords = [],
   inHouseRecords = [],
   nvqRecords = [],
   documents = [],
+  variant = "customer",
 }: Props) {
-  const backToMatrix = safeReturnHref(matrixReturnHref);
+  const isAdmin = variant === "admin";
+  const backHref = safeReturnHref(
+    matrixReturnHref ?? (isAdmin ? "/admin/workforce" : "/customer"),
+    variant,
+  );
   const companyName = candidate.companyName;
 
   return (
     <div>
       <header className={styles.pageHeader}>
         <Breadcrumbs
-          items={[
-            { label: "Customer", href: "/customer" },
-            { label: "Training Matrix", href: backToMatrix },
-            { label: candidate.candidateName },
-          ]}
+          items={
+            isAdmin
+              ? [
+                  { label: "Admin", href: "/admin" },
+                  { label: "Workforce", href: "/admin/workforce" },
+                  { label: candidate.candidateName },
+                ]
+              : [
+                  { label: "Customer", href: "/customer" },
+                  { label: "Training Matrix", href: backHref },
+                  { label: candidate.candidateName },
+                ]
+          }
         />
         <div className={styles.profileHero}>
           {candidate.photoUrl ? (
@@ -393,7 +421,9 @@ export function CandidateProfileView({
             </div>
           )}
           <div>
-            <p className={styles.eyebrow}>Candidate Profile</p>
+            <p className={styles.eyebrow}>
+              {isAdmin ? "Admin Candidate Profile" : "Candidate Profile"}
+            </p>
             <h1 className={styles.title}>{candidate.candidateName}</h1>
             {candidate.dateOfBirth?.trim() ? (
               <p className={styles.dobSecondary}>
@@ -401,7 +431,9 @@ export function CandidateProfileView({
               </p>
             ) : null}
             <p className={styles.subtitle}>
-              Training summary and customer-visible records for this candidate.
+              {isAdmin
+                ? "Full training history for audit — includes records hidden from customers."
+                : "Training summary and customer-visible records for this candidate."}
             </p>
           </div>
         </div>
@@ -419,8 +451,13 @@ export function CandidateProfileView({
 
       <section className={styles.profileGrid} aria-label="Candidate details">
         <Item label="Company name" value={candidate.companyName} />
+        <Item label="Department" value={candidate.department} />
         <Item label="Training manager" value={candidate.trainingManager} />
         <Item label="Supervisor" value={candidate.supervisor} />
+        <Item
+          label="Workforce number"
+          value={candidate.workforceNumber}
+        />
         <Item
           label="Date of birth"
           value={
@@ -429,7 +466,14 @@ export function CandidateProfileView({
               : null
           }
         />
-        <Item label="Department" value={candidate.department} />
+        <Item label="NPORS number" value={candidate.nporsNumbers} />
+        <Item label="CSCS number" value={candidate.cscsNumber} />
+        <Item label="SWQR number" value={candidate.swqrNumber} />
+        <Item label="EUSR number" value={candidate.eusrNumber} />
+        <Item
+          label="In-House certification number"
+          value={candidate.inHouseCertificationNumber}
+        />
       </section>
 
       <section
@@ -438,12 +482,8 @@ export function CandidateProfileView({
         style={{ marginTop: "1.25rem" }}
       >
         <ExpiryItem
-          label="Next expiry"
-          date={matrixRow?.nextExpiryDate ?? null}
-        />
-        <ExpiryItem
-          label="NPORS expiry"
-          date={matrixRow?.nporsExpiry ?? null}
+          label="In-House / Asbestos Awareness expiry"
+          date={matrixRow?.inHouseExpiry ?? null}
         />
         <ExpiryItem
           label="CSCS expiry"
@@ -458,8 +498,12 @@ export function CandidateProfileView({
           date={matrixRow?.eusrExpiry ?? candidate.eusrExpiry}
         />
         <ExpiryItem
-          label="In-House expiry"
-          date={matrixRow?.inHouseExpiry ?? null}
+          label="NPORS expiry"
+          date={matrixRow?.nporsExpiry ?? null}
+        />
+        <ExpiryItem
+          label="Next expiry"
+          date={matrixRow?.nextExpiryDate ?? null}
         />
       </section>
 
@@ -551,17 +595,41 @@ export function CandidateProfileView({
         />
       </div>
 
-      <ProfileNvqSection records={nvqRecords} />
-      <ProfileDocumentsSection records={documents} />
+      <ProfileNvqSection
+        records={nvqRecords}
+        emptyLabel={
+          isAdmin ? "No NVQ records." : "No customer-visible NVQ records."
+        }
+      />
+      <ProfileDocumentsSection
+        records={documents}
+        emptyLabel={
+          isAdmin ? "No documents." : "No customer-visible documents."
+        }
+      />
 
       <p className={styles.companyMeta} style={{ marginTop: "1.35rem" }}>
-        <Link className={styles.link} href={backToMatrix}>
-          Back to Training Matrix
-        </Link>
-        {" · "}
-        <Link className={styles.link} href="/customer/training-records">
-          View training records
-        </Link>
+        {isAdmin ? (
+          <>
+            <Link className={styles.link} href={backHref}>
+              Back to Workforce
+            </Link>
+            {" · "}
+            <Link className={styles.link} href="/admin/training-matrix">
+              Training Matrix
+            </Link>
+          </>
+        ) : (
+          <>
+            <Link className={styles.link} href={backHref}>
+              Back to Training Matrix
+            </Link>
+            {" · "}
+            <Link className={styles.link} href="/customer/training-records">
+              View training records
+            </Link>
+          </>
+        )}
       </p>
     </div>
   );

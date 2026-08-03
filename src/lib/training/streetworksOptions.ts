@@ -1,12 +1,12 @@
-/** Live SharePoint NRSWA Course choice values (primary admin options). */
+/**
+ * Streetworks Course dropdown — consolidated novice/reassessment into Course.
+ * Values must match SharePoint NRSWA Course choice options (update SP if needed).
+ */
 export const STREETWORKS_COURSE_CHOICES = [
   "Operative",
   "Supervisor",
-  "Refresher",
-  "Unit 1",
-  "Unit 2",
-  "Unit 10",
-  "other",
+  "Operative Reassessment",
+  "Supervisor Reassessment",
 ] as const;
 
 /** Live SharePoint Streetworks Category multi-choice values. */
@@ -29,16 +29,6 @@ export const STREETWORKS_CATEGORY_CHOICES = [
   "S7",
 ] as const;
 
-const COURSE_LABELS: Record<string, string> = {
-  Operative: "Operative",
-  Supervisor: "Supervisor",
-  Refresher: "Refresher / Reassessment",
-  "Unit 1": "Unit 1",
-  "Unit 2": "Unit 2",
-  "Unit 10": "Unit 10",
-  other: "Other",
-};
-
 function toOptions(values: readonly string[], labels?: Record<string, string>) {
   return values.map((value) => ({
     value,
@@ -47,7 +37,7 @@ function toOptions(values: readonly string[], labels?: Record<string, string>) {
 }
 
 export function getStreetworksCourseOptions() {
-  return toOptions(STREETWORKS_COURSE_CHOICES, COURSE_LABELS);
+  return toOptions(STREETWORKS_COURSE_CHOICES);
 }
 
 export function getStreetworksCategoryOptions() {

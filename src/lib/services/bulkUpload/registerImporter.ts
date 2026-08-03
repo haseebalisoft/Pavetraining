@@ -621,10 +621,12 @@ export async function commitRegisterImport(input: {
           await updateAdminNvq(existingId, payload);
         } else {
           const key = REGISTER_KEY_BY_TYPE[importType];
-          const updated = await updateAdminRegister(key, existingId, payload);
-          if (importType !== "inHouse") {
-            await triggerMatrixSyncAfterRegister(key, updated);
-          }
+          const { record: updated } = await updateAdminRegister(
+            key,
+            existingId,
+            payload,
+          );
+          await triggerMatrixSyncAfterRegister(key, updated);
         }
         results.push({
           rowNumber: row.rowNumber,
@@ -646,10 +648,8 @@ export async function commitRegisterImport(input: {
         await createAdminNvq(payload);
       } else {
         const key = REGISTER_KEY_BY_TYPE[importType];
-        const created = await createAdminRegister(key, payload);
-        if (importType !== "inHouse") {
-          await triggerMatrixSyncAfterRegister(key, created);
-        }
+        const { record: created } = await createAdminRegister(key, payload);
+        await triggerMatrixSyncAfterRegister(key, created);
       }
 
       results.push({

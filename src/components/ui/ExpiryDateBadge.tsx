@@ -24,9 +24,9 @@ export function ExpiryDateBadge({
   const fillClass =
     status.status === "valid"
       ? styles.fillCompliant
-      : status.status === "expired"
+      : status.status === "expired" || status.status === "urgent"
         ? styles.fillExpired
-        : status.status === "urgent" || status.status === "upcoming"
+        : status.status === "upcoming"
           ? styles.fillExpiring
           : styles.fillNa;
 

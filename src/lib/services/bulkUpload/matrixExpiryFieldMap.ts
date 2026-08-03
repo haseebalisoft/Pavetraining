@@ -856,7 +856,7 @@ export const MATRIX_CATEGORY_EXPIRY_COLUMNS = [
     "name": "Asbestos Awareness",
     "appKey": "n031Expiry",
     "spField": "N031Expiry",
-    "writable": false
+    "writable": true
   },
   {
     "header": "N034 - Plant Supervisor Awareness",

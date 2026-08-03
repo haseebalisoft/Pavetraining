@@ -194,6 +194,41 @@ for (const header of wanted) {
   }
 }
 
+// ManualOverrides — pipe-separated headers set by admin direct edit.
+const manualName = "ManualOverrides";
+if (
+  !byName.has(manualName.toLowerCase()) &&
+  !byDisplay.has("manual overrides")
+) {
+  console.log(
+    `${DRY_RUN ? "Would create" : "Create"}: ManualOverrides (text)`,
+  );
+  if (!DRY_RUN) {
+    try {
+      await graph(token, `${root}/lists/${listId}/columns`, {
+        method: "POST",
+        body: JSON.stringify({
+          name: manualName,
+          displayName: "Manual Overrides",
+          text: {},
+        }),
+      });
+      created += 1;
+    } catch (error) {
+      failed += 1;
+      console.error(
+        `  FAIL ManualOverrides:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  } else {
+    created += 1;
+  }
+} else {
+  skipped += 1;
+  console.log("ManualOverrides already present.");
+}
+
 console.log(
   `\nDone. created/planned=${created} alreadyPresent=${skipped} failed=${failed}`,
 );

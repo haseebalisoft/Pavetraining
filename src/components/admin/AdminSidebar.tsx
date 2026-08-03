@@ -26,6 +26,7 @@ type NavItem = NavLink | NavGroup;
 const NAV_ITEMS: NavItem[] = [
   { type: "link", href: "/admin", label: "Dashboard", exact: true },
   { type: "link", href: "/admin/companies", label: "Companies" },
+  { type: "link", href: "/admin/departments", label: "Departments" },
   { type: "link", href: "/admin/workforce", label: "Workforce / Candidates" },
   { type: "link", href: "/admin/permissions", label: "Permissions & Access" },
   { type: "link", href: "/admin/training-matrix", label: "Training Matrix" },

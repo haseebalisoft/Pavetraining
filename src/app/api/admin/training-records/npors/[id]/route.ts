@@ -13,13 +13,17 @@ export async function PATCH(
     "PATCH /api/admin/training-records/npors/[id]",
     async (adminContext, req) => {
       const body = (await req.json()) as Record<string, unknown>;
-      const record = await updateAdminRegister("nporsRegister", id, body);
+      const { record, choiceWarnings } = await updateAdminRegister(
+        "nporsRegister",
+        id,
+        body,
+      );
       const matrixSync = await triggerMatrixSyncAfterRegister(
         "nporsRegister",
         record,
         adminContext.loggedInEmail,
       );
-      return { record, matrixSync };
+      return { record, matrixSync, choiceWarnings };
     },
     { errorMessage: "Failed to update NPORS record" },
     request,

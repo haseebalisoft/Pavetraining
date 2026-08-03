@@ -24,13 +24,16 @@ export async function POST(request: Request) {
     "POST /api/admin/training-records/eusr",
     async (context, req) => {
       const body = (await req.json()) as Record<string, unknown>;
-      const record = await createAdminRegister("eusrRegister", body);
+      const { record, choiceWarnings } = await createAdminRegister(
+        "eusrRegister",
+        body,
+      );
       const matrixSync = await triggerMatrixSyncAfterRegister(
         "eusrRegister",
         record,
         context.loggedInEmail,
       );
-      return { record, matrixSync };
+      return { record, matrixSync, choiceWarnings };
     },
     { errorMessage: "Failed to create EUSR record" },
     request,

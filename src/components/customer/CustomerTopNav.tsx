@@ -19,13 +19,14 @@ type TopLink = { href: string; label: string; exact?: boolean };
 const PRIMARY_LINKS: TopLink[] = [
   { href: "/customer", label: "Training Matrix", exact: true },
   { href: "/customer/dashboard", label: "Dashboard" },
+  { href: "/customer/courses", label: "Courses" },
   { href: "/customer/candidates", label: "Candidates" },
-  { href: "/customer/documents", label: "Documents" },
 ];
 
 const TRAINING_LINKS: TopLink[] = [
   { href: "/customer/training-records", label: "Training Records" },
   { href: "/customer/nvq-progress", label: "NVQ Progress" },
+  { href: "/customer/documents", label: "Documents" },
 ];
 
 const MORE_LINKS: TopLink[] = [

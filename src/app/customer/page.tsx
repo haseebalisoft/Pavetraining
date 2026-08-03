@@ -10,7 +10,8 @@ import type { CustomerContext } from "@/types/models";
 
 export const dynamic = "force-dynamic";
 
-export default async function CustomerPage() {
+/** Customer home — Training Matrix (Wayne UAT). */
+export default async function CustomerHomePage() {
   const session = await auth();
   const email = session?.user?.email?.trim().toLowerCase();
 
@@ -25,17 +26,13 @@ export default async function CustomerPage() {
     redirect("/access-denied");
   }
 
-  const records = await getCustomerMatrixRecords(
-    context.companyName,
-    context,
-  );
+  const records = await getCustomerMatrixRecords(context.companyName, context);
 
   return (
     <Suspense fallback={<LoadingState label="Loading training matrix…" />}>
       <TrainingMatrixView
         companyName={context.companyName}
         records={records}
-        isLanding
       />
     </Suspense>
   );

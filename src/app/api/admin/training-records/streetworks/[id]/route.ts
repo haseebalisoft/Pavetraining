@@ -13,13 +13,17 @@ export async function PATCH(
     "PATCH /api/admin/training-records/streetworks/[id]",
     async (adminContext, req) => {
       const body = (await req.json()) as Record<string, unknown>;
-      const record = await updateAdminRegister("nrswaRegister", id, body);
+      const { record, choiceWarnings } = await updateAdminRegister(
+        "nrswaRegister",
+        id,
+        body,
+      );
       const matrixSync = await triggerMatrixSyncAfterRegister(
         "nrswaRegister",
         record,
         adminContext.loggedInEmail,
       );
-      return { record, matrixSync };
+      return { record, matrixSync, choiceWarnings };
     },
     { errorMessage: "Failed to update Streetworks record" },
     request,

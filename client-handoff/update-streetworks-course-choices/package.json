@@ -1,0 +1,9 @@
+{
+  "name": "pave-update-streetworks-course-choices",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@azure/identity": "^4.9.1",
+    "@microsoft/microsoft-graph-client": "^3.0.7"
+  }
+}

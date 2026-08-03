@@ -43,11 +43,11 @@ const EXPIRY_OPTIONS: { value: ExpiryFilter; label: string }[] = [
   { value: "all", label: "All expiries" },
   { value: "within-3m", label: "Expiring within 3 months" },
   { value: "within-6m", label: "Expiring within 6 months" },
-  { value: "9m-plus", label: "9 months or more" },
+  { value: "6m-plus", label: "6 months or more" },
   { value: "expired", label: "Expired" },
   { value: "urgent", label: "Urgent (0–90 days)" },
-  { value: "upcoming", label: "Upcoming (91–270 days)" },
-  { value: "valid", label: "Valid (271+ days)" },
+  { value: "upcoming", label: "Upcoming (91–180 days)" },
+  { value: "valid", label: "Valid (181+ days)" },
   { value: "missing", label: "Records to Review" },
 ];
 

@@ -302,11 +302,13 @@ export async function listNormalizedRegisters(
 export async function listAllNormalizedRegisters(): Promise<
   NormalizedRegisterRecord[]
 > {
-  // In-House is standalone (client brief) — do not feed Training Matrix sync.
+  // Include In-House so Asbestos Awareness can update N031 on the matrix.
+  // Other In-House categories remain ignored in the sync mapper.
   const keys: AdminRegisterKey[] = [
     "nporsRegister",
     "eusrRegister",
     "nrswaRegister",
+    "inHouseCertificates",
   ];
   const batches = await Promise.all(keys.map((key) => listNormalizedRegisters(key)));
   return batches.flat();

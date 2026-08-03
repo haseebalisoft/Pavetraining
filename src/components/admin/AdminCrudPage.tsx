@@ -29,10 +29,33 @@ export interface AdminWorkforceOption {
   id: string;
   candidateName: string;
   companyName: string;
+  companyId?: string | null;
   nporsNumbers?: string | null;
   eusrNumber?: string | null;
   swqrNumber?: string | null;
   inHouseCertificationNumber?: string | null;
+  workforceNumber?: string | null;
+}
+
+/** Minimal Permissions row for company-scoped TM/Supervisor selects. */
+export interface AdminPermissionPersonOption {
+  id: string;
+  userEmail: string;
+  name: string | null;
+  status: string;
+  permissionRole: "Admin" | "Customer" | "Candidate";
+  /** Live SharePoint RoleType (Training Manager / Supervisor / …). */
+  sharePointRoleType?: string | null;
+  companyId: string | null;
+  companyName: string | null;
+}
+
+/** Department rows for company-scoped Workforce / Permissions coverage. */
+export interface AdminDepartmentOption {
+  id: string;
+  name: string;
+  companyId: string | null;
+  companyName: string | null;
 }
 
 export interface AdminFieldConfig {
@@ -42,6 +65,19 @@ export interface AdminFieldConfig {
   required?: boolean;
   readOnly?: boolean;
   options?: Array<{ value: string; label: string }>;
+  /**
+   * When set, select options are built from `permissionPeople` filtered to the
+   * form's selected company (and this Permissions form role).
+   */
+  permissionRoleFilter?: "Admin" | "Customer" | "Candidate";
+  /**
+   * When true, select/multiselect options come from `departments` filtered to
+   * the form's selected company. Values are department ids (multiselect) or
+   * names (select) depending on `departmentValueMode`.
+   */
+  companyScopedDepartments?: boolean;
+  /** How to store the selected department in the form (default: name). */
+  departmentValueMode?: "id" | "name";
   placeholder?: string;
   /** Optional section heading shown above this field group in the drawer. */
   section?: string;
@@ -75,6 +111,10 @@ interface AdminCrudPageProps<T extends { id: string }> {
   companies?: Company[];
   /** Workforce options for type="workforce" fields (auto-fills name/company). */
   workforce?: AdminWorkforceOption[];
+  /** Permissions people for company-scoped TM / Supervisor selects. */
+  permissionPeople?: AdminPermissionPersonOption[];
+  /** Departments for company-scoped department select / coverage multiselect. */
+  departments?: AdminDepartmentOption[];
   enableCompanyFilter?: boolean;
   getCompanyName?: (row: T) => string | null | undefined;
   searchKeys?: Array<(row: T) => string | null | undefined>;
@@ -189,6 +229,8 @@ export function AdminCrudPage<T extends { id: string }>({
   onRowsChange,
   companies = [],
   workforce = [],
+  permissionPeople = [],
+  departments = [],
   enableCompanyFilter = false,
   getCompanyName,
   searchKeys,
@@ -226,12 +268,52 @@ export function AdminCrudPage<T extends { id: string }>({
   const [pendingSave, setPendingSave] = useState<FormState | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
+  const [livePermissionPeople, setLivePermissionPeople] =
+    useState<AdminPermissionPersonOption[]>(permissionPeople);
+  const needsPermissionPeople = fields.some(
+    (field) => Boolean(field.permissionRoleFilter),
+  );
+
+  useEffect(() => {
+    setLivePermissionPeople(permissionPeople);
+  }, [permissionPeople]);
+
+  const refreshPermissionPeople = useCallback(async () => {
+    if (!needsPermissionPeople) return;
+    try {
+      const response = await fetch("/api/admin/permissions", {
+        cache: "no-store",
+      });
+      if (!response.ok) return;
+      const payload = (await response.json().catch(() => null)) as {
+        records?: AdminPermissionPersonOption[];
+      } | null;
+      const records = payload?.records ?? [];
+      setLivePermissionPeople(
+        records.map((row) => ({
+          id: row.id,
+          userEmail: row.userEmail,
+          name: row.name ?? null,
+          status: row.status,
+          permissionRole: row.permissionRole,
+          sharePointRoleType:
+            (row as { sharePointRoleType?: string | null }).sharePointRoleType ??
+            null,
+          companyId: row.companyId ?? null,
+          companyName: row.companyName ?? null,
+        })),
+      );
+    } catch {
+      // Keep last good list if SharePoint refresh fails.
+    }
+  }, [needsPermissionPeople]);
 
   function openCreate() {
     setEditing(null);
     setForm(buildInitialForm(fields));
     setFormError(null);
     setWorkforceQuery("");
+    void refreshPermissionPeople();
     setDrawerOpen(true);
   }
 
@@ -400,6 +482,7 @@ export function AdminCrudPage<T extends { id: string }>({
     );
     setFormError(null);
     setWorkforceQuery("");
+    void refreshPermissionPeople();
     setDrawerOpen(true);
   }
 
@@ -458,6 +541,8 @@ export function AdminCrudPage<T extends { id: string }>({
 
       const payload = (await response.json().catch(() => null)) as {
         warning?: string;
+        choiceWarnings?: string[];
+        matrixSeedWarning?: string;
         matrixSync?: {
           summary?: {
             updated?: number;
@@ -477,8 +562,13 @@ export function AdminCrudPage<T extends { id: string }>({
       pushToast(
         (isCreate ? "Record created." : "Record updated.") + syncNote,
       );
-      if (payload?.warning?.trim()) {
-        pushToast(payload.warning, "error");
+      const warnings = [
+        payload?.warning?.trim(),
+        payload?.matrixSeedWarning?.trim(),
+        ...(payload?.choiceWarnings ?? []).map((part) => part.trim()),
+      ].filter(Boolean) as string[];
+      for (const warning of warnings) {
+        pushToast(warning, "error");
       }
       setDrawerOpen(false);
       await load();
@@ -797,29 +887,68 @@ export function AdminCrudPage<T extends { id: string }>({
               );
             } else if (field.type === "workforce") {
               const selectedId = matchWorkforceId(form, workforce);
-              const selectedCompany = String(
-                form.companyName ?? "",
-              ).trim().toLowerCase();
+              const selectedCompanyName = String(form.companyName ?? "")
+                .trim()
+                .toLowerCase();
+              const selectedCompanyId = String(form.companyId ?? "").trim();
+              const resolvedCompanyId =
+                selectedCompanyId ||
+                companies.find(
+                  (company) =>
+                    company.companyName.trim().toLowerCase() ===
+                    selectedCompanyName,
+                )?.id ||
+                "";
+              const hasCompany = Boolean(
+                selectedCompanyName || resolvedCompanyId,
+              );
               const query = workforceQuery.trim().toLowerCase();
-              const companyWorkforce = selectedCompany
-                ? workforce.filter(
-                    (row) =>
-                      row.companyName.trim().toLowerCase() === selectedCompany,
-                  )
+              const companyWorkforce = hasCompany
+                ? workforce.filter((row) => {
+                    if (
+                      resolvedCompanyId &&
+                      row.companyId &&
+                      row.companyId === resolvedCompanyId
+                    ) {
+                      return true;
+                    }
+                    return (
+                      Boolean(selectedCompanyName) &&
+                      row.companyName.trim().toLowerCase() ===
+                        selectedCompanyName
+                    );
+                  })
                 : [];
               const filteredWorkforce = query
-                ? companyWorkforce.filter((row) =>
-                    `${row.candidateName} ${row.companyName}`
-                      .toLowerCase()
-                      .includes(query),
-                  )
+                ? companyWorkforce.filter((row) => {
+                    const haystack = [
+                      row.candidateName,
+                      row.companyName,
+                      row.workforceNumber,
+                      row.nporsNumbers,
+                      row.eusrNumber,
+                      row.swqrNumber,
+                      row.inHouseCertificationNumber,
+                    ]
+                      .filter(Boolean)
+                      .join(" ")
+                      .toLowerCase();
+                    return haystack.includes(query);
+                  })
                 : companyWorkforce;
-              const candidateDisabled = field.readOnly || !selectedCompany;
+              const candidateDisabled = field.readOnly || !hasCompany;
+              const emptyOptionLabel = !hasCompany
+                ? "Select a company first…"
+                : companyWorkforce.length === 0
+                  ? "No Workforce candidates for this company"
+                  : query && filteredWorkforce.length === 0
+                    ? `No matches for “${workforceQuery.trim()}”`
+                    : "Select candidate…";
               control = (
                 <label className={styles.field}>
                   <span className={styles.fieldLabel}>
                     {field.label}
-                    {selectedCompany
+                    {hasCompany
                       ? " (scoped to selected company)"
                       : " — select a company first"}
                   </span>
@@ -828,8 +957,8 @@ export function AdminCrudPage<T extends { id: string }>({
                     type="search"
                     value={workforceQuery}
                     placeholder={
-                      selectedCompany
-                        ? "Type to search Workforce…"
+                      hasCompany
+                        ? "Search name or workforce / cert number…"
                         : "Select a company first…"
                     }
                     disabled={candidateDisabled}
@@ -865,20 +994,36 @@ export function AdminCrudPage<T extends { id: string }>({
                         swqrNumber: hit.swqrNumber || "",
                         inHouseCertificationNumber:
                           hit.inHouseCertificationNumber || "",
+                        workforceNumber: hit.workforceNumber || "",
                       }));
                     }}
                   >
-                    <option value="">
-                      {selectedCompany
-                        ? "Select candidate…"
-                        : "Select a company first…"}
-                    </option>
+                    <option value="">{emptyOptionLabel}</option>
                     {filteredWorkforce.map((row) => (
                       <option key={row.id} value={row.id}>
-                        {row.candidateName}
+                        {row.workforceNumber?.trim()
+                          ? `${row.candidateName} (${row.workforceNumber})`
+                          : row.candidateName}
                       </option>
                     ))}
                   </select>
+                  {hasCompany && companyWorkforce.length === 0 ? (
+                    <p className={styles.helpText}>
+                      Add this person under Admin → Workforce for this company
+                      first.
+                    </p>
+                  ) : null}
+                  {hasCompany &&
+                  query &&
+                  companyWorkforce.length > 0 &&
+                  filteredWorkforce.length === 0 ? (
+                    <p className={styles.helpText}>
+                      Clear the search box to see all{" "}
+                      {companyWorkforce.length} candidate
+                      {companyWorkforce.length === 1 ? "" : "s"} for this
+                      company.
+                    </p>
+                  ) : null}
                 </label>
               );
             } else if (field.type === "multiselect") {
@@ -889,14 +1034,62 @@ export function AdminCrudPage<T extends { id: string }>({
               const selectedSet = new Set(
                 selected.map((part) => part.toLowerCase()),
               );
+              const selectedCompanyName = String(form.companyName ?? "")
+                .trim()
+                .toLowerCase();
+              const selectedCompanyId = String(form.companyId ?? "").trim();
+              const valueMode = field.departmentValueMode ?? "id";
+              let multiOptions = field.options ?? [];
+              if (field.companyScopedDepartments) {
+                if (!selectedCompanyName && !selectedCompanyId) {
+                  multiOptions = [];
+                } else {
+                  multiOptions = departments
+                    .filter((dept) => {
+                      if (
+                        selectedCompanyId &&
+                        dept.companyId &&
+                        dept.companyId === selectedCompanyId
+                      ) {
+                        return true;
+                      }
+                      const deptCompany = (dept.companyName || "")
+                        .trim()
+                        .toLowerCase();
+                      return (
+                        Boolean(selectedCompanyName) &&
+                        deptCompany === selectedCompanyName
+                      );
+                    })
+                    .map((dept) => ({
+                      value: valueMode === "name" ? dept.name : dept.id,
+                      label: dept.name,
+                    }));
+                }
+              }
               control = (
                 <fieldset className={styles.field}>
                   <legend className={styles.fieldLabel}>{field.label}</legend>
+                  {field.companyScopedDepartments &&
+                  !selectedCompanyName &&
+                  !selectedCompanyId ? (
+                    <p className={styles.helpText}>
+                      Select a company first to choose departments.
+                    </p>
+                  ) : null}
+                  {field.companyScopedDepartments &&
+                  (selectedCompanyName || selectedCompanyId) &&
+                  multiOptions.length === 0 ? (
+                    <p className={styles.helpText}>
+                      No departments for this company yet. Add them under
+                      Departments.
+                    </p>
+                  ) : null}
                   <div className={styles.multiSelectList}>
-                    {(field.options ?? []).map((option) => {
-                      const checked = selectedSet.has(
-                        option.value.trim().toLowerCase(),
-                      );
+                    {multiOptions.map((option) => {
+                      const checked =
+                        selectedSet.has(option.value.trim().toLowerCase()) ||
+                        selectedSet.has(option.label.trim().toLowerCase());
                       return (
                         <label
                           key={option.value}
@@ -941,16 +1134,175 @@ export function AdminCrudPage<T extends { id: string }>({
                 </fieldset>
               );
             } else if (field.type === "company" || field.type === "select") {
-              const options =
-                field.type === "company"
-                  ? companies.map((company) => ({
-                      value:
-                        field.name === "companyId"
-                          ? company.id
-                          : company.companyName,
-                      label: company.companyName,
-                    }))
-                  : (field.options ?? []);
+              const selectedCompanyName = String(form.companyName ?? "")
+                .trim()
+                .toLowerCase();
+              const selectedCompanyId = String(form.companyId ?? "").trim();
+
+              let options: Array<{ value: string; label: string }>;
+              if (field.type === "company") {
+                options = companies.map((company) => ({
+                  value:
+                    field.name === "companyId"
+                      ? company.id
+                      : company.companyName,
+                  label: company.companyName,
+                }));
+              } else if (field.permissionRoleFilter) {
+                const role = field.permissionRoleFilter;
+                const emptyLabel =
+                  role === "Admin"
+                    ? "No active Training Managers in Permissions for this company"
+                    : role === "Customer"
+                      ? "No active Supervisors in Permissions for this company"
+                      : "No people assigned to this company yet";
+                const resolvedCompanyId =
+                  selectedCompanyId ||
+                  companies.find(
+                    (company) =>
+                      company.companyName.trim().toLowerCase() ===
+                      selectedCompanyName,
+                  )?.id ||
+                  "";
+                if (!selectedCompanyName && !resolvedCompanyId) {
+                  options = [
+                    { value: "", label: "Select a company first…" },
+                  ];
+                } else {
+                  const personMatchesCompany = (person: {
+                    companyId: string | null;
+                    companyName: string | null;
+                  }) => {
+                    if (
+                      resolvedCompanyId &&
+                      person.companyId &&
+                      person.companyId === resolvedCompanyId
+                    ) {
+                      return true;
+                    }
+                    const personCompany = (person.companyName || "")
+                      .trim()
+                      .toLowerCase();
+                    return (
+                      Boolean(selectedCompanyName) &&
+                      personCompany === selectedCompanyName
+                    );
+                  };
+
+                  const matchesRoleType = (
+                    person: AdminPermissionPersonOption,
+                  ) => {
+                    const spRole = (person.sharePointRoleType || "")
+                      .trim()
+                      .toLowerCase()
+                      .replace(/\s+/g, " ");
+                    if (role === "Admin") {
+                      // Strict: SharePoint RoleType = Training Manager only.
+                      return (
+                        spRole === "training manager" ||
+                        spRole === "trainingmanager" ||
+                        (!spRole && person.permissionRole === "Admin")
+                      );
+                    }
+                    if (role === "Customer") {
+                      return (
+                        spRole === "supervisor" ||
+                        (!spRole && person.permissionRole === "Customer")
+                      );
+                    }
+                    return person.permissionRole === role;
+                  };
+
+                  const scoped = livePermissionPeople.filter((person) => {
+                    if ((person.status || "").toLowerCase() !== "active") {
+                      return false;
+                    }
+                    if (!matchesRoleType(person)) return false;
+                    return personMatchesCompany(person);
+                  });
+
+                  const peopleOptions = scoped
+                    .map((person) => {
+                      const value = person.name?.trim() || person.userEmail;
+                      if (!value) return null;
+                      return {
+                        value,
+                        label: person.name?.trim()
+                          ? `${person.name.trim()} (${person.userEmail})`
+                          : person.userEmail,
+                      };
+                    })
+                    .filter(
+                      (option): option is { value: string; label: string } =>
+                        option !== null,
+                    )
+                    .sort((a, b) => a.label.localeCompare(b.label));
+                  options =
+                    peopleOptions.length === 0
+                      ? [{ value: "", label: emptyLabel }]
+                      : [{ value: "", label: "— None —" }, ...peopleOptions];
+                }
+              } else if (field.companyScopedDepartments) {
+                const valueMode = field.departmentValueMode ?? "name";
+                if (!selectedCompanyName && !selectedCompanyId) {
+                  options = [
+                    { value: "", label: "Select a company first…" },
+                  ];
+                } else {
+                  const scoped = departments.filter((dept) => {
+                    if (
+                      selectedCompanyId &&
+                      dept.companyId &&
+                      dept.companyId === selectedCompanyId
+                    ) {
+                      return true;
+                    }
+                    const deptCompany = (dept.companyName || "")
+                      .trim()
+                      .toLowerCase();
+                    return (
+                      Boolean(selectedCompanyName) &&
+                      deptCompany === selectedCompanyName
+                    );
+                  });
+                  options =
+                    scoped.length === 0
+                      ? [
+                          {
+                            value: "",
+                            label:
+                              "No departments for this company — add under Departments",
+                          },
+                        ]
+                      : [
+                          { value: "", label: "— None —" },
+                          ...scoped.map((dept) => ({
+                            value:
+                              valueMode === "id" ? dept.id : dept.name,
+                            label: dept.name,
+                          })),
+                        ];
+                  const currentDept = String(form[field.name] ?? "").trim();
+                  if (
+                    currentDept &&
+                    !options.some(
+                      (option) =>
+                        option.value.trim().toLowerCase() ===
+                        currentDept.toLowerCase(),
+                    )
+                  ) {
+                    options = [
+                      ...options,
+                      {
+                        value: currentDept,
+                        label: `${currentDept} (not in Departments list)`,
+                      },
+                    ];
+                  }
+                }
+              } else {
+                options = field.options ?? [];
+              }
 
               control = (
                 <label className={styles.field}>
@@ -961,9 +1313,37 @@ export function AdminCrudPage<T extends { id: string }>({
                     disabled={field.readOnly}
                     onChange={(event) => {
                       const value = event.target.value;
+                      if (
+                        field.type === "company" &&
+                        (field.name === "companyName" ||
+                          field.name === "companyId")
+                      ) {
+                        setWorkforceQuery("");
+                        void refreshPermissionPeople();
+                      }
                       setForm((current) => {
-                        if (field.type !== "company" || field.name !== "companyName") {
+                        if (field.type !== "company") {
                           return { ...current, [field.name]: value };
+                        }
+
+                        const next: FormState = {
+                          ...current,
+                          [field.name]: value,
+                        };
+
+                        // Clear company-scoped people / departments when company changes.
+                        if (
+                          field.name === "companyName" ||
+                          field.name === "companyId"
+                        ) {
+                          next.trainingManager = "";
+                          next.supervisor = "";
+                          next.department = "";
+                          next.departmentsAllowed = "";
+                        }
+
+                        if (field.name !== "companyName") {
+                          return next;
                         }
 
                         const candidateName = String(
@@ -991,25 +1371,24 @@ export function AdminCrudPage<T extends { id: string }>({
                           selectedCandidate.companyName.trim().toLowerCase() ===
                             value.trim().toLowerCase();
 
-                        return {
-                          ...current,
-                          [field.name]: value,
-                          ...(candidateStillMatches
-                            ? {}
-                            : {
-                                candidateName: "",
-                                nporsNumber: "",
-                                eusrNumber: "",
-                                swqrNumber: "",
-                                inHouseCertificationNumber: "",
-                              }),
-                        };
+                        if (!candidateStillMatches) {
+                          next.candidateName = "";
+                          next.nporsNumber = "";
+                          next.eusrNumber = "";
+                          next.swqrNumber = "";
+                          next.inHouseCertificationNumber = "";
+                          next.workforceNumber = "";
+                        }
+
+                        return next;
                       });
                     }}
                   >
-                    <option value="">Select…</option>
+                    {field.permissionRoleFilter ? null : (
+                      <option value="">Select…</option>
+                    )}
                     {options.map((option) => (
-                      <option key={option.value} value={option.value}>
+                      <option key={`${option.value}-${option.label}`} value={option.value}>
                         {option.label}
                       </option>
                     ))}

@@ -63,6 +63,7 @@ type MatrixSourceRow = {
   n021Expiry: string | null;
   n027Expiry: string | null;
   n100Expiry: string | null;
+  n031Expiry?: string | null;
   columnValues: Record<string, string | null>;
 };
 
@@ -91,6 +92,7 @@ function exampleToMatrixSource(
     n027Expiry:
       columnValues["N027 - Excavation Marshal - Banksperson"] ?? null,
     n100Expiry: columnValues["N100 - Exc Crane"] ?? null,
+    n031Expiry: columnValues["N031 - Asbestos Awareness"] ?? null,
     columnValues,
   };
 }
@@ -370,7 +372,11 @@ export async function getCustomerMatrixRecords(
             candidate.eusrExpiry,
             ...(eusrExpiryByName.get(key) ?? []),
           ]),
-          inHouseExpiry: earliestExpiryDate(inHouseExpiryByName.get(key) ?? []),
+          inHouseExpiry: earliestExpiryDate([
+            ...(inHouseExpiryByName.get(key) ?? []),
+            matrix?.n031Expiry,
+            matrix?.columnValues?.["N031 - Asbestos Awareness"] ?? null,
+          ]),
           inHouseCourse: inHouseCourseByName.get(key) ?? null,
         }),
       );

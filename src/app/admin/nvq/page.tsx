@@ -19,11 +19,13 @@ export default async function AdminNvqPage() {
       workforce={workforce.map((row) => ({
         id: row.id,
         candidateName: row.candidateName,
+        companyId: row.companyId,
         companyName: row.companyName,
         nporsNumbers: row.nporsNumbers,
         eusrNumber: row.eusrNumber,
         swqrNumber: row.swqrNumber,
         inHouseCertificationNumber: row.inHouseCertificationNumber,
+        workforceNumber: row.workforceNumber,
       }))}
       initialRows={records}
     />

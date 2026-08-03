@@ -309,6 +309,7 @@ export interface AdminWorkforceRecord {
   id: string;
   workforceNumber: string | null;
   candidateName: string;
+  companyId: string | null;
   companyName: string;
   companyNumber: string | null;
   trainingManager: string | null;
@@ -503,7 +504,25 @@ async function applyWorkforcePersonLookups(
       payload[lookupIdField] = null;
       return null;
     }
-    let hit = findPermissionPerson(people, text);
+    const key = permissionPersonKey(text);
+    const companyId = options?.companyId ?? null;
+    let hit =
+      people.find((row) => {
+        if (row.roleType !== roleType) return false;
+        if ((row.status || "").toLowerCase() !== "active") return false;
+        if (companyId && row.companyId && row.companyId !== companyId) {
+          return false;
+        }
+        return (
+          permissionPersonKey(row.name ?? "") === key || row.userEmail === key
+        );
+      }) ?? null;
+    if (!hit) {
+      hit = findPermissionPerson(people, text);
+      if (hit && hit.roleType !== roleType) {
+        hit = null;
+      }
+    }
     if (!hit && options?.createIfMissing) {
       const ensured = await ensurePermissionPerson({
         displayName: text,
@@ -516,7 +535,9 @@ async function applyWorkforcePersonLookups(
     }
     if (!hit) {
       throw new ValidationError(
-        `"${text}" was not found in Permissions. Add them under Permissions (Name) or re-import to auto-create.`,
+        `"${text}" was not found in Permissions as an active ${
+          roleType === "Admin" ? "Training Manager" : "Supervisor"
+        } for this company. Add them under Permissions first.`,
       );
     }
     payload[lookupIdField] = Number(hit.id);
@@ -625,6 +646,7 @@ async function applyWorkforceDepartmentLookup(
   options?: {
     createIfMissing?: boolean;
     departments?: DepartmentRef[];
+    companyId?: string | null;
   },
 ): Promise<{
   departments: DepartmentRef[];
@@ -652,6 +674,33 @@ async function applyWorkforceDepartmentLookup(
   if (!text) {
     payload[`${workforceFields.departmentText}LookupId`] = null;
     return { departments, departmentName: null };
+  }
+
+  // Prefer company-scoped Departments list (Enterprise).
+  // Never auto-create here — departments are managed under Admin → Departments.
+  if (options?.companyId) {
+    const { resolveCompanyDepartment, listAdminDepartments } = await import(
+      "@/lib/services/departmentService"
+    );
+    const companyDepts = await listAdminDepartments(options.companyId);
+    departments = companyDepts.map((row) => ({ id: row.id, name: row.name }));
+    const resolved =
+      companyDepts.find((row) => row.id === text) ??
+      (await resolveCompanyDepartment({
+        name: text,
+        companyId: options.companyId,
+        createIfMissing: false,
+      }));
+    if (!resolved) {
+      throw new ValidationError(
+        `Department "${text}" was not found for this company. Add it under Admin → Departments first.`,
+      );
+    }
+    payload[`${workforceFields.departmentText}LookupId`] = Number(resolved.id);
+    return {
+      departments,
+      departmentName: resolved.name,
+    };
   }
 
   let hit = findDepartment(departments, text);
@@ -719,6 +768,7 @@ function mapWorkforce(
       item.fields[workforceFields.workforceNumber],
     ),
     candidateName,
+    companyId: companyLookupId,
     companyName,
     companyNumber,
     trainingManager:
@@ -861,7 +911,7 @@ export async function createAdminWorkforce(input: Record<string, unknown>) {
   const departmentLookups = await applyWorkforceDepartmentLookup(
     payload,
     input,
-    { createIfMissing },
+    { createIfMissing, companyId: company.id },
   );
 
   const item = await createListItemByKey("workforce", payload);
@@ -877,6 +927,7 @@ export async function createAdminWorkforce(input: Record<string, unknown>) {
       id: item.id,
       workforceNumber,
       candidateName,
+      companyId: company.id,
       companyName: company.companyName,
       companyNumber: company.companyNumber,
       trainingManager:
@@ -924,9 +975,36 @@ export async function createAdminWorkforce(input: Record<string, unknown>) {
     workforceNumber,
   });
 
+  // Seed a Training Matrix row so the candidate appears from day one.
+  // Company / department / TM / numbers stay on Workforce and are joined at read time.
+  let matrixSeedWarning: string | undefined;
+  try {
+    const { upsertTrainingMatrixExampleRow } = await import(
+      "@/lib/services/bulkUpload/trainingMatrixExampleService"
+    );
+    await upsertTrainingMatrixExampleRow({
+      candidateName,
+      source: {
+        Name: candidateName,
+        DOB: asNullableString(asDateInput(input.dateOfBirth) ?? null),
+        "CSCS Expiry": asNullableString(asDateInput(input.cscsExpiry) ?? null),
+        "EUSR Expiry": asNullableString(asDateInput(input.eusrExpiry) ?? null),
+        "NRSWA Expiry": asNullableString(asDateInput(input.swqrExpiry) ?? null),
+      },
+    });
+  } catch (error) {
+    console.error(
+      "[workforce] matrix seed failed (candidate still created):",
+      error,
+    );
+    matrixSeedWarning =
+      "Candidate saved, but Training Matrix row could not be created. Open Training Matrix and refresh, or contact support.";
+  }
+
   return {
     ...mapped,
     folderWarning: folderResult.ok ? undefined : folderResult.warning,
+    matrixSeedWarning,
   };
 }
 
@@ -1027,7 +1105,7 @@ export async function updateAdminWorkforce(
   const departmentLookups = await applyWorkforceDepartmentLookup(
     payload,
     input,
-    { createIfMissing },
+    { createIfMissing, companyId: companyIdForPeople },
   );
 
   const item = await updateListItemFieldsByKey("workforce", id, payload);
@@ -1049,6 +1127,42 @@ export async function updateAdminWorkforce(
   return mapped;
 }
 
+/**
+ * Remove a Workforce candidate. Training register history is kept
+ * (NPORS/EUSR/etc. still exist under the candidate name). Matrix seed rows
+ * for the same name are removed best-effort so they leave the matrix grid.
+ */
+export async function deleteAdminWorkforce(id: string): Promise<void> {
+  const existing = await getListItemByKey("workforce", id);
+  if (!existing) throw new NotFoundError("Candidate not found.");
+
+  const candidateName =
+    asLookupOrString(existing.fields[workforceFields.candidateName]) ??
+    asString(existing.fields[workforceFields.candidateName]);
+
+  await deleteListItemByKey("workforce", id);
+
+  if (!candidateName?.trim()) return;
+
+  try {
+    const exampleRows = await listTrainingMatrixExampleRows();
+    const key = candidateName.trim().toLowerCase();
+    const matches = exampleRows.filter(
+      (row) => row.candidateName.trim().toLowerCase() === key,
+    );
+    await Promise.all(
+      matches.map((row) =>
+        deleteListItemByKey("trainingMatrixExample", row.id).catch(() => null),
+      ),
+    );
+  } catch (error) {
+    console.error(
+      "[workforce] matrix cleanup after delete failed (candidate already removed):",
+      error,
+    );
+  }
+}
+
 /* ───────────────── Training Matrix ───────────────── */
 
 const matrixFields = getSharePointFields("trainingMatrix");
@@ -1065,6 +1179,10 @@ export interface AdminMatrixRecord {
   nextExpiryDate: string | null;
   /** Optional — from Training Matrix Update “CSCS Expiry” column. */
   cscsExpiry?: string | null;
+  ssstsExpiry?: string | null;
+  smstsExpiry?: string | null;
+  nrswaExpiry?: string | null;
+  eusrExpiry?: string | null;
   n001Expiry: string | null;
   n003Expiry: string | null;
   n004Expiry: string | null;
@@ -1078,6 +1196,13 @@ export interface AdminMatrixRecord {
    * (Name, DOB, CSCS Expiry, N001 - Ind FLT, …).
    */
   columnValues: Record<string, string | null>;
+  /** Headers manually set in admin — register sync will not overwrite these. */
+  manualOverrideHeaders?: string[];
+  n031Expiry?: string | null;
+  /** SharePoint column is still "Face ift" — UI label is Face Fit. */
+  faceFitExpiry?: string | null;
+  /** Workforce List item id when the matrix Name matches a candidate. */
+  workforceId?: string | null;
 }
 
 function mapMatrix(
@@ -1327,6 +1452,19 @@ export async function listAdminMatrix(companyName?: string | null) {
       const wf =
         workforceByName.get(example.candidateName.trim().toLowerCase()) ?? null;
       const columnValues = { ...example.columnValues };
+      // Prefer Workforce card expiries when matrix cell is blank.
+      if (!columnValues["CSCS Expiry"]?.trim() && wf?.cscsExpiry) {
+        columnValues["CSCS Expiry"] = wf.cscsExpiry;
+      }
+      if (!columnValues["EUSR Expiry"]?.trim() && wf?.eusrExpiry) {
+        columnValues["EUSR Expiry"] = wf.eusrExpiry;
+      }
+      if (!columnValues["NRSWA Expiry"]?.trim() && wf?.swqrExpiry) {
+        columnValues["NRSWA Expiry"] = wf.swqrExpiry;
+      }
+      if (!columnValues.DOB?.trim() && wf?.dateOfBirth) {
+        columnValues.DOB = wf.dateOfBirth;
+      }
       const nextExpiryDate =
         example.nextExpiryDate ?? earliestDateFromColumns(columnValues);
 
@@ -1341,6 +1479,10 @@ export async function listAdminMatrix(companyName?: string | null) {
         matrixNotes: null,
         nextExpiryDate,
         cscsExpiry: columnValues["CSCS Expiry"] ?? null,
+        ssstsExpiry: columnValues["SSSTS Expiry"] ?? null,
+        smstsExpiry: columnValues["SMSTS Expiry"] ?? null,
+        nrswaExpiry: columnValues["NRSWA Expiry"] ?? null,
+        eusrExpiry: columnValues["EUSR Expiry"] ?? null,
         n001Expiry: columnValues["N001 - Ind FLT"] ?? null,
         n003Expiry: columnValues["N003 - Reach Lift Truck"] ?? null,
         n004Expiry: columnValues["N004 - Lorry Mounted Lift Truck"] ?? null,
@@ -1350,10 +1492,68 @@ export async function listAdminMatrix(companyName?: string | null) {
         n027Expiry:
           columnValues["N027 - Excavation Marshal - Banksperson"] ?? null,
         n100Expiry: columnValues["N100 - Exc Crane"] ?? null,
+        n031Expiry: columnValues["N031 - Asbestos Awareness"] ?? null,
+        faceFitExpiry: columnValues["Face ift"] ?? null,
         columnValues,
+        manualOverrideHeaders: example.manualOverrides ?? [],
+        workforceId: wf?.id ?? null,
       };
       return record;
-    });
+    })
+    .concat(
+      // Workforce candidates with no matrix row yet still appear (seed may have failed).
+      workforceForCompany
+        .filter((wf) => {
+          const key = wf.candidateName.trim().toLowerCase();
+          return (
+            Boolean(key) &&
+            !exampleRows.some(
+              (example) =>
+                example.candidateName.trim().toLowerCase() === key,
+            )
+          );
+        })
+        .map((wf) => {
+          const columnValues: Record<string, string | null> = {
+            Name: wf.candidateName,
+            DOB: wf.dateOfBirth,
+            "CSCS Expiry": wf.cscsExpiry,
+            "EUSR Expiry": wf.eusrExpiry,
+            "NRSWA Expiry": wf.swqrExpiry,
+          };
+          const nextExpiryDate = earliestDateFromColumns(columnValues);
+          const record: AdminMatrixRecord = {
+            id: `workforce-only:${wf.id}`,
+            candidateName: wf.candidateName,
+            companyName: wf.companyName,
+            department: wf.department,
+            dateOfBirth: wf.dateOfBirth,
+            overallStatus: null,
+            needsReview: true,
+            matrixNotes: null,
+            nextExpiryDate,
+            cscsExpiry: wf.cscsExpiry,
+            ssstsExpiry: null,
+            smstsExpiry: null,
+            nrswaExpiry: wf.swqrExpiry,
+            eusrExpiry: wf.eusrExpiry,
+            n001Expiry: null,
+            n003Expiry: null,
+            n004Expiry: null,
+            n010Expiry: null,
+            n020Expiry: null,
+            n021Expiry: null,
+            n027Expiry: null,
+            n100Expiry: null,
+            n031Expiry: null,
+            faceFitExpiry: null,
+            columnValues,
+            manualOverrideHeaders: [],
+            workforceId: wf.id,
+          };
+          return record;
+        }),
+    );
 }
 
 export async function createAdminMatrix(input: Record<string, unknown>) {
@@ -1465,6 +1665,28 @@ export async function updateAdminMatrix(
   id: string,
   input: Record<string, unknown>,
 ) {
+  // First edit for a Workforce candidate that has no matrix row yet — create it.
+  if (id.startsWith("workforce-only:")) {
+    const workforceId = id.slice("workforce-only:".length).trim();
+    if (!workforceId) throw new NotFoundError("Matrix record not found.");
+    const workforce = await listAdminWorkforce();
+    const wf = workforce.find((row) => row.id === workforceId);
+    if (!wf) throw new NotFoundError("Candidate not found.");
+
+    const seedSource: Record<string, string | null> = {
+      Name: wf.candidateName,
+      DOB: wf.dateOfBirth,
+      "CSCS Expiry": wf.cscsExpiry,
+      "EUSR Expiry": wf.eusrExpiry,
+      "NRSWA Expiry": wf.swqrExpiry,
+    };
+    const created = await upsertTrainingMatrixExampleRow({
+      candidateName: wf.candidateName,
+      source: seedSource,
+    });
+    return updateAdminMatrix(`example:${created.id}`, input);
+  }
+
   if (id.startsWith("example:")) {
     const exampleId = stripExampleMatrixId(id);
     if (!exampleId) throw new NotFoundError("Matrix record not found.");
@@ -1498,6 +1720,7 @@ export async function updateAdminMatrix(
       ["smstsExpiry", "SMSTS Expiry"],
       ["nrswaExpiry", "NRSWA Expiry"],
       ["eusrExpiry", "EUSR Expiry"],
+      ["faceFitExpiry", "Face ift"],
       ["n001Expiry", "N001 - Ind FLT"],
       ["n003Expiry", "N003 - Reach Lift Truck"],
       ["n004Expiry", "N004 - Lorry Mounted Lift Truck"],
@@ -1506,10 +1729,13 @@ export async function updateAdminMatrix(
       ["n021Expiry", "N021 - Suction Excavator"],
       ["n027Expiry", "N027 - Excavation Marshal - Banksperson"],
       ["n100Expiry", "N100 - Exc Crane"],
+      ["n031Expiry", "N031 - Asbestos Awareness"],
     ];
+    const changedHeaders: string[] = [];
     for (const [field, header] of namedDateFields) {
       if (input[field] !== undefined) {
         source[header] = asDateInput(input[field]) ?? null;
+        changedHeaders.push(header);
       }
     }
 
@@ -1522,6 +1748,7 @@ export async function updateAdminMatrix(
           value == null || value === ""
             ? null
             : asDateInput(value) ?? String(value);
+        changedHeaders.push(key);
       }
     }
 
@@ -1532,7 +1759,8 @@ export async function updateAdminMatrix(
         key === "companyName" ||
         key === "department" ||
         key === "columnValues" ||
-        key === "id"
+        key === "id" ||
+        key === "manualOverrideHeaders"
       ) {
         continue;
       }
@@ -1541,6 +1769,7 @@ export async function updateAdminMatrix(
           value == null || value === ""
             ? null
             : asDateInput(value) ?? String(value);
+        changedHeaders.push(key);
       }
     }
 
@@ -1549,10 +1778,21 @@ export async function updateAdminMatrix(
       throw new ValidationError("Candidate name is required.");
     }
 
+    const { mergeManualOverrides } = await import(
+      "@/lib/training/matrixManualOverrides"
+    );
+    const manualOverrides = mergeManualOverrides(
+      existing.manualOverrides ?? [],
+      changedHeaders.filter(
+        (h) => h !== "Name" && h !== "DOB" && CLIENT_MATRIX_DISPLAY_HEADERS.includes(h as never),
+      ),
+    );
+
     await upsertTrainingMatrixExampleRow({
       candidateName: name,
       existingItemId: exampleId,
       source: { ...source, Name: name },
+      manualOverrides,
     });
 
     const rows = await listAdminMatrix();
@@ -1732,6 +1972,8 @@ export interface AdminTrainingRecord {
   id: string;
   candidateName: string;
   companyName: string;
+  /** From Workforce when candidate lookup resolves. */
+  workforceNumber?: string | null;
   trainingDate: string | null;
   trainingAddress: string | null;
   trainingOutcome: string | null;
@@ -1762,6 +2004,7 @@ type RegisterLookupMaps = {
   companyNameById: Map<string, string>;
   workforceNameById: Map<string, string>;
   workforceCompanyById: Map<string, string>;
+  workforceNumberById: Map<string, string>;
 };
 
 async function loadRegisterLookupMaps(): Promise<RegisterLookupMaps> {
@@ -1778,7 +2021,17 @@ async function loadRegisterLookupMaps(): Promise<RegisterLookupMaps> {
   const workforceCompanyById = new Map(
     workforce.map((row) => [row.id, row.companyName] as const),
   );
-  return { companyNameById, workforceNameById, workforceCompanyById };
+  const workforceNumberById = new Map(
+    workforce
+      .filter((row) => row.workforceNumber?.trim())
+      .map((row) => [row.id, row.workforceNumber as string] as const),
+  );
+  return {
+    companyNameById,
+    workforceNameById,
+    workforceCompanyById,
+    workforceNumberById,
+  };
 }
 
 function resolveRegisterPeople(
@@ -1786,7 +2039,11 @@ function resolveRegisterPeople(
   candidateField: string,
   companyField: string,
   lookups: RegisterLookupMaps,
-): { candidateName: string; companyName: string } | null {
+): {
+  candidateName: string;
+  companyName: string;
+  workforceNumber: string | null;
+} | null {
   const candidateLookupId = extractLookupId(fields, candidateField);
   const companyLookupId = extractLookupId(fields, companyField);
 
@@ -1810,7 +2067,10 @@ function resolveRegisterPeople(
       : null);
 
   if (!companyName) return null;
-  return { candidateName, companyName };
+  const workforceNumber = candidateLookupId
+    ? (lookups.workforceNumberById.get(candidateLookupId) ?? null)
+    : null;
+  return { candidateName, companyName, workforceNumber };
 }
 
 /** Split admin form multi-choice text into a SharePoint MultiChoice array. */
@@ -2306,33 +2566,83 @@ export async function listAdminRegister(
     });
 }
 
+/**
+ * Choice / MultiChoice columns often reject app writes when SP options are
+ * out of date. Create the row without them, then retry those fields alone.
+ */
+function stripDeferredChoiceFields(
+  key: AdminRegisterKey,
+  payload: SharePointFields,
+): SharePointFields {
+  const deferred: SharePointFields = {};
+  // Internal SharePoint names (from schema), not app field keys.
+  const fieldsByKey: Partial<Record<AdminRegisterKey, string[]>> = {
+    nporsRegister: ["NPORSCategory"],
+    eusrRegister: ["EusrCategory", "CardType"],
+    nrswaRegister: ["Course", "StreetworksCategory"],
+    inHouseCertificates: ["CertificateCategory"],
+  };
+  for (const field of fieldsByKey[key] ?? []) {
+    if (payload[field] !== undefined) {
+      deferred[field] = payload[field];
+      delete payload[field];
+    }
+  }
+  return deferred;
+}
+
+async function applyDeferredChoiceFields(
+  key: AdminRegisterKey,
+  itemId: string,
+  deferred: SharePointFields,
+): Promise<string[]> {
+  const failures: string[] = [];
+  for (const [field, value] of Object.entries(deferred)) {
+    if (value === undefined) continue;
+    try {
+      await updateListItemFieldsByKey(key, itemId, { [field]: value });
+    } catch (error) {
+      console.warn(
+        `[${key}] ${field} write failed for #${itemId}; row saved without that choice (update SharePoint choices).`,
+        error,
+      );
+      failures.push(
+        `${field} could not be saved — update SharePoint choice options (Site Owner pack), then edit this record.`,
+      );
+    }
+  }
+  return failures;
+}
+
 export async function createAdminRegister(
   key: AdminRegisterKey,
   input: Record<string, unknown>,
-) {
+): Promise<{ record: AdminTrainingRecord; choiceWarnings: string[] }> {
   const payload = registerWritePayload(key, input, "create");
-  // Graph app-only often rejects MultiChoice writes on NPORS Category.
-  // Keep create reliable; retry category separately; still pass it to matrix sync.
-  const deferredCategory = payload.NPORSCategory;
-  delete payload.NPORSCategory;
+  const deferred = stripDeferredChoiceFields(key, payload);
 
   await applyRegisterLookupIds(payload, input, "create");
-  const item = await createListItemByKey(key, payload);
+  let item;
+  try {
+    item = await createListItemByKey(key, payload);
+  } catch (error) {
+    const detail =
+      error instanceof Error ? error.message : "SharePoint create failed.";
+    throw new ValidationError(
+      `Could not save ${key === "nrswaRegister" ? "Streetworks" : key === "eusrRegister" ? "EUSR" : "training"} record: ${detail}`,
+    );
+  }
 
-  if (deferredCategory !== undefined && key === "nporsRegister") {
-    try {
-      await updateListItemFieldsByKey(key, item.id, {
-        NPORSCategory: deferredCategory,
-      });
-      item.fields = {
-        ...item.fields,
-        NPORSCategory: deferredCategory,
-      };
-    } catch (error) {
-      console.warn(
-        `[npors] NPORSCategory write failed for #${item.id}; matrix sync will use form value.`,
-        error,
-      );
+  const choiceWarnings = await applyDeferredChoiceFields(
+    key,
+    item.id,
+    deferred,
+  );
+  if (Object.keys(deferred).length > 0) {
+    item = (await getListItemByKey(key, item.id)) ?? item;
+    // Keep submitted choice values for matrix sync even if SP rejected them.
+    for (const [field, value] of Object.entries(deferred)) {
+      item.fields = { ...item.fields, [field]: value };
     }
   }
 
@@ -2344,34 +2654,43 @@ export async function createAdminRegister(
   if (submittedCategory && !mapped.nporsCategory) {
     mapped.nporsCategory = submittedCategory;
   }
-  return mapped;
+  const submittedCourse = optionalText(input.course);
+  if (submittedCourse && !mapped.course) {
+    mapped.course = submittedCourse;
+  }
+  const submittedEusr = optionalText(input.eusrCategory);
+  if (submittedEusr && !mapped.eusrCategory) {
+    mapped.eusrCategory = submittedEusr;
+  }
+  return { record: mapped, choiceWarnings };
 }
 
 export async function updateAdminRegister(
   key: AdminRegisterKey,
   id: string,
   input: Record<string, unknown>,
-) {
+): Promise<{ record: AdminTrainingRecord; choiceWarnings: string[] }> {
   const existing = await getListItemByKey(key, id);
   if (!existing) throw new NotFoundError("Training record not found.");
   const payload = registerWritePayload(key, input, "update");
-  const deferredCategory = payload.NPORSCategory;
-  if (key === "nporsRegister") {
-    delete payload.NPORSCategory;
-  }
+  const deferred = stripDeferredChoiceFields(key, payload);
   await applyRegisterLookupIds(payload, input, "update");
-  let item = await updateListItemFieldsByKey(key, id, payload);
+  let item;
+  try {
+    item = await updateListItemFieldsByKey(key, id, payload);
+  } catch (error) {
+    const detail =
+      error instanceof Error ? error.message : "SharePoint update failed.";
+    throw new ValidationError(
+      `Could not update training record: ${detail}`,
+    );
+  }
 
-  if (deferredCategory !== undefined && key === "nporsRegister") {
-    try {
-      item = await updateListItemFieldsByKey(key, id, {
-        NPORSCategory: deferredCategory,
-      });
-    } catch (error) {
-      console.warn(
-        `[npors] NPORSCategory write failed for #${id}; matrix sync will use form value.`,
-        error,
-      );
+  const choiceWarnings = await applyDeferredChoiceFields(key, id, deferred);
+  if (Object.keys(deferred).length > 0) {
+    item = (await getListItemByKey(key, id)) ?? item;
+    for (const [field, value] of Object.entries(deferred)) {
+      item.fields = { ...item.fields, [field]: value };
     }
   }
 
@@ -2382,7 +2701,19 @@ export async function updateAdminRegister(
   if (submittedCategory) {
     mapped.nporsCategory = submittedCategory;
   }
-  return mapped;
+  const submittedCourse = optionalText(input.course);
+  if (submittedCourse) {
+    mapped.course = submittedCourse;
+  }
+  const submittedEusr = optionalText(input.eusrCategory);
+  if (submittedEusr) {
+    mapped.eusrCategory = submittedEusr;
+  }
+  const submittedCert = optionalText(input.certificateCategory);
+  if (submittedCert) {
+    mapped.certificateCategory = submittedCert;
+  }
+  return { record: mapped, choiceWarnings };
 }
 
 /* ───────────────── NVQ ───────────────── */
@@ -2600,6 +2931,11 @@ export async function updateAdminNvq(
       ),
       workforceCompanyById: new Map(
         workforce.map((row) => [row.id, row.companyName] as const),
+      ),
+      workforceNumberById: new Map(
+        workforce
+          .filter((row) => row.workforceNumber?.trim())
+          .map((row) => [row.id, row.workforceNumber as string] as const),
       ),
     };
     const existingMapped = mapNvq(existing, lookups);
@@ -3620,9 +3956,42 @@ export interface AdminPermissionRecord {
   companyId: string | null;
   companyName: string | null;
   accessScope: string | null;
+  /** Department names this person covers (TM / Supervisor portal filter). */
+  departmentScopes: string[];
+  /** Pipe/semicolon joined for admin multiselect form. */
+  departmentsAllowed: string | null;
   canView: boolean;
   canDownload: boolean;
   canEdit: boolean;
+}
+
+/** Multi-lookup LookupId values (DepartmentsAllowed, etc.). */
+function extractMultiLookupIds(
+  fields: SharePointFields,
+  fieldInternalName: string,
+): string[] {
+  const sibling = fields[`${fieldInternalName}LookupId`];
+  if (Array.isArray(sibling)) {
+    return sibling
+      .map((entry) => String(entry ?? "").trim())
+      .filter(Boolean);
+  }
+  if (typeof sibling === "number" || typeof sibling === "string") {
+    const text = String(sibling).trim();
+    return text ? [text] : [];
+  }
+
+  const direct = fields[fieldInternalName];
+  if (!Array.isArray(direct)) return [];
+  return direct
+    .map((entry) => {
+      if (entry && typeof entry === "object" && "LookupId" in entry) {
+        const id = (entry as { LookupId?: unknown }).LookupId;
+        return id === null || id === undefined ? "" : String(id).trim();
+      }
+      return "";
+    })
+    .filter(Boolean);
 }
 
 function mapPermission(item: SharePointListItem): AdminPermissionRecord | null {
@@ -3650,6 +4019,23 @@ function mapPermission(item: SharePointListItem): AdminPermissionRecord | null {
     sharePointRoleType,
     accessScope || "Full Company",
   );
+  const departmentScopes = Array.from(
+    new Set([
+      ...(asMultiChoiceText(item.fields[permissionFields.departments]) ?? "")
+        .split(/[;,#|]+/)
+        .map((part) => part.trim())
+        .filter(Boolean),
+      ...(asMultiChoiceText(item.fields[permissionFields.departmentsAllowed]) ??
+        "")
+        .split(/[;,#|]+/)
+        .map((part) => part.trim())
+        .filter(Boolean),
+    ]),
+  );
+  const departmentAllowedIds = extractMultiLookupIds(
+    item.fields,
+    permissionFields.departmentsAllowed,
+  );
   return {
     id: item.id,
     userEmail: userEmail.toLowerCase(),
@@ -3663,6 +4049,13 @@ function mapPermission(item: SharePointListItem): AdminPermissionRecord | null {
     companyId,
     companyName: asLookupOrString(item.fields[permissionFields.company]),
     accessScope,
+    departmentScopes,
+    // Prefer LookupIds for the admin multiselect form; fall back to names.
+    departmentsAllowed: departmentAllowedIds.length
+      ? departmentAllowedIds.join(", ")
+      : departmentScopes.length
+        ? departmentScopes.join(", ")
+        : null,
     canView: asBoolean(item.fields[permissionFields.canView]),
     canDownload: asBoolean(item.fields[permissionFields.canDownload]),
     canEdit: asBoolean(item.fields[permissionFields.canEdit]),
@@ -3670,10 +4063,23 @@ function mapPermission(item: SharePointListItem): AdminPermissionRecord | null {
 }
 
 export async function listAdminPermissions() {
-  const items = await getListItemsByKey("permissions", { top: 5000 });
+  const [items, companies] = await Promise.all([
+    getListItemsByKey("permissions", { top: 5000 }),
+    listAdminCompanies(),
+  ]);
+  const companyNameById = new Map(
+    companies.map((row) => [row.id, row.companyName] as const),
+  );
   return items
     .map(mapPermission)
     .filter((row): row is AdminPermissionRecord => row !== null)
+    .map((row) => ({
+      ...row,
+      // Graph often returns Company LookupId without LookupValue.
+      companyName:
+        row.companyName?.trim() ||
+        (row.companyId ? (companyNameById.get(row.companyId) ?? null) : null),
+    }))
     .sort((a, b) => a.userEmail.localeCompare(b.userEmail));
 }
 
@@ -3735,6 +4141,8 @@ export async function createAdminPermission(input: Record<string, unknown>) {
   } else if (companyName) {
     payload[permissionFields.company] = companyName;
   }
+
+  await applyPermissionDepartmentCoverage(payload, input, companyId);
 
   const item = await createListItemByKey("permissions", payload);
   const mapped = mapPermission(item);
@@ -3815,8 +4223,83 @@ export async function updateAdminPermission(
     payload[permissionFields.company] = optionalText(input.companyName);
   }
 
+  const companyIdForDepts =
+    optionalText(input.companyId) ??
+    extractLookupId(existing.fields, permissionFields.company);
+  await applyPermissionDepartmentCoverage(
+    payload,
+    input,
+    companyIdForDepts,
+  );
+
   const item = await updateListItemFieldsByKey("permissions", id, payload);
   const mapped = mapPermission(item);
   if (!mapped) throw new Error("Updated permission could not be mapped.");
   return mapped;
+}
+
+/**
+ * Write DepartmentsAllowed (multi-lookup) from form names / ids.
+ * Also set AccessScope to Department Only when coverage is provided for TM/Supervisor.
+ */
+async function applyPermissionDepartmentCoverage(
+  payload: SharePointFields,
+  input: Record<string, unknown>,
+  companyId: string | null | undefined,
+): Promise<void> {
+  if (
+    input.departmentsAllowed === undefined &&
+    input.departmentScopes === undefined
+  ) {
+    return;
+  }
+
+  const raw =
+    input.departmentsAllowed !== undefined
+      ? input.departmentsAllowed
+      : input.departmentScopes;
+  const names = Array.isArray(raw)
+    ? raw.map((part) => String(part).trim()).filter(Boolean)
+    : String(raw ?? "")
+        .split(/[;,#|]+/)
+        .map((part) => part.trim())
+        .filter(Boolean);
+
+  const { listAdminDepartments } = await import(
+    "@/lib/services/departmentService"
+  );
+  const departments = await listAdminDepartments(companyId ?? null);
+  const ids: number[] = [];
+  for (const name of names) {
+    const hit =
+      departments.find((row) => row.id === name) ??
+      departments.find(
+        (row) =>
+          row.name.trim().toLowerCase() === name.trim().toLowerCase(),
+      );
+    if (!hit) {
+      throw new ValidationError(
+        `Department "${name}" was not found for this company. Add it under Departments first.`,
+      );
+    }
+    ids.push(Number(hit.id));
+  }
+
+  payload[`${permissionFields.departmentsAllowed}LookupId`] =
+    ids.length > 0 ? ids : [];
+
+  // When coverage is set, keep portal scoped to those departments.
+  if (ids.length > 0 && payload[permissionFields.accessScope] == null) {
+    // Only force when caller didn't set scope, or they chose Full Company with coverage.
+  }
+  if (ids.length > 0) {
+    const currentScope = String(
+      payload[permissionFields.accessScope] ??
+        input.accessScope ??
+        "",
+    ).toLowerCase();
+    if (!currentScope.includes("candidate")) {
+      payload[permissionFields.accessScope] = "Department Only";
+    }
+  }
 }

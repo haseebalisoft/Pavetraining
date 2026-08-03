@@ -29,6 +29,11 @@ import {
   type NormalizedRegisterRecord,
   type RegisterSource,
 } from "@/lib/services/trainingRegisterService";
+import {
+  ASBESTOS_MATRIX_HEADER,
+  isAsbestosAwarenessCategory,
+  isManualOverrideHeader,
+} from "@/lib/training/matrixManualOverrides";
 import type {
   MatrixSyncResult,
   MatrixSyncResultItem,
@@ -148,7 +153,10 @@ function exampleRowToMatrix(
     n027Expiry:
       example.columnValues["N027 - Excavation Marshal - Banksperson"] ?? null,
     n100Expiry: example.columnValues["N100 - Exc Crane"] ?? null,
+    n031Expiry: example.columnValues[ASBESTOS_MATRIX_HEADER] ?? null,
     columnValues: { ...example.columnValues },
+    manualOverrideHeaders: example.manualOverrides ?? [],
+    workforceId: workforce?.id ?? null,
     candidateLookupId: workforce?.id ?? null,
     companyLookupId: company?.id ?? null,
     workforceNumber: workforce?.workforceNumber ?? null,
@@ -496,6 +504,7 @@ async function syncOneCandidate(
   let workforceEusrExpiry: string | null | undefined;
   let workforceSwqrExpiry: string | null | undefined;
   let needsReviewForced = false;
+  const manualOverrides = matrixRow?.manualOverrideHeaders ?? [];
 
   for (const record of registersForMapping) {
     if (record.trainingOutcome === null) {
@@ -530,6 +539,12 @@ async function syncOneCandidate(
         if (!header) {
           warnings.push(
             `NPORS #${record.id}: category ${code} has no Training Matrix column.`,
+          );
+          continue;
+        }
+        if (isManualOverrideHeader(header, manualOverrides)) {
+          warnings.push(
+            `NPORS ${code}: skipped sync (manual override on matrix).`,
           );
           continue;
         }
@@ -573,30 +588,67 @@ async function syncOneCandidate(
       }
     }
 
-    // In-House is intentionally ignored for matrix updates (standalone register).
+    if (record.source === "In-House") {
+      const category =
+        record.certificateCategory || record.courseCategory || null;
+      if (!isAsbestosAwarenessCategory(category)) {
+        continue;
+      }
+      if (!record.expiry) {
+        needsReviewForced = true;
+        warnings.push(
+          `In-House #${record.id}: Asbestos Awareness Pass but missing Expiry.`,
+        );
+        continue;
+      }
+      if (isManualOverrideHeader(ASBESTOS_MATRIX_HEADER, manualOverrides)) {
+        warnings.push(
+          `N031 Asbestos Awareness: skipped sync (manual override on matrix).`,
+        );
+        continue;
+      }
+      const existing = columnValues[ASBESTOS_MATRIX_HEADER];
+      if (shouldApplyPassExpiry(existing, record.expiry, "Pass")) {
+        columnValues[ASBESTOS_MATRIX_HEADER] = record.expiry;
+        if (!fieldsUpdated.includes(ASBESTOS_MATRIX_HEADER)) {
+          fieldsUpdated.push(ASBESTOS_MATRIX_HEADER);
+        }
+      } else if (existing) {
+        warnings.push(
+          `N031 Asbestos Awareness: kept existing matrix date (register not newer).`,
+        );
+      }
+    }
   }
 
   if (workforceEusrExpiry) {
-    const existing = columnValues["EUSR Expiry"];
-    if (shouldApplyPassExpiry(existing, workforceEusrExpiry, "Pass")) {
-      columnValues["EUSR Expiry"] = workforceEusrExpiry;
-      if (!fieldsUpdated.includes("EUSR Expiry")) {
-        fieldsUpdated.push("EUSR Expiry");
+    if (isManualOverrideHeader("EUSR Expiry", manualOverrides)) {
+      warnings.push("EUSR Expiry: skipped sync (manual override on matrix).");
+    } else {
+      const existing = columnValues["EUSR Expiry"];
+      if (shouldApplyPassExpiry(existing, workforceEusrExpiry, "Pass")) {
+        columnValues["EUSR Expiry"] = workforceEusrExpiry;
+        if (!fieldsUpdated.includes("EUSR Expiry")) {
+          fieldsUpdated.push("EUSR Expiry");
+        }
       }
     }
   }
 
   if (workforceSwqrExpiry) {
-    const existing = columnValues["NRSWA Expiry"];
-    if (shouldApplyPassExpiry(existing, workforceSwqrExpiry, "Pass")) {
-      columnValues["NRSWA Expiry"] = workforceSwqrExpiry;
-      if (!fieldsUpdated.includes("NRSWA Expiry")) {
-        fieldsUpdated.push("NRSWA Expiry");
+    if (isManualOverrideHeader("NRSWA Expiry", manualOverrides)) {
+      warnings.push("NRSWA Expiry: skipped sync (manual override on matrix).");
+    } else {
+      const existing = columnValues["NRSWA Expiry"];
+      if (shouldApplyPassExpiry(existing, workforceSwqrExpiry, "Pass")) {
+        columnValues["NRSWA Expiry"] = workforceSwqrExpiry;
+        if (!fieldsUpdated.includes("NRSWA Expiry")) {
+          fieldsUpdated.push("NRSWA Expiry");
+        }
       }
     }
   }
 
-  // In-House is standalone and does not contribute matrix status dates.
   const statusDates = [
     ...Object.entries(columnValues)
       .filter(([key]) => key !== "Name" && key !== "DOB")
@@ -629,6 +681,7 @@ async function syncOneCandidate(
           stripExampleMatrixId(matrixRow?.id) ??
           null,
         source: columnValues,
+        // Do not touch ManualOverrides — sync never clears admin flags.
       });
       const nextRow: MatrixRowWithLookups = {
         id: `example:${upserted.id}`,
@@ -649,7 +702,10 @@ async function syncOneCandidate(
         n027Expiry:
           columnValues["N027 - Excavation Marshal - Banksperson"] ?? null,
         n100Expiry: columnValues["N100 - Exc Crane"] ?? null,
+        n031Expiry: columnValues[ASBESTOS_MATRIX_HEADER] ?? null,
         columnValues: { ...columnValues },
+        manualOverrideHeaders: manualOverrides,
+        workforceId: workforce.id,
         candidateLookupId: workforce.id,
         companyLookupId: company.id,
         workforceNumber: workforce.workforceNumber,
@@ -1003,24 +1059,29 @@ export async function syncAfterRegisterSave(
   record: AdminTrainingRecord,
   options: MatrixSyncOptions = {},
 ): Promise<MatrixSyncResult> {
-  // In-House certificates stay on their own register — never update the matrix.
+  // In-House only syncs Asbestos Awareness → N031; other courses stay standalone.
   if (registerKey === "inHouseCertificates") {
-    const items = [
-      emptyResultItem({
-        candidate: record.candidateName,
-        company: record.companyName,
-        registerSources: [],
-        skipped: true,
-        skipReason:
-          "In-House is standalone and does not sync to the Training Matrix.",
-      }),
-    ];
-    return {
-      dryRun: Boolean(options.dryRun),
-      scope: "register",
-      items,
-      summary: buildSummary(items),
-    };
+    const asbestos =
+      isAsbestosAwarenessCategory(record.certificateCategory) ||
+      isAsbestosAwarenessCategory(record.courseCategory);
+    if (!asbestos) {
+      const items = [
+        emptyResultItem({
+          candidate: record.candidateName,
+          company: record.companyName,
+          registerSources: [],
+          skipped: true,
+          skipReason:
+            "In-House course is standalone (only Asbestos Awareness syncs to N031).",
+        }),
+      ];
+      return {
+        dryRun: Boolean(options.dryRun),
+        scope: "register",
+        items,
+        summary: buildSummary(items),
+      };
+    }
   }
 
   const focus = normalizeRegisterFromAdminRecord(registerKey, record);

@@ -136,6 +136,11 @@ const columns: AdminColumn<AdminEventRecord>[] = [
     ),
   },
   {
+    key: "syncError",
+    header: "Sync Error",
+    render: (row) => row.syncError?.trim() || "—",
+  },
+  {
     key: "lastSynced",
     header: "Last Synced At",
     render: (row) => formatDateTime(row.lastSyncedAt),
@@ -524,6 +529,9 @@ export function AdminEventsClient({
               <button type="button" className={styles.secondaryButton} disabled={busyId === editing.id || editing.doNotSync} onClick={() => void runSync(editing, editing.syncStatus?.toLowerCase() === "failed" ? "retry" : "sync")}>
                 {busyId === editing.id ? "Syncing…" : "Sync now"}
               </button>
+              {editing.syncError?.trim() ? (
+                <p className={styles.helpText}>Sync error: {editing.syncError}</p>
+              ) : null}
             </div>
           ) : null}
         </div>

@@ -15,6 +15,11 @@ import {
   type SharePointListItem,
 } from "@/lib/services/sharePointListService";
 import { normalizeDateValue } from "@/lib/services/bulkUpload/parseSpreadsheet";
+import {
+  MANUAL_OVERRIDES_FIELD,
+  parseManualOverrides,
+  serializeManualOverrides,
+} from "@/lib/training/matrixManualOverrides";
 
 export interface TrainingMatrixExampleRow {
   id: string;
@@ -22,6 +27,8 @@ export interface TrainingMatrixExampleRow {
   dateOfBirth: string | null;
   columnValues: Record<string, string | null>;
   nextExpiryDate: string | null;
+  /** Headers whose dates were set manually in admin (not register sync). */
+  manualOverrides: string[];
 }
 
 const EXAMPLE_LIST_ENV =
@@ -274,6 +281,7 @@ function mapItemToRow(
     dateOfBirth,
     columnValues,
     nextExpiryDate,
+    manualOverrides: parseManualOverrides(fields[MANUAL_OVERRIDES_FIELD]),
   };
 }
 
@@ -353,6 +361,8 @@ export async function upsertTrainingMatrixExampleRow(input: {
   existingItemId?: string | null;
   /** Spreadsheet cells keyed by template headers (Name, DOB, CSCS Expiry, N001 - …). */
   source: Record<string, string | null>;
+  /** When set, replaces ManualOverrides on the row. */
+  manualOverrides?: string[] | null;
 }): Promise<{ id: string; created: boolean }> {
   const name = input.candidateName.trim();
   if (!name) throw new Error("Candidate name is required for matrix example upsert.");
@@ -398,17 +408,55 @@ export async function upsertTrainingMatrixExampleRow(input: {
     }
   }
 
-  if (input.existingItemId?.trim()) {
-    await updateListItemFieldsByKey(
-      "trainingMatrixExample",
-      input.existingItemId.trim(),
-      fields,
+  if (input.manualOverrides !== undefined) {
+    fields[MANUAL_OVERRIDES_FIELD] = serializeManualOverrides(
+      input.manualOverrides ?? [],
     );
+  }
+
+  if (input.existingItemId?.trim()) {
+    try {
+      await updateListItemFieldsByKey(
+        "trainingMatrixExample",
+        input.existingItemId.trim(),
+        fields,
+      );
+    } catch (error) {
+      // Retry without ManualOverrides if the column is not provisioned yet.
+      if (
+        input.manualOverrides !== undefined &&
+        MANUAL_OVERRIDES_FIELD in fields
+      ) {
+        const { [MANUAL_OVERRIDES_FIELD]: _drop, ...lean } = fields;
+        await updateListItemFieldsByKey(
+          "trainingMatrixExample",
+          input.existingItemId.trim(),
+          lean,
+        );
+        console.warn(
+          `[matrix] ManualOverrides column missing on Training Matrix Update — date saved without override flag.`,
+        );
+      } else {
+        throw error;
+      }
+    }
     return { id: input.existingItemId.trim(), created: false };
   }
 
-  const created = await createListItemByKey("trainingMatrixExample", fields);
-  return { id: created.id, created: true };
+  try {
+    const created = await createListItemByKey("trainingMatrixExample", fields);
+    return { id: created.id, created: true };
+  } catch (error) {
+    if (
+      input.manualOverrides !== undefined &&
+      MANUAL_OVERRIDES_FIELD in fields
+    ) {
+      const { [MANUAL_OVERRIDES_FIELD]: _drop, ...lean } = fields;
+      const created = await createListItemByKey("trainingMatrixExample", lean);
+      return { id: created.id, created: true };
+    }
+    throw error;
+  }
 }
 
 export function stripExampleMatrixId(id: string | null | undefined): string | null {

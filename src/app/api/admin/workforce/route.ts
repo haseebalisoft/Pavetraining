@@ -24,12 +24,21 @@ export async function POST(request: Request) {
     async (_context, req) => {
       const body = (await req.json()) as Record<string, unknown>;
       const record = await createAdminWorkforce(body);
+      const folderWarning =
+        "folderWarning" in record
+          ? (record as { folderWarning?: string }).folderWarning
+          : undefined;
+      const matrixSeedWarning =
+        "matrixSeedWarning" in record
+          ? (record as { matrixSeedWarning?: string }).matrixSeedWarning
+          : undefined;
+      const warnings = [folderWarning, matrixSeedWarning]
+        .map((part) => part?.trim())
+        .filter(Boolean);
       return {
         record,
-        warning:
-          "folderWarning" in record
-            ? (record as { folderWarning?: string }).folderWarning
-            : undefined,
+        warning: warnings.length ? warnings.join(" ") : undefined,
+        matrixSeedWarning,
       };
     },
     { errorMessage: "Failed to create candidate" },

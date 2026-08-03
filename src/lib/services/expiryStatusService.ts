@@ -26,7 +26,7 @@ export interface MatrixStatusComputation {
 
 /**
  * Maps shared expiry colour logic → SharePoint OverallStatus choices.
- * Upcoming (91–270) stays Valid; Urgent (0–90) is Expiring Soon.
+ * Upcoming (91–180) stays Valid; Urgent (0–90) is Expiring Soon.
  */
 export function toSharePointOverallStatus(
   code: ExpiryStatusCode,

@@ -4,15 +4,18 @@ import {
   listAdminRegister,
   listAdminWorkforce,
 } from "@/lib/services/adminCrudService";
+import { listAdminNporsCategoryOptions } from "@/lib/services/nporsCategoriesService";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminNporsPage() {
-  const [companies, workforce, records] = await Promise.all([
-    listAdminCompanies(),
-    listAdminWorkforce(),
-    listAdminRegister("nporsRegister"),
-  ]);
+  const [companies, workforce, records, nporsCategoryOptions] =
+    await Promise.all([
+      listAdminCompanies(),
+      listAdminWorkforce(),
+      listAdminRegister("nporsRegister"),
+      listAdminNporsCategoryOptions(),
+    ]);
   return (
     <AdminRegisterClient
       kind="npors"
@@ -20,13 +23,16 @@ export default async function AdminNporsPage() {
       workforce={workforce.map((row) => ({
         id: row.id,
         candidateName: row.candidateName,
+        companyId: row.companyId,
         companyName: row.companyName,
         nporsNumbers: row.nporsNumbers,
         eusrNumber: row.eusrNumber,
         swqrNumber: row.swqrNumber,
         inHouseCertificationNumber: row.inHouseCertificationNumber,
+        workforceNumber: row.workforceNumber,
       }))}
       initialRows={records}
+      nporsCategoryOptions={nporsCategoryOptions}
     />
   );
 }

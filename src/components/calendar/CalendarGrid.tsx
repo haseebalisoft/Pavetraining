@@ -103,6 +103,17 @@ function EventChip({
   );
 }
 
+function eventTouchesDay(
+  start: Date,
+  end: Date | null,
+  day: Date,
+): boolean {
+  const dayStart = startOfDay(day);
+  const dayEnd = addDays(dayStart, 1);
+  const eventEnd = end && end.getTime() >= start.getTime() ? end : start;
+  return start < dayEnd && eventEnd >= dayStart;
+}
+
 export function CalendarGrid({
   events,
   view,
@@ -116,10 +127,19 @@ export function CalendarGrid({
   const parsedEvents = useMemo(
     () =>
       events
-        .map((event) => ({ event, start: parseEventDate(event.start) }))
+        .map((event) => ({
+          event,
+          start: parseEventDate(event.start),
+          end: parseEventDate(event.end ?? null),
+        }))
         .filter(
-          (entry): entry is { event: CalendarGridEvent; start: Date } =>
-            entry.start !== null,
+          (
+            entry,
+          ): entry is {
+            event: CalendarGridEvent;
+            start: Date;
+            end: Date | null;
+          } => entry.start !== null,
         )
         .sort((a, b) => a.start.getTime() - b.start.getTime()),
     [events],
@@ -179,7 +199,9 @@ export function CalendarGrid({
             ))}
             {monthDays.map((day) => {
               const dayEvents = parsedEvents
-                .filter((entry) => sameDay(entry.start, day))
+                .filter((entry) =>
+                  eventTouchesDay(entry.start, entry.end, day),
+                )
                 .map((entry) => entry.event);
               const isCurrentMonth = day.getMonth() === cursor.getMonth();
               const classNames = [styles.monthDay];
@@ -203,7 +225,7 @@ export function CalendarGrid({
                   <span className={styles.dayNumber}>{day.getDate()}</span>
                   <div className={styles.monthEvents}>
                     {dayEvents.slice(0, 3).map((event) => (
-                      <EventChip key={event.id} event={event} onClick={onEventClick} />
+                      <EventChip key={`${event.id}-${dateKey(day)}`} event={event} onClick={onEventClick} />
                     ))}
                     {dayEvents.length > 3 ? (
                       <span className={styles.moreCount}>+{dayEvents.length - 3} more</span>
@@ -233,7 +255,9 @@ export function CalendarGrid({
               ))}
             </div>
             {weekDays.map((day) => {
-              const dayEvents = parsedEvents.filter((entry) => sameDay(entry.start, day));
+              const dayEvents = parsedEvents.filter((entry) =>
+                eventTouchesDay(entry.start, entry.end, day),
+              );
               return (
                 <div key={dateKey(day)} className={styles.weekDayColumn}>
                   {HOURS.map((hour) => (
@@ -246,18 +270,24 @@ export function CalendarGrid({
                       disabled={!onSlotClick}
                     />
                   ))}
-                  {dayEvents.map(({ event, start }) => {
-                    const end = parseEventDate(event.end);
+                  {dayEvents.map(({ event, start, end }) => {
+                    const isStartDay = sameDay(start, day);
                     const durationMinutes = end
                       ? Math.max(30, (end.getTime() - start.getTime()) / 60_000)
                       : 60;
+                    const top = isStartDay
+                      ? (start.getHours() + start.getMinutes() / 60) * HOUR_HEIGHT
+                      : 0;
+                    const height = isStartDay
+                      ? Math.max(24, (durationMinutes / 60) * HOUR_HEIGHT)
+                      : HOUR_HEIGHT * 24;
                     return (
                       <div
-                        key={event.id}
+                        key={`${event.id}-${dateKey(day)}`}
                         className={styles.weekEventPosition}
                         style={{
-                          top: `${(start.getHours() + start.getMinutes() / 60) * HOUR_HEIGHT}px`,
-                          height: `${Math.max(24, (durationMinutes / 60) * HOUR_HEIGHT)}px`,
+                          top: `${top}px`,
+                          height: `${Math.min(HOUR_HEIGHT * 24, height)}px`,
                         }}
                       >
                         <EventChip event={event} onClick={onEventClick} compact />

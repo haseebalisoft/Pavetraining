@@ -11,7 +11,7 @@ import {
   getEusrCardTypeOptions,
   getEusrCategoryOptions,
 } from "@/lib/training/eusrOptions";
-import { getInHouseCertificateCategoryOptions } from "@/lib/training/inHouseCertificateOptions";
+import { getInHouseCourseOptions } from "@/lib/training/inHouseCourseOptions";
 import { getNporsCategoryOptions } from "@/lib/training/nporsCategoryOptions";
 import {
   getStreetworksCategoryOptions,
@@ -31,16 +31,27 @@ const titles: Record<RegisterKind, string> = {
 
 const descriptions: Record<RegisterKind, string> = {
   npors:
-    "Select company, then candidate — NPORS number fills from Workforce. Pass/Fail updates the Training Matrix.",
+    "Select company, then candidate — Workforce / NPORS numbers fill from Workforce. Pass updates the Training Matrix and profile.",
   eusr:
-    "Select company, then candidate — EUSR number fills from Workforce. Pass/Fail updates the Training Matrix.",
+    "Select company, then candidate — Workforce / EUSR numbers fill from Workforce. Pass updates the Training Matrix and profile.",
   streetworks:
-    "Select company, then candidate — SWQR number fills from Workforce. Pass/Fail updates the Training Matrix.",
+    "Select company, then candidate — Workforce / SWQR numbers fill from Workforce. Pass updates the Training Matrix and profile.",
   "in-house":
-    "Select company, then candidate — certification number fills from Workforce. In-House is standalone (does not update the Training Matrix).",
+    "Select company, then candidate — certification number fills from Workforce. Asbestos Awareness Pass syncs to N031 on the Matrix; other courses stay standalone.",
 };
 
-function fieldsFor(kind: RegisterKind): AdminFieldConfig[] {
+const workforceNumberField: AdminFieldConfig = {
+  name: "workforceNumber",
+  label: "Workforce number (from Workforce)",
+  type: "text",
+  readOnly: true,
+  section: "Candidate",
+};
+
+function fieldsFor(
+  kind: RegisterKind,
+  nporsCategoryOptions?: Array<{ value: string; label: string }>,
+): AdminFieldConfig[] {
   const people: AdminFieldConfig[] = [
     {
       name: "companyName",
@@ -56,6 +67,7 @@ function fieldsFor(kind: RegisterKind): AdminFieldConfig[] {
       required: true,
       section: "Candidate",
     },
+    workforceNumberField,
   ];
 
   const outcome: AdminFieldConfig[] = [
@@ -115,6 +127,21 @@ function fieldsFor(kind: RegisterKind): AdminFieldConfig[] {
   ];
 
   if (kind === "npors") {
+    const categoryOptions = (
+      nporsCategoryOptions?.length
+        ? nporsCategoryOptions
+        : getNporsCategoryOptions()
+    ).filter((option) => {
+      const label = option.label.trim();
+      const value = option.value.trim();
+      // Prefer full "N001 - Title" labels; drop incomplete code-only text.
+      if (!label) return false;
+      if (/^N\d+[A-Z]?$/i.test(label) && label.toUpperCase() === value.toUpperCase()) {
+        return false;
+      }
+      return true;
+    });
+
     return [
       ...people,
       {
@@ -139,7 +166,9 @@ function fieldsFor(kind: RegisterKind): AdminFieldConfig[] {
         label: "NPORS category",
         type: "multiselect",
         section: "Training",
-        options: getNporsCategoryOptions(),
+        options: categoryOptions.length
+          ? categoryOptions
+          : getNporsCategoryOptions(),
       },
       ...outcome,
     ];
@@ -183,7 +212,7 @@ function fieldsFor(kind: RegisterKind): AdminFieldConfig[] {
       },
       {
         name: "course",
-        label: "Course (Operative / Supervisor)",
+        label: "Course",
         type: "select",
         section: "Training",
         options: getStreetworksCourseOptions(),
@@ -261,10 +290,10 @@ function fieldsFor(kind: RegisterKind): AdminFieldConfig[] {
     },
     {
       name: "certificateCategory",
-      label: "Certificate category",
+      label: "Course",
       type: "select",
       section: "Training",
-      options: getInHouseCertificateCategoryOptions(),
+      options: getInHouseCourseOptions(),
     },
     ...outcome,
   ];
@@ -274,6 +303,11 @@ function columnsFor(kind: RegisterKind): AdminColumn<AdminTrainingRecord>[] {
   const base: AdminColumn<AdminTrainingRecord>[] = [
     { key: "name", header: "Candidate name", render: (row) => row.candidateName },
     { key: "company", header: "Company", render: (row) => row.companyName },
+    {
+      key: "workforceNumber",
+      header: "Workforce number",
+      render: (row) => row.workforceNumber ?? "—",
+    },
   ];
   if (kind === "npors") {
     base.push({
@@ -329,7 +363,7 @@ function columnsFor(kind: RegisterKind): AdminColumn<AdminTrainingRecord>[] {
   if (kind === "in-house") {
     base.push({
       key: "certCategory",
-      header: "Certificate category",
+      header: "Course",
       render: (row) => row.certificateCategory ?? "—",
     });
   }
@@ -358,18 +392,25 @@ export function AdminRegisterClient({
   companies,
   workforce,
   initialRows,
+  nporsCategoryOptions,
 }: {
   kind: RegisterKind;
   companies: Company[];
   workforce: AdminWorkforceOption[];
   initialRows: AdminTrainingRecord[];
+  /** Live from SharePoint NPORS Categories list when kind=npors. */
+  nporsCategoryOptions?: Array<{ value: string; label: string }>;
 }) {
   return (
     <AdminCrudPage<AdminTrainingRecord>
       title={titles[kind]}
-      description={descriptions[kind]}
+      description={
+        kind === "npors"
+          ? `${descriptions.npors} Categories load from SharePoint NPORS Categories (N number + full title).`
+          : descriptions[kind]
+      }
       columns={columnsFor(kind)}
-      fields={fieldsFor(kind)}
+      fields={fieldsFor(kind, nporsCategoryOptions)}
       companies={companies}
       workforce={workforce}
       initialRows={initialRows}
@@ -385,16 +426,14 @@ export function AdminRegisterClient({
       searchKeys={[
         (row) => row.candidateName,
         (row) => row.companyName,
+        (row) => row.workforceNumber,
         (row) => row.nporsNumber,
-        (row) => row.nporsCategory,
         (row) => row.eusrNumber,
-        (row) => row.eusrCategory,
         (row) => row.swqrNumber,
+        (row) => row.nporsCategory,
+        (row) => row.eusrCategory,
         (row) => row.course,
-        (row) => row.streetworksCategory,
         (row) => row.certificateCategory,
-        (row) => row.trainingAddress,
-        (row) => row.assessorTrainer,
       ]}
     />
   );

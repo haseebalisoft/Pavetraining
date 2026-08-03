@@ -11,6 +11,7 @@ import styles from "./customer.module.css";
 const NAV_ITEMS = [
   { href: "/customer", label: "Training Matrix", exact: true },
   { href: "/customer/dashboard", label: "Dashboard" },
+  { href: "/customer/courses", label: "PAVE Training Courses" },
   { href: "/customer/candidates", label: "Candidates / Workforce" },
   { href: "/customer/training-records", label: "Training Records" },
   { href: "/customer/nvq-progress", label: "NVQ Progress" },

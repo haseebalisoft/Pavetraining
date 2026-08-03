@@ -18,6 +18,7 @@ import type {
 
 export const dynamic = "force-dynamic";
 
+/** Customer dashboard (stats / offers) — Training Matrix is the home at `/customer`. */
 export default async function CustomerDashboardPage() {
   const session = await auth();
   const email = session?.user?.email?.trim().toLowerCase();
@@ -33,8 +34,6 @@ export default async function CustomerDashboardPage() {
     redirect("/access-denied");
   }
 
-  // These two reads are independent — run them concurrently so the dashboard
-  // waits for the slower of the two, not the sum of both.
   const [companyResult, statsResult] = await Promise.allSettled([
     getCompanyById(context.companyId),
     getCustomerDashboardContent(context),

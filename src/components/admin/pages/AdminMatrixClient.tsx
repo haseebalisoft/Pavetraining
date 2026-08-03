@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useState, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
@@ -22,6 +23,7 @@ import {
   matchesAnyExpiryFilter,
   type ExpiryFilter,
 } from "@/lib/training/expiryFilters";
+import { isManualOverrideHeader } from "@/lib/training/matrixManualOverrides";
 import {
   matrixStatusLabel,
   normalizeMatrixStatus,
@@ -35,11 +37,18 @@ function matrixCell(
   header: string,
 ): ReactNode {
   if (header === "Name") {
-    return (
-      <span className={styles.matrixNameCell}>
-        {row.candidateName?.trim() || "—"}
-      </span>
-    );
+    const name = row.candidateName?.trim() || "—";
+    if (row.workforceId) {
+      return (
+        <Link
+          className={styles.matrixNameLink}
+          href={`/admin/workforce/${row.workforceId}`}
+        >
+          {name}
+        </Link>
+      );
+    }
+    return <span className={styles.matrixNameCell}>{name}</span>;
   }
   if (header === "DOB") {
     const dob = row.columnValues?.DOB ?? row.dateOfBirth;
@@ -48,7 +57,17 @@ function matrixCell(
     );
   }
   const fromColumns = row.columnValues?.[header];
-  return <ExpiryDateBadge date={fromColumns} fillCell />;
+  const manual = isManualOverrideHeader(header, row.manualOverrideHeaders);
+  return (
+    <span className={styles.matrixExpiryCell}>
+      <ExpiryDateBadge date={fromColumns} fillCell />
+      {manual ? (
+        <span className={styles.matrixManualBadge} title="Manually set — register sync will not overwrite">
+          Manual
+        </span>
+      ) : null}
+    </span>
+  );
 }
 
 function rowExpiryDates(row: AdminMatrixRecord): Array<string | null> {
@@ -77,7 +96,7 @@ const columns: AdminColumn<AdminMatrixRecord>[] = [
   ...CLIENT_MATRIX_DISPLAY_HEADERS.filter((header) => header !== "Name").map(
     (header) => ({
       key: header,
-      header,
+      header: header === "Face ift" ? "Face Fit Expiry" : header,
       render: (row: AdminMatrixRecord) => matrixCell(row, header),
     }),
   ),
@@ -126,9 +145,9 @@ const fields: AdminFieldConfig[] = [
   },
   {
     name: "companyName",
-    label: "Company",
-    type: "company",
-    required: true,
+    label: "Company (from Workforce)",
+    type: "text",
+    readOnly: true,
     section: "Candidate",
   },
   {
@@ -140,6 +159,36 @@ const fields: AdminFieldConfig[] = [
   {
     name: "cscsExpiry",
     label: "CSCS Expiry",
+    type: "date",
+    section: "Card expiries",
+  },
+  {
+    name: "nrswaExpiry",
+    label: "SWQR / NRSWA Expiry",
+    type: "date",
+    section: "Card expiries",
+  },
+  {
+    name: "eusrExpiry",
+    label: "EUSR Expiry",
+    type: "date",
+    section: "Card expiries",
+  },
+  {
+    name: "ssstsExpiry",
+    label: "SSSTS Expiry",
+    type: "date",
+    section: "Card expiries",
+  },
+  {
+    name: "smstsExpiry",
+    label: "SMSTS Expiry",
+    type: "date",
+    section: "Card expiries",
+  },
+  {
+    name: "faceFitExpiry",
+    label: "Face Fit Expiry",
     type: "date",
     section: "Card expiries",
   },
@@ -191,6 +240,12 @@ const fields: AdminFieldConfig[] = [
     type: "date",
     section: "NPORS categories",
   },
+  {
+    name: "n031Expiry",
+    label: "N031 - Asbestos Awareness",
+    type: "date",
+    section: "In-house / other",
+  },
 ];
 
 function matchesFilter(
@@ -198,7 +253,7 @@ function matchesFilter(
   filter: string | null,
 ): boolean {
   if (!filter || filter === "all") return true;
-  if (filter === "review") return row.needsReview;
+  if (filter === "review" || filter === "missing") return row.needsReview;
   if (filter === "expiring") {
     return getExpiryStatus(row.nextExpiryDate).status === "urgent";
   }
@@ -353,7 +408,7 @@ export function AdminMatrixClient({
       </div>
       <AdminCrudPage<AdminMatrixRecord>
         title="Training Matrix"
-        description="Synced from NPORS / EUSR / Streetworks into SharePoint ‘Training Matrix Update’. In-House and NVQ are standalone. Pass updates expiry when newer; Fail never extends. Sync Matrix refreshes everyone; Sync company / Sync candidate target one company or person; Dry run previews without writing."
+        description="Register sync (NPORS / EUSR / Streetworks / In-House Asbestos → N031) and direct admin edits both update this matrix. Cells marked Manual are not overwritten by register sync. Pass updates expiry when newer; Fail never extends."
         columns={columns}
         fields={fields}
         companies={companies}
@@ -388,11 +443,11 @@ export function AdminMatrixClient({
                 onChange={(event) => setExpiryFilter(event.target.value)}
               >
                 <option value="all">All expiries</option>
-                <option value="within-3m">Expiring within 3 months</option>
-                <option value="within-6m">Expiring within 6 months</option>
-                <option value="9m-plus">9 months or more</option>
-                <option value="expired">Expired</option>
-                <option value="review">Records to Review</option>
+                <option value="expired">Expired (red)</option>
+                <option value="within-3m">Expiring within 3 months (0–90 days, red)</option>
+                <option value="within-6m">Expiring within 6 months (0–180 days, red + amber)</option>
+                <option value="6m-plus">6 months or more / in date (181+ days, green)</option>
+                <option value="review">Records to Review (missing dates)</option>
               </select>
             </label>
             <label className={styles.field}>
