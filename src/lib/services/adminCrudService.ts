@@ -16,7 +16,9 @@ import {
   createListItemByKey,
   deleteListItemByKey,
   extractLookupId,
+  getListItemById,
   getListItemByKey,
+  getListItems,
   getListItemsByKey,
   listHasColumn,
   toSharePointFields,
@@ -24,6 +26,9 @@ import {
   type SharePointFields,
   type SharePointListItem,
 } from "@/lib/services/sharePointListService";
+import { getSharePointListId } from "@/lib/config/sharepoint";
+import { revalidateSharePointList } from "@/lib/cache/sharePointCache";
+import { revalidatePath } from "next/cache";
 import {
   normalizePermissionFormRole,
   normalizePermissionRoleType,
@@ -239,7 +244,11 @@ export async function listAdminCompanies(): Promise<Company[]> {
 }
 
 export async function createAdminCompany(input: Record<string, unknown>) {
-  const companies = await listAdminCompanies();
+  // Bulk callers pass the live in-memory list so we don't re-fetch Companies
+  // from Graph for every new company in the same import (was ~1s×N).
+  const companies = Array.isArray(input.existingCompanies)
+    ? (input.existingCompanies as Company[])
+    : await listAdminCompanies();
   const provided = optionalText(input.companyNumber);
   const companyNumber = provided || allocateNextCompanyNumber(companies);
 
@@ -262,6 +271,16 @@ export async function createAdminCompany(input: Record<string, unknown>) {
   const item = await createListItemByKey("company", payload);
   const mapped = mapCompanyFields(item.id, item.fields);
   if (!mapped) throw new Error("Created company could not be mapped.");
+
+  const skipFolders =
+    input.skipDocumentFolders === true ||
+    input.skipDocumentFolders === "true" ||
+    input.bulkMode === true ||
+    input.bulkMode === "true";
+
+  if (skipFolders) {
+    return { ...mapped, folderWarning: undefined };
+  }
 
   const { ensureCompanyDocumentFolders } = await import(
     "@/lib/services/customerDocumentsFolderService"
@@ -670,16 +689,33 @@ async function applyWorkforceDepartmentLookup(
     createIfMissing?: boolean;
     departments?: DepartmentRef[];
     companyId?: string | null;
+    companyName?: string | null;
+    /** Prefetched company departments — avoids a full Departments+Companies Graph read per row. */
+    departmentRecords?: Array<{
+      id: string;
+      name: string;
+      companyId?: string | null;
+      companyName?: string | null;
+    }>;
   },
 ): Promise<{
   departments: DepartmentRef[];
   departmentName: string | null;
+  departmentRecords: Array<{
+    id: string;
+    name: string;
+    companyId?: string | null;
+    companyName?: string | null;
+  }>;
 }> {
   // Never write free text into Lookup column Department0.
   delete payload[workforceFields.departmentText];
   delete payload[workforceFields.department];
 
   let departments = options?.departments ?? (await loadDepartments());
+  let departmentRecords = options?.departmentRecords
+    ? [...options.departmentRecords]
+    : [];
   let departmentName: string | null = null;
 
   const departmentInput =
@@ -690,35 +726,49 @@ async function applyWorkforceDepartmentLookup(
         : undefined;
 
   if (departmentInput === undefined) {
-    return { departments, departmentName: null };
+    return { departments, departmentName: null, departmentRecords };
   }
 
   const text = optionalText(departmentInput);
   if (!text) {
     payload[`${workforceFields.departmentText}LookupId`] = null;
-    return { departments, departmentName: null };
+    return { departments, departmentName: null, departmentRecords };
   }
 
   // Prefer company-scoped Departments list (Enterprise).
-  // When createIfMissing is true (Workforce form / bulk upload), create the
-  // department under that company so imports are not blocked.
   if (options?.companyId) {
-    const { resolveCompanyDepartment, listAdminDepartments } = await import(
+    const { createAdminDepartment, listAdminDepartments } = await import(
       "@/lib/services/departmentService"
     );
-    const companyDepts = await listAdminDepartments(options.companyId);
-    departments = companyDepts.map((row) => ({ id: row.id, name: row.name }));
+    let companyDepts =
+      options.departmentRecords !== undefined
+        ? departmentRecords.filter(
+            (row) =>
+              !row.companyId ||
+              row.companyId === options.companyId ||
+              !options.companyId,
+          )
+        : await listAdminDepartments(options.companyId);
+
     const createIfMissing = Boolean(options.createIfMissing);
-    const resolved =
+    let resolved =
       companyDepts.find((row) => row.id === text) ??
       companyDepts.find(
         (row) => departmentKey(row.name) === departmentKey(text),
       ) ??
-      (await resolveCompanyDepartment({
+      null;
+
+    if (!resolved && createIfMissing) {
+      resolved = await createAdminDepartment({
         name: text,
         companyId: options.companyId,
-        createIfMissing,
-      }));
+        companyName: options.companyName,
+        // Caller already scanned the in-memory company dept list.
+        skipDuplicateScan: options.departmentRecords !== undefined,
+      });
+      companyDepts = [...companyDepts, resolved];
+    }
+
     if (!resolved) {
       throw new ValidationError(
         createIfMissing
@@ -727,16 +777,10 @@ async function applyWorkforceDepartmentLookup(
       );
     }
     payload[`${workforceFields.departmentText}LookupId`] = Number(resolved.id);
-    if (!departments.some((row) => row.id === resolved.id)) {
-      departments = [
-        ...departments,
-        { id: resolved.id, name: resolved.name },
-      ];
-    }
-    return {
-      departments,
-      departmentName: resolved.name,
-    };
+    departmentName = resolved.name;
+    departments = companyDepts.map((row) => ({ id: row.id, name: row.name }));
+    departmentRecords = companyDepts;
+    return { departments, departmentName, departmentRecords };
   }
 
   let hit = findDepartment(departments, text);
@@ -753,7 +797,7 @@ async function applyWorkforceDepartmentLookup(
 
   payload[`${workforceFields.departmentText}LookupId`] = Number(hit.id);
   departmentName = hit.name;
-  return { departments, departmentName };
+  return { departments, departmentName, departmentRecords };
 }
 
 function mapWorkforce(
@@ -899,46 +943,123 @@ export async function createAdminWorkforce(input: Record<string, unknown>) {
   const candidateName = requireText(input.candidateName, "Candidate name");
   const companyName = requireText(input.companyName, "Company");
   const providedWorkforceNumber = optionalText(input.workforceNumber);
+  const providedCompanyId = optionalText(input.companyId);
+  const isBulk =
+    input.bulkMode === true ||
+    input.bulkMode === "true";
 
-  const companies = await listAdminCompanies();
-  const company =
-    companies.find(
-      (row) =>
-        row.companyName.trim().toLowerCase() ===
-        companyName.trim().toLowerCase(),
-    ) ??
-    companies.find((row) => {
-      const normalize = (value: string) =>
-        value
-          .trim()
-          .toLowerCase()
-          .replace(/\bltd\b\.?/g, "")
-          .replace(/\blimited\b/g, "")
-          .replace(/[^\w\s]/g, " ")
-          .replace(/\s+/g, " ")
-          .trim();
-      return normalize(row.companyName) === normalize(companyName);
-    }) ??
-    null;
+  let company: Company | null = null;
+
+  // Prefer explicit id from bulk / callers. Same-request SharePoint cache can
+  // miss a company that ensureCompany just created via createAdminCompany.
+  // In bulkMode, trust id + name and skip listAdminCompanies entirely.
+  if (providedCompanyId && isBulk) {
+    company = {
+      id: providedCompanyId,
+      title: companyName,
+      companyName,
+      companyNumber: optionalText(input.companyNumber),
+      companySize: null,
+      registeredAddress: null,
+      companyRegNumber: null,
+      vatNo: null,
+      telNo: null,
+      email: null,
+      mainContact: null,
+      accountsContactName: null,
+      accountsAddress: null,
+      accountsContactNumber: null,
+      accountsEmail: null,
+      notesPricesAgreed: null,
+      companyLogo: null,
+      status: "Active",
+    } satisfies Company;
+  } else if (providedCompanyId) {
+    const companies = await listAdminCompanies();
+    company =
+      companies.find((row) => row.id === providedCompanyId) ??
+      ({
+        id: providedCompanyId,
+        title: companyName,
+        companyName,
+        companyNumber: optionalText(input.companyNumber),
+        companySize: null,
+        registeredAddress: null,
+        companyRegNumber: null,
+        vatNo: null,
+        telNo: null,
+        email: null,
+        mainContact: null,
+        accountsContactName: null,
+        accountsAddress: null,
+        accountsContactNumber: null,
+        accountsEmail: null,
+        notesPricesAgreed: null,
+        companyLogo: null,
+        status: "Active",
+      } satisfies Company);
+  }
+
+  if (!company) {
+    const companies = await listAdminCompanies();
+    company =
+      companies.find(
+        (row) =>
+          row.companyName.trim().toLowerCase() ===
+          companyName.trim().toLowerCase(),
+      ) ??
+      companies.find((row) => {
+        const normalize = (value: string) =>
+          value
+            .trim()
+            .toLowerCase()
+            .replace(/\bltd\b\.?/g, "")
+            .replace(/\blimited\b/g, "")
+            .replace(/[^\w\s]/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+        return normalize(row.companyName) === normalize(companyName);
+      }) ??
+      null;
+  }
+
   if (!company) {
     throw new ValidationError(`Company "${companyName}" was not found.`);
   }
 
   let workforceNumber = providedWorkforceNumber;
   if (workforceNumber) {
-    // Bulk already allocated W##### in preview — only check that exact number.
-    const clashes = await getListItemsByKey("workforce", {
-      filter: buildSchemaFieldEqualsFilter(
-        "workforce",
-        "workforceNumber",
-        workforceNumber,
-      ),
-      top: 5,
-    });
-    if (clashes.length > 0) {
-      throw new ValidationError(
-        `Workforce number "${workforceNumber}" is already in use.`,
+    if (isBulk) {
+      // In-memory clash check only — remote Graph filter per row made 50-row
+      // imports take ~100s.
+      const known = new Set(
+        (
+          Array.isArray(input.knownWorkforceNumbers)
+            ? input.knownWorkforceNumbers
+            : []
+        )
+          .map((value) => String(value ?? "").trim().toLowerCase())
+          .filter(Boolean),
       );
+      if (known.has(workforceNumber.toLowerCase())) {
+        throw new ValidationError(
+          `Workforce number "${workforceNumber}" is already in use.`,
+        );
+      }
+    } else {
+      const clashes = await getListItemsByKey("workforce", {
+        filter: buildSchemaFieldEqualsFilter(
+          "workforce",
+          "workforceNumber",
+          workforceNumber,
+        ),
+        top: 5,
+      });
+      if (clashes.length > 0) {
+        throw new ValidationError(
+          `Workforce number "${workforceNumber}" is already in use.`,
+        );
+      }
     }
   } else {
     const existingWorkforce = await listAdminWorkforce();
@@ -974,14 +1095,31 @@ export async function createAdminWorkforce(input: Record<string, unknown>) {
   const createIfMissing =
     input.createMissingPermissionPeople !== false &&
     input.createMissingPermissionPeople !== "false";
+  const seededPeople = Array.isArray(input.permissionPeople)
+    ? (input.permissionPeople as PermissionPersonRef[])
+    : undefined;
+  const seededDepartments = Array.isArray(input.departmentRecords)
+    ? (input.departmentRecords as Array<{
+        id: string;
+        name: string;
+        companyId?: string | null;
+        companyName?: string | null;
+      }>)
+    : undefined;
   const personLookups = await applyWorkforcePersonLookups(payload, input, {
     companyId: company.id,
     createIfMissing,
+    people: seededPeople,
   });
   const departmentLookups = await applyWorkforceDepartmentLookup(
     payload,
     input,
-    { createIfMissing, companyId: company.id },
+    {
+      createIfMissing,
+      companyId: company.id,
+      companyName: company.companyName,
+      departmentRecords: seededDepartments,
+    },
   );
 
   const item = await createListItemByKey("workforce", payload);
@@ -1092,6 +1230,9 @@ export async function createAdminWorkforce(input: Record<string, unknown>) {
     ...mapped,
     folderWarning,
     matrixSeedWarning,
+    // Bulk importers reuse this to avoid reloading Permissions after every row.
+    permissionPeople: personLookups.people,
+    departmentRecords: departmentLookups.departmentRecords,
   };
 }
 
@@ -1165,7 +1306,11 @@ export async function updateAdminWorkforce(
   let companyIdForPeople: string | null =
     extractLookupId(existing.fields, workforceFields.companyName) ?? null;
 
-  if (input.companyName !== undefined) {
+  const providedCompanyId = optionalText(input.companyId);
+  if (providedCompanyId) {
+    payload.CompanyNameLookupId = Number(providedCompanyId);
+    companyIdForPeople = providedCompanyId;
+  } else if (input.companyName !== undefined) {
     const companyName = optionalText(input.companyName);
     if (companyName) {
       const companies = await listAdminCompanies();
@@ -1185,14 +1330,31 @@ export async function updateAdminWorkforce(
   const createIfMissing =
     input.createMissingPermissionPeople !== false &&
     input.createMissingPermissionPeople !== "false";
+  const seededPeople = Array.isArray(input.permissionPeople)
+    ? (input.permissionPeople as PermissionPersonRef[])
+    : undefined;
+  const seededDepartments = Array.isArray(input.departmentRecords)
+    ? (input.departmentRecords as Array<{
+        id: string;
+        name: string;
+        companyId?: string | null;
+        companyName?: string | null;
+      }>)
+    : undefined;
   const personLookups = await applyWorkforcePersonLookups(payload, input, {
     companyId: companyIdForPeople,
     createIfMissing,
+    people: seededPeople,
   });
   const departmentLookups = await applyWorkforceDepartmentLookup(
     payload,
     input,
-    { createIfMissing, companyId: companyIdForPeople },
+    {
+      createIfMissing,
+      companyId: companyIdForPeople,
+      companyName: optionalText(input.companyName),
+      departmentRecords: seededDepartments,
+    },
   );
 
   const item = await updateListItemFieldsByKey("workforce", id, payload);
@@ -4374,8 +4536,10 @@ function mapPermission(item: SharePointListItem): AdminPermissionRecord | null {
 export async function listAdminPermissions(
   companies?: Awaited<ReturnType<typeof listAdminCompanies>>,
 ) {
+  // Uncached: admin delete/save must never re-serve a removed Permissions row.
+  const listId = getSharePointListId("permissions");
   const [items, companyRows] = await Promise.all([
-    getListItemsByKey("permissions", { top: 5000 }),
+    getListItems(listId, { top: 5000 }),
     companies ? Promise.resolve(companies) : listAdminCompanies(),
   ]);
   const companyNameById = new Map(
@@ -4710,9 +4874,12 @@ export async function deleteAdminPermission(id: string): Promise<void> {
     throw new ValidationError("Permission id is required.");
   }
 
-  const existing = await getListItemByKey("permissions", trimmed);
+  // Uncached existence check — cached nulls used to early-return "success"
+  // while SharePoint still had the row (then refresh brought it back).
+  const listId = getSharePointListId("permissions");
+  const existing = await getListItemById(listId, trimmed);
   if (!existing) {
-    // Idempotent: UI may retry after a partial success.
+    revalidateSharePointList("permissions");
     return;
   }
 
@@ -4746,6 +4913,16 @@ export async function deleteAdminPermission(id: string): Promise<void> {
           : `Could not delete this permission. ${message}`,
     );
   }
+
+  // Prove the Graph delete/recycle stuck before telling the UI it worked.
+  const stillThere = await getListItemById(listId, trimmed);
+  if (stillThere) {
+    throw new ValidationError(
+      "SharePoint still has this Permissions row after delete. It may be locked by Restrict Delete or a retention rule — check linked Workforce Training manager / Supervisor fields, then retry.",
+    );
+  }
+  revalidateSharePointList("permissions");
+  revalidatePath("/admin/permissions");
 }
 
 /**

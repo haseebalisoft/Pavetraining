@@ -429,7 +429,7 @@ export function TrainingMatrixView({
           <option value="expired">Expired</option>
           <option value="within-3m">Expiring within 3 months</option>
           <option value="within-6m">Expiring within 6 months</option>
-          <option value="6m-plus">6 months or more / in date</option>
+          <option value="6m-plus">6–9 months and beyond / in date</option>
           <option value="review">Records to Review</option>
         </select>
       </label>

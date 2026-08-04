@@ -88,26 +88,43 @@ export async function listAdminDepartments(
 export async function createAdminDepartment(input: {
   name: string;
   companyId: string;
+  /** Optional when company was created earlier in the same request (cache lag). */
+  companyName?: string | null;
+  /** When true, skip a second Departments list scan (caller already checked). */
+  skipDuplicateScan?: boolean;
 }): Promise<AdminDepartmentRecord> {
   const name = input.name.trim();
   const companyId = input.companyId.trim();
   if (!name) throw new ValidationError("Department name is required.");
   if (!companyId) throw new ValidationError("Company is required.");
 
-  const companies = await getAllCompanies();
-  const company = companies.find((row) => row.id === companyId);
+  const companies = input.companyName?.trim()
+    ? null
+    : await getAllCompanies();
+  const company =
+    (companies?.find((row) => row.id === companyId) ?? null) ||
+    (input.companyName?.trim()
+      ? {
+          id: companyId,
+          companyName: input.companyName.trim(),
+        }
+      : null);
   if (!company) {
     throw new ValidationError("Company was not found.");
   }
 
-  const existing = await listAdminDepartments(companyId);
-  if (existing.length >= MAX_DEPARTMENTS_PER_COMPANY) {
-    throw new ValidationError(
-      `This company already has ${MAX_DEPARTMENTS_PER_COMPANY} departments (maximum).`,
-    );
-  }
-  if (existing.some((row) => departmentKey(row.name) === departmentKey(name))) {
-    throw new ValidationError(`Department "${name}" already exists for this company.`);
+  if (!input.skipDuplicateScan) {
+    const existing = await listAdminDepartments(companyId);
+    if (existing.length >= MAX_DEPARTMENTS_PER_COMPANY) {
+      throw new ValidationError(
+        `This company already has ${MAX_DEPARTMENTS_PER_COMPANY} departments (maximum).`,
+      );
+    }
+    if (existing.some((row) => departmentKey(row.name) === departmentKey(name))) {
+      throw new ValidationError(
+        `Department "${name}" already exists for this company.`,
+      );
+    }
   }
 
   const payload: SharePointFields = toSharePointFields("departments", {
@@ -117,7 +134,10 @@ export async function createAdminDepartment(input: {
   payload[`${fields.company}LookupId`] = Number(companyId);
 
   const item = await createListItemByKey("departments", payload);
-  const mapped = mapDepartment(item, new Map([[company.id, company.companyName]]));
+  const mapped = mapDepartment(
+    item,
+    new Map([[company.id, company.companyName]]),
+  );
   if (!mapped) throw new Error("Created department could not be mapped.");
   return mapped;
 }
@@ -173,6 +193,7 @@ export async function resolveCompanyDepartment(input: {
   name: string;
   companyId: string | null | undefined;
   createIfMissing?: boolean;
+  companyName?: string | null;
 }): Promise<AdminDepartmentRecord | null> {
   const name = input.name.trim();
   if (!name) return null;
@@ -182,5 +203,9 @@ export async function resolveCompanyDepartment(input: {
     rows.find((row) => departmentKey(row.name) === departmentKey(name)) ?? null;
   if (hit) return hit;
   if (!input.createIfMissing || !companyId) return null;
-  return createAdminDepartment({ name, companyId });
+  return createAdminDepartment({
+    name,
+    companyId,
+    companyName: input.companyName,
+  });
 }

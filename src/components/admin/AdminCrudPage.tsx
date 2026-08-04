@@ -484,16 +484,31 @@ export function AdminCrudPage<T extends { id: string }>({
         next.delete(id);
         return next;
       });
+      // Drop locally first so a stale list payload cannot put the row back.
+      setRows((current) => {
+        const next = current.filter((row) => row.id !== id);
+        onRowsChange?.(next);
+        return next;
+      });
       if (editing?.id === id) {
         setDrawerOpen(false);
         setEditing(null);
       }
+      // Reload, then force-drop the id again (guards against cache races).
       await load();
+      setRows((current) => {
+        const next = current.filter((row) => row.id !== id);
+        onRowsChange?.(next);
+        return next;
+      });
+      router.refresh();
     } catch (error) {
       pushToast(
         error instanceof Error ? error.message : "Delete failed",
         "error",
       );
+      // Put fresh SharePoint truth back if delete failed mid-flight.
+      await load();
     } finally {
       setDeleting(false);
     }

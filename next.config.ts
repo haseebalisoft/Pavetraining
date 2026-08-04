@@ -27,7 +27,8 @@ const nextConfig: NextConfig = {
     // Values are in seconds; kept modest so admins editing data don't see
     // stale rows for long (server-side SharePoint cache TTL is ~45s).
     staleTimes: {
-      dynamic: 30,
+      // Keep short — admin delete/save must not reappear from router cache.
+      dynamic: 0,
       static: 180,
     },
   },

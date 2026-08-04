@@ -19,7 +19,7 @@ type TopLink = { href: string; label: string; exact?: boolean };
 const PRIMARY_LINKS: TopLink[] = [
   { href: "/customer", label: "Training Matrix", exact: true },
   { href: "/customer/dashboard", label: "Dashboard" },
-  { href: "/customer/courses", label: "Courses" },
+  { href: "/customer/courses", label: "Training Delivery" },
   { href: "/customer/candidates", label: "Candidates" },
 ];
 

@@ -27,11 +27,15 @@ export function cachedSharePointRead<T>(
   })();
 }
 
-/** Mark cached SharePoint list data stale after a write. */
+/** Mark cached SharePoint list data stale after a write.
+ * Use expire:0 so the next read cannot keep serving pre-delete rows
+ * (profile "max" is stale-while-revalidate and caused deleted Permissions
+ * to vanish briefly then reappear on refresh).
+ */
 export function revalidateSharePointList(
   listKey: SharePointListKey | string,
 ): void {
-  revalidateTag(sharePointListTag(listKey), "max");
+  revalidateTag(sharePointListTag(listKey), { expire: 0 });
 }
 
 export function revalidateSharePointLists(

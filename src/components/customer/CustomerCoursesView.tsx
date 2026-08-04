@@ -60,11 +60,11 @@ export function CustomerCoursesView({
   return (
     <div>
       <CustomerPageHeader
-        title="PAVE Training Courses"
-        subtitle="Everything PAVE can deliver — browse the full course list, plus NPORS objectives and site requirements documents."
+        title="Training Delivery"
+        subtitle="Browse PAVE brochures and course information for NPORS, EUSR, Streetworks, and NVQ — plus objectives and site requirements documents."
         breadcrumbs={[
           { label: "Customer", href: "/customer" },
-          { label: "Courses" },
+          { label: "Training Delivery" },
         ]}
       />
 
@@ -72,7 +72,7 @@ export function CustomerCoursesView({
         Shared with <strong>{companyName}</strong>
       </p>
 
-      <div className={styles.viewToggle} role="tablist" aria-label="Courses sections">
+      <div className={styles.viewToggle} role="tablist" aria-label="Training Delivery sections">
         <button
           type="button"
           role="tab"

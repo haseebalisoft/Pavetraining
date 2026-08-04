@@ -1,5 +1,6 @@
 import "server-only";
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { ResponseType } from "@microsoft/microsoft-graph-client";
 
 import {
@@ -470,6 +471,59 @@ export async function getListItemFileContent(
 }
 
 /**
+ * Request-scoped bulk write batching. Must NOT use a module-level flag —
+ * a stuck `true` after a crashed import caused deletes to skip
+ * revalidateTag, so Permissions rows vanished then reappeared on refresh.
+ */
+const bulkWriteStore = new AsyncLocalStorage<{
+  pending: Set<SharePointListKey>;
+}>();
+
+/**
+ * Run `fn` while deferring SharePoint cache revalidate to a single flush
+ * at the end (bulk workforce commit). Concurrent non-bulk requests still
+ * revalidate immediately.
+ */
+export async function withBulkSharePointWrites<T>(
+  fn: () => Promise<T>,
+): Promise<T> {
+  const pending = new Set<SharePointListKey>();
+  return bulkWriteStore.run({ pending }, async () => {
+    try {
+      return await fn();
+    } finally {
+      for (const listKey of pending) {
+        revalidateSharePointList(listKey);
+      }
+      pending.clear();
+    }
+  });
+}
+
+/** @deprecated Prefer withBulkSharePointWrites — kept for call-site migration. */
+export function beginBulkSharePointWrites(): void {
+  // Intentionally no-op for module-level state. Callers should use
+  // withBulkSharePointWrites. If an old process left cache sticky, force flush.
+  console.warn(
+    "[sharePoint] beginBulkSharePointWrites is deprecated; use withBulkSharePointWrites",
+  );
+}
+
+/** @deprecated Prefer withBulkSharePointWrites */
+export function endBulkSharePointWrites(): void {
+  // no-op
+}
+
+function markListMutated(listKey: SharePointListKey): void {
+  const store = bulkWriteStore.getStore();
+  if (store) {
+    store.pending.add(listKey);
+    return;
+  }
+  revalidateSharePointList(listKey);
+}
+
+/**
  * Creates a SharePoint list item. `fields` must use SharePoint internal names.
  */
 export async function createListItemByKey(
@@ -488,7 +542,7 @@ export async function createListItemByKey(
     fields?: SharePointFields;
   };
 
-  revalidateSharePointList(listKey);
+  markListMutated(listKey);
 
   return {
     id: String(created.id),
@@ -499,11 +553,13 @@ export async function createListItemByKey(
 
 /**
  * Updates fields on an existing SharePoint list item.
+ * `skipReload`: skip post-patch GET (bulk lookup clears) — still invalidates cache.
  */
 export async function updateListItemFieldsByKey(
   listKey: SharePointListKey,
   itemId: string,
   fields: SharePointFields,
+  options?: { skipReload?: boolean },
 ): Promise<SharePointListItem> {
   const siteRoot = getSharePointSiteApiRoot();
   const listId = getSharePointListId(listKey);
@@ -513,9 +569,18 @@ export async function updateListItemFieldsByKey(
     .api(`${siteRoot}/lists/${listId}/items/${itemId}/fields`)
     .patch(fields);
 
+  markListMutated(listKey);
+
+  if (options?.skipReload) {
+    return {
+      id: String(itemId),
+      fields,
+      createdDateTime: null,
+    };
+  }
+
   // Bypass read cache so the caller gets post-write fields immediately.
   const refreshed = await fetchListItemByIdUncached(listId, itemId);
-  revalidateSharePointList(listKey);
 
   if (!refreshed) {
     throw new Error(`Updated item ${itemId} could not be reloaded.`);
@@ -543,7 +608,7 @@ export async function deleteListItemByKey(
 
   try {
     await client.api(itemPath).delete();
-    revalidateSharePointList(listKey);
+    markListMutated(listKey);
     return;
   } catch (error: unknown) {
     const status =
@@ -556,14 +621,14 @@ export async function deleteListItemByKey(
 
     // Already gone — treat as success so the UI can refresh cleanly.
     if (status === 404) {
-      revalidateSharePointList(listKey);
+      markListMutated(listKey);
       return;
     }
 
     // Some tenants block direct delete but allow recycle-bin soft delete.
     try {
       await client.api(`${itemPath}/recycle`).post({});
-      revalidateSharePointList(listKey);
+      markListMutated(listKey);
       return;
     } catch (recycleError: unknown) {
       const recycleStatus =
@@ -574,7 +639,7 @@ export async function deleteListItemByKey(
           ? (recycleError as { statusCode: number }).statusCode
           : null;
       if (recycleStatus === 404) {
-        revalidateSharePointList(listKey);
+        markListMutated(listKey);
         return;
       }
 

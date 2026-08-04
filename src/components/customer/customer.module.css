@@ -1590,6 +1590,32 @@
   min-width: 42rem;
 }
 
+.candidatesWideTable {
+  min-width: 72rem;
+}
+
+.cardExpiryCell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.28rem;
+  min-width: 6.5rem;
+}
+
+.cardNumber {
+  font-weight: 600;
+  font-size: var(--pave-font-size-body);
+  line-height: 1.25;
+  word-break: break-word;
+}
+
+.cardExtra {
+  font-size: var(--pave-font-size-caption);
+  line-height: 1.3;
+  color: var(--cust-muted);
+  word-break: break-word;
+}
+
 .dataTable th {
   text-align: left;
   padding: 0.75rem 0.9rem;

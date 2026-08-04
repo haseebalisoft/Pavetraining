@@ -5,6 +5,7 @@ import { allocateNextWorkforceNumber } from "@/lib/workforceNumber";
 import {
   createAdminCompany,
   createAdminWorkforce,
+  ensurePermissionPerson,
   findPermissionPerson,
   listAdminCompanies,
   listAdminWorkforce,
@@ -13,6 +14,9 @@ import {
   type AdminWorkforceRecord,
   type PermissionPersonRef,
 } from "@/lib/services/adminCrudService";
+import {
+  withBulkSharePointWrites,
+} from "@/lib/services/sharePointListService";
 import {
   findCandidateDuplicate,
   findCompanyByName,
@@ -170,7 +174,8 @@ function workforceWritePayload(
   // Department is a Lookup → Departments list (resolved in create/update).
   assign("department", fields.department);
   assign("departmentText", fields.department);
-  assign("status", fields.status ?? "Active");
+  // SharePoint Workforce Status choices: Active | inactive (blank Excel → Active).
+  payload.status = fields.status?.trim() || "Active";
   assign("trainingManager", fields.trainingManager);
   assign("supervisor", fields.supervisor);
   assign("candidateAddress", fields.candidateAddress);
@@ -405,8 +410,38 @@ async function ensureCompany(
     companyNumber:
       companyNumber?.trim() || allocateNextCompanyNumber(companies),
     status: "Active",
+    existingCompanies: companies,
+    // Bulk: skip OneDrive/SharePoint folder provisioning per new company.
+    bulkMode: true,
   });
   return { companies: [...companies, created], company: created };
+}
+
+/** Bound parallel Graph POSTs — ~5× faster than serial for workforce creates. */
+const BULK_CREATE_CONCURRENCY = 5;
+
+async function mapPool<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) return [];
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(concurrency, items.length);
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (true) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= items.length) return;
+        results[index] = await mapper(items[index], index);
+      }
+    }),
+  );
+
+  return results;
 }
 
 export async function previewCandidateImport(
@@ -441,18 +476,51 @@ export async function commitCandidateImport(input: {
   duplicateMode: BulkDuplicateMode;
 }): Promise<BulkPreviewRow[]> {
   let companies = await listAdminCompanies();
-  const [workforce, initialPeople] = await Promise.all([
+  const [workforce, initialPeople, initialDepartments] = await Promise.all([
     listAdminWorkforce(),
     loadPermissionPeople(),
+    import("@/lib/services/departmentService").then((mod) =>
+      mod.listAdminDepartments(),
+    ),
   ]);
   let people = initialPeople;
+  let departmentRecords = initialDepartments.map((row) => ({
+    id: row.id,
+    name: row.name,
+    companyId: row.companyId,
+    companyName: row.companyName,
+  }));
   const liveWorkforce = [...workforce];
+  const knownWorkforceNumbers = new Set(
+    liveWorkforce
+      .map((row) => row.workforceNumber?.trim().toLowerCase())
+      .filter((value): value is string => Boolean(value)),
+  );
   const results: BulkPreviewRow[] = [];
   const allocatedWorkforceNumbers: string[] = [];
 
+  type PendingCreate = {
+    index: number;
+    validated: BulkPreviewRow;
+    company: Company;
+    companyName: string;
+    extraMessages: string[];
+  };
+  type PendingUpdate = {
+    index: number;
+    validated: BulkPreviewRow;
+    company: Company;
+    companyName: string;
+    entityId: string;
+    extraMessages: string[];
+  };
+
+  const pendingCreates: PendingCreate[] = [];
+  const pendingUpdates: PendingUpdate[] = [];
+
+  // Phase 1: validate + ensure companies (serial — unique company names).
   for (const row of input.rows) {
     const fields = mapCandidateFields(row.fields);
-    // Prefer already-normalized preview fields when present.
     for (const [key, value] of Object.entries(row.fields)) {
       if (value != null && value !== "") {
         fields[key] = value;
@@ -463,7 +531,6 @@ export async function commitCandidateImport(input: {
     fields.swqrExpiry = normalizeDateValue(fields.swqrExpiry);
     fields.eusrExpiry = normalizeDateValue(fields.eusrExpiry);
 
-    // Drop blank workforce number so validate/create can allocate the next W#####.
     if (!fields.workforceNumber?.trim()) {
       fields.workforceNumber = null;
     }
@@ -495,97 +562,86 @@ export async function commitCandidateImport(input: {
       );
       companies = ensured.companies;
       const companyName = ensured.company.companyName;
-
-      const runCreate = async (extraMessages: string[]) => {
-        const hadTm = Boolean(validated.fields.trainingManager?.trim());
-        const hadSup = Boolean(validated.fields.supervisor?.trim());
-        const created = await createAdminWorkforce({
-          ...workforceWritePayload(validated.fields, companyName),
-          createMissingPermissionPeople: true,
-          // Bulk: skip per-row Graph folder + matrix seed (was ~minutes for big files).
-          bulkMode: true,
-        });
-        liveWorkforce.push(created);
-        if (hadTm || hadSup) {
-          people = await loadPermissionPeople();
-        }
-        results.push({
-          ...validated,
-          status: "Imported",
-          matchedEntityId: created.id,
-          matchedEntityName: created.candidateName,
-          resolvedCompanyName: companyName,
-          messages: [...validated.messages, ...extraMessages],
-        });
-      };
-
-      const runUpdate = async (id: string, extraMessages: string[]) => {
-        const hadTm = Boolean(validated.fields.trainingManager?.trim());
-        const hadSup = Boolean(validated.fields.supervisor?.trim());
-        const updated = await updateAdminWorkforce(id, {
-          ...buildNonBlankUpdate(validated.fields, companyName),
-          createMissingPermissionPeople: true,
-        });
-        const idx = liveWorkforce.findIndex((w) => w.id === updated.id);
-        if (idx >= 0) liveWorkforce[idx] = updated;
-        if (hadTm || hadSup) {
-          people = await loadPermissionPeople();
-        }
-        results.push({
-          ...validated,
-          status: "Imported",
-          resolvedCompanyName: companyName,
-          messages: [...validated.messages, ...extraMessages],
-        });
-      };
+      const resultIndex = results.length;
+      // Placeholder so result order matches input order for non-error rows.
+      results.push({ ...validated, status: validated.status });
 
       if (
         validated.status === "Warning" &&
         validated.duplicateMatch === "nameCompany"
       ) {
         if (input.duplicateMode === "update" && validated.matchedEntityId) {
-          await runUpdate(
-            validated.matchedEntityId,
-            ["Updated existing candidate (name + company match)."],
-          );
+          pendingUpdates.push({
+            index: resultIndex,
+            validated,
+            company: ensured.company,
+            companyName,
+            entityId: validated.matchedEntityId,
+            extraMessages: [
+              "Updated existing candidate (name + company match).",
+            ],
+          });
           continue;
         }
-        await runCreate([
-          "Created new candidate (soft name match was a warning only).",
-        ]);
+        pendingCreates.push({
+          index: resultIndex,
+          validated,
+          company: ensured.company,
+          companyName,
+          extraMessages: [
+            "Created new candidate (soft name match was a warning only).",
+          ],
+        });
         continue;
       }
 
       if (validated.status === "Duplicate") {
         if (input.duplicateMode === "skip") {
-          results.push({
+          results[resultIndex] = {
             ...validated,
             status: "Skipped",
             messages: [...validated.messages, "Skipped duplicate (default)."],
-          });
+          };
           continue;
         }
         if (input.duplicateMode === "update" && validated.matchedEntityId) {
-          await runUpdate(validated.matchedEntityId, [
-            "Updated existing candidate.",
-          ]);
+          pendingUpdates.push({
+            index: resultIndex,
+            validated,
+            company: ensured.company,
+            companyName,
+            entityId: validated.matchedEntityId,
+            extraMessages: ["Updated existing candidate."],
+          });
           continue;
         }
         if (input.duplicateMode === "create") {
-          await runCreate([
-            "Created new candidate (admin confirmed create despite duplicate).",
-          ]);
+          pendingCreates.push({
+            index: resultIndex,
+            validated,
+            company: ensured.company,
+            companyName,
+            extraMessages: [
+              "Created new candidate (admin confirmed create despite duplicate).",
+            ],
+          });
           continue;
         }
-        results.push({
+        results[resultIndex] = {
           ...validated,
           status: "Skipped",
           messages: [...validated.messages, "Skipped duplicate."],
-        });
+        };
         continue;
       }
 
-      await runCreate(["Imported successfully."]);
+      pendingCreates.push({
+        index: resultIndex,
+        validated,
+        company: ensured.company,
+        companyName,
+        extraMessages: ["Imported successfully."],
+      });
     } catch (error) {
       results.push({
         ...validated,
@@ -599,6 +655,137 @@ export async function commitCandidateImport(input: {
       });
     }
   }
+
+  await withBulkSharePointWrites(async () => {
+    // Phase 2: pre-create unique TMs / supervisors / departments (serial).
+    const { createAdminDepartment } = await import(
+      "@/lib/services/departmentService"
+    );
+    const deptKey = (value: string) =>
+      value.trim().toLowerCase().replace(/\s+/g, " ");
+
+    for (const job of [...pendingCreates, ...pendingUpdates]) {
+      const tm = job.validated.fields.trainingManager?.trim();
+      if (tm && !findPermissionPerson(people, tm)) {
+        const ensured = await ensurePermissionPerson({
+          displayName: tm,
+          roleType: "Admin",
+          companyId: job.company.id,
+          people,
+        });
+        people = ensured.people;
+      }
+      const supervisor = job.validated.fields.supervisor?.trim();
+      if (supervisor && !findPermissionPerson(people, supervisor)) {
+        const ensured = await ensurePermissionPerson({
+          displayName: supervisor,
+          roleType: "Customer",
+          companyId: job.company.id,
+          people,
+        });
+        people = ensured.people;
+      }
+      const department = job.validated.fields.department?.trim();
+      if (department) {
+        const hit = departmentRecords.find(
+          (row) =>
+            deptKey(row.name) === deptKey(department) &&
+            (!row.companyId || row.companyId === job.company.id),
+        );
+        if (!hit) {
+          const created = await createAdminDepartment({
+            name: department,
+            companyId: job.company.id,
+            companyName: job.companyName,
+            skipDuplicateScan: true,
+          });
+          departmentRecords = [
+            ...departmentRecords,
+            {
+              id: created.id,
+              name: created.name,
+              companyId: created.companyId,
+              companyName: created.companyName,
+            },
+          ];
+        }
+      }
+    }
+
+    // Phase 3a: updates stay sequential (rarer path).
+    for (const job of pendingUpdates) {
+      try {
+        const updated = await updateAdminWorkforce(job.entityId, {
+          ...buildNonBlankUpdate(job.validated.fields, job.companyName),
+          companyId: job.company.id,
+          createMissingPermissionPeople: true,
+          permissionPeople: people,
+          departmentRecords,
+        });
+        const idx = liveWorkforce.findIndex((w) => w.id === updated.id);
+        if (idx >= 0) liveWorkforce[idx] = updated;
+        results[job.index] = {
+          ...job.validated,
+          status: "Imported",
+          resolvedCompanyName: job.companyName,
+          messages: [...job.validated.messages, ...job.extraMessages],
+        };
+      } catch (error) {
+        results[job.index] = {
+          ...job.validated,
+          status: "Error",
+          messages: [
+            ...job.validated.messages,
+            error instanceof Error
+              ? error.message
+              : "Failed to import candidate.",
+          ],
+        };
+      }
+    }
+
+    // Phase 3b: parallel workforce creates (main speed win).
+    const knownSnapshot = Array.from(knownWorkforceNumbers);
+    await mapPool(pendingCreates, BULK_CREATE_CONCURRENCY, async (job) => {
+      try {
+        const created = await createAdminWorkforce({
+          ...workforceWritePayload(job.validated.fields, job.companyName),
+          companyId: job.company.id,
+          companyNumber:
+            job.company.companyNumber ??
+            job.validated.fields.companyNumber ??
+            null,
+          createMissingPermissionPeople: true,
+          permissionPeople: people,
+          departmentRecords,
+          knownWorkforceNumbers: knownSnapshot,
+          bulkMode: true,
+        });
+        liveWorkforce.push(created);
+        const wfNum = created.workforceNumber?.trim().toLowerCase();
+        if (wfNum) knownWorkforceNumbers.add(wfNum);
+        results[job.index] = {
+          ...job.validated,
+          status: "Imported",
+          matchedEntityId: created.id,
+          matchedEntityName: created.candidateName,
+          resolvedCompanyName: job.companyName,
+          messages: [...job.validated.messages, ...job.extraMessages],
+        };
+      } catch (error) {
+        results[job.index] = {
+          ...job.validated,
+          status: "Error",
+          messages: [
+            ...job.validated.messages,
+            error instanceof Error
+              ? error.message
+              : "Failed to import candidate.",
+          ],
+        };
+      }
+    });
+  });
 
   return results;
 }

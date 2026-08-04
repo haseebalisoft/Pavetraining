@@ -243,19 +243,17 @@ function mapPermissionItem(
   const candidateScopeName =
     asString(fields[permissionFields.name])?.trim() || null;
 
-  // TM with department coverage → portal sees only those departments (not whole company).
+  // Access Scope is authoritative for Training Managers:
+  // - Full Company → whole company workforce / matrix
+  // - Department Only → departmentScopes (empty scopes ⇒ nothing)
+  // Do NOT downgrade Full Company just because Departments is filled —
+  // that field is often populated as coverage metadata and was hiding
+  // newly added workforce from the customer portal.
   let normalizedAccessScope = normalizeAccessScopeValue(
     resolvedAccessScope,
     customerRole,
     isAdminOnly,
   );
-  if (
-    customerRole === "TrainingManager" &&
-    departmentScopes.length > 0 &&
-    normalizedAccessScope === "Company"
-  ) {
-    normalizedAccessScope = "Department";
-  }
   if (
     customerRole === "TrainingManager" &&
     resolvedAccessScope.toLowerCase().includes("department") &&

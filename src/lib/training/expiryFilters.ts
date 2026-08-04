@@ -271,19 +271,19 @@ export const EXPIRY_STATUS_LEGEND: ReadonlyArray<{
     status: "valid",
     label: "Compliant",
     colour: "green",
-    description: "6 months or more remaining (181+ days; no upper limit)",
+    description: "6–9 months and beyond (181+ days) — compliant",
   },
   {
     status: "upcoming",
     label: "Expiring soon",
     colour: "amber",
-    description: "Expires in 91–180 days (within 6 months)",
+    description: "Within 3–6 months (91–180 days)",
   },
   {
     status: "urgent",
     label: "Expiring soon",
     colour: "red",
-    description: "Expires within 3 months (0–90 days)",
+    description: "Within 3 months (0–90 days)",
   },
   {
     status: "expired",
@@ -295,6 +295,6 @@ export const EXPIRY_STATUS_LEGEND: ReadonlyArray<{
     status: "missing",
     label: "Not applicable",
     colour: "grey",
-    description: "No expiry date recorded",
+    description: "No expiry date recorded — Records to Review",
   },
 ];

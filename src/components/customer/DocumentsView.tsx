@@ -82,7 +82,7 @@ export function DocumentsView({
           { label: "Documents" },
         ]}
         title="Documents"
-        subtitle="Certificates, card scans, NVQ files, brochures, and other customer-visible documents."
+        subtitle="NVQ certificates and card scans for your company’s candidates are stored here. You can download files you are allowed to see — records cannot be edited."
       />
 
       <p className={styles.companyMeta}>

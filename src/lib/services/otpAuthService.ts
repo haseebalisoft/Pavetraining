@@ -2,6 +2,10 @@ import "server-only";
 
 import { createHmac, randomInt, timingSafeEqual } from "crypto";
 
+import {
+  emailLogoHtml,
+  loadPaveLogoAttachment,
+} from "@/lib/services/notificationTemplateService";
 import { getActivePermissionByEmail } from "@/lib/services/permissionService";
 import { sendNotification } from "@/lib/services/notificationService";
 import { ValidationError } from "@/lib/services/validationService";
@@ -123,6 +127,8 @@ export async function requestEmailOtp(input: {
   // looks like phishing to junk filters (esp. Outlook).
   const loginUrl = `${portalBase}/login`;
 
+  const logo = await loadPaveLogoAttachment();
+
   const result = await sendNotification({
     type: "login_otp",
     to: email,
@@ -138,7 +144,7 @@ export async function requestEmailOtp(input: {
       "This code expires in 10 minutes.",
       "If you did not request this, you can ignore this email.",
     ].join("\n"),
-    html: `<p>Your <strong>PAVE Training Portal</strong> sign-in code is:</p>
+    html: `${emailLogoHtml()}<p>Your <strong>PAVE Training Portal</strong> sign-in code is:</p>
 <p style="font-size:28px;font-weight:700;letter-spacing:0.18em;font-family:Segoe UI,Arial,sans-serif">${code}</p>
 <p>Enter this code on the <a href="${loginUrl}">portal login page</a>.</p>
 <p>This code expires in 10 minutes.</p>
@@ -147,6 +153,7 @@ export async function requestEmailOtp(input: {
     detail: "Email OTP login code",
     fromName: "PAVE Training Portal",
     dedupeKey: `login-otp:${email}:${Math.floor(Date.now() / 60_000)}`,
+    attachments: logo ? [logo] : undefined,
   });
 
   if (

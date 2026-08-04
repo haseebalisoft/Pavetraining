@@ -132,100 +132,119 @@ export async function clearInboundLookupRefs(
 
   let cleared = 0;
 
-  for (const target of targets) {
-    for (const lookupIdField of target.lookupIdFields) {
-      const fieldInternal = lookupIdField.replace(/LookupId$/, "");
+  await Promise.all(
+    targets.flatMap((target) =>
+      target.lookupIdFields.map(async (lookupIdField) => {
+        const fieldInternal = lookupIdField.replace(/LookupId$/, "");
 
-      if (target.multi) {
+        if (target.multi) {
+          try {
+            // Multi-lookup OData filters are unreliable — scan and strip.
+            const items = await getListItemsByKey(target.listKey, { top: 5000 });
+            await Promise.all(
+              items.map(async (item) => {
+                const ids = extractMultiLookupIds(item.fields, fieldInternal);
+                if (!ids.some((id) => idsMatch(id, trimmed))) return;
+                const next = ids
+                  .filter((id) => !idsMatch(id, trimmed))
+                  .map((id) => Number(id))
+                  .filter((id) => Number.isFinite(id));
+                try {
+                  await updateListItemFieldsByKey(
+                    target.listKey,
+                    item.id,
+                    {
+                      [lookupIdField]: next.length > 0 ? next : null,
+                    },
+                    { skipReload: true },
+                  );
+                  cleared += 1;
+                } catch (error) {
+                  console.warn(
+                    `[safeDelete] clear multi ${target.listKey}#${item.id} ${lookupIdField}:`,
+                    error instanceof Error ? error.message : error,
+                  );
+                }
+              }),
+            );
+          } catch (error) {
+            console.warn(
+              `[safeDelete] multi scan ${target.listKey}.${lookupIdField}:`,
+              error instanceof Error ? error.message : error,
+            );
+          }
+          return;
+        }
+
         try {
-          // Multi-lookup OData filters are unreliable — scan and strip.
-          const items = await getListItemsByKey(target.listKey, { top: 5000 });
+          const items = await getListItemsByKey(target.listKey, {
+            filter: buildFieldLookupIdEqualsFilter(lookupIdField, numericId),
+            top: 5000,
+          });
           await Promise.all(
             items.map(async (item) => {
-              const ids = extractMultiLookupIds(item.fields, fieldInternal);
-              if (!ids.some((id) => idsMatch(id, trimmed))) return;
-              const next = ids
-                .filter((id) => !idsMatch(id, trimmed))
-                .map((id) => Number(id))
-                .filter((id) => Number.isFinite(id));
               try {
-                await updateListItemFieldsByKey(target.listKey, item.id, {
-                  [lookupIdField]: next.length > 0 ? next : null,
-                });
+                await updateListItemFieldsByKey(
+                  target.listKey,
+                  item.id,
+                  {
+                    [lookupIdField]: null,
+                  },
+                  { skipReload: true },
+                );
                 cleared += 1;
               } catch (error) {
                 console.warn(
-                  `[safeDelete] clear multi ${target.listKey}#${item.id} ${lookupIdField}:`,
+                  `[safeDelete] clear ${target.listKey}#${item.id} ${lookupIdField}:`,
                   error instanceof Error ? error.message : error,
                 );
               }
             }),
           );
         } catch (error) {
+          // Filter unsupported — fall back to full scan for this field.
           console.warn(
-            `[safeDelete] multi scan ${target.listKey}.${lookupIdField}:`,
+            `[safeDelete] filter ${target.listKey}.${lookupIdField} failed, scanning:`,
             error instanceof Error ? error.message : error,
           );
+          try {
+            const items = await getListItemsByKey(target.listKey, {
+              top: 5000,
+            });
+            await Promise.all(
+              items.map(async (item) => {
+                const id = extractLookupId(item.fields, fieldInternal);
+                if (!idsMatch(id, trimmed)) return;
+                try {
+                  await updateListItemFieldsByKey(
+                    target.listKey,
+                    item.id,
+                    {
+                      [lookupIdField]: null,
+                    },
+                    { skipReload: true },
+                  );
+                  cleared += 1;
+                } catch (patchError) {
+                  console.warn(
+                    `[safeDelete] scan-clear ${target.listKey}#${item.id}:`,
+                    patchError instanceof Error
+                      ? patchError.message
+                      : patchError,
+                  );
+                }
+              }),
+            );
+          } catch (scanError) {
+            console.warn(
+              `[safeDelete] scan ${target.listKey}.${lookupIdField}:`,
+              scanError instanceof Error ? scanError.message : scanError,
+            );
+          }
         }
-        continue;
-      }
-
-      try {
-        const items = await getListItemsByKey(target.listKey, {
-          filter: buildFieldLookupIdEqualsFilter(lookupIdField, numericId),
-          top: 5000,
-        });
-        await Promise.all(
-          items.map(async (item) => {
-            try {
-              await updateListItemFieldsByKey(target.listKey, item.id, {
-                [lookupIdField]: null,
-              });
-              cleared += 1;
-            } catch (error) {
-              console.warn(
-                `[safeDelete] clear ${target.listKey}#${item.id} ${lookupIdField}:`,
-                error instanceof Error ? error.message : error,
-              );
-            }
-          }),
-        );
-      } catch (error) {
-        // Filter unsupported — fall back to full scan for this field.
-        console.warn(
-          `[safeDelete] filter ${target.listKey}.${lookupIdField} failed, scanning:`,
-          error instanceof Error ? error.message : error,
-        );
-        try {
-          const items = await getListItemsByKey(target.listKey, { top: 5000 });
-          await Promise.all(
-            items.map(async (item) => {
-              const id = extractLookupId(item.fields, fieldInternal);
-              if (!idsMatch(id, trimmed)) return;
-              try {
-                await updateListItemFieldsByKey(target.listKey, item.id, {
-                  [lookupIdField]: null,
-                });
-                cleared += 1;
-              } catch (patchError) {
-                console.warn(
-                  `[safeDelete] scan-clear ${target.listKey}#${item.id}:`,
-                  patchError instanceof Error
-                    ? patchError.message
-                    : patchError,
-                );
-              }
-            }),
-          );
-        } catch (scanError) {
-          console.warn(
-            `[safeDelete] scan ${target.listKey}.${lookupIdField}:`,
-            scanError instanceof Error ? scanError.message : scanError,
-          );
-        }
-      }
-    }
-  }
+      }),
+    ),
+  );
 
   return cleared;
 }
