@@ -11,7 +11,6 @@ import {
   asNullableString,
   asString,
   createListItemByKey,
-  deleteListItemByKey,
   extractLookupId,
   getListItemByKey,
   getListItemsByKey,
@@ -156,7 +155,14 @@ export async function updateAdminDepartment(
 export async function deleteAdminDepartment(id: string): Promise<void> {
   const existing = await getListItemByKey("departments", id);
   if (!existing) throw new NotFoundError("Department not found.");
-  await deleteListItemByKey("departments", id);
+
+  // Workforce Department0 + Permissions DepartmentsAllowed Restrict Delete.
+  const {
+    clearInboundLookupsToDepartment,
+    safeDeleteListItem,
+  } = await import("@/lib/services/adminSafeDelete");
+  await clearInboundLookupsToDepartment(id);
+  await safeDeleteListItem("departments", id, { label: "department" });
 }
 
 /**

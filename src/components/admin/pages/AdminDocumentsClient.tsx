@@ -310,6 +310,37 @@ export function AdminDocumentsClient({
     }
   }
 
+  async function deleteDocument() {
+    if (!editing || editing.isFolder) return;
+    if (
+      !window.confirm(
+        `Delete “${editing.name}”?\n\nThis removes the file from SharePoint Customer Documents.`,
+      )
+    ) {
+      return;
+    }
+    setSaving(true);
+    setFormError(null);
+    try {
+      const response = await fetch(`/api/admin/documents/${editing.id}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        throw new Error(await readPublicApiError(response));
+      }
+      pushToast("Document deleted.");
+      setDrawerOpen(false);
+      setEditing(null);
+      await load();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Delete failed.";
+      setFormError(message);
+      pushToast(message, "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function persistBulk() {
     const ids = Array.from(selectedIds);
     if (ids.length === 0) {
@@ -653,6 +684,16 @@ export function AdminDocumentsClient({
         onClose={() => setDrawerOpen(false)}
         footer={
           <>
+            {editing && !editing.isFolder ? (
+              <button
+                type="button"
+                className={styles.dangerButton}
+                disabled={saving}
+                onClick={() => void deleteDocument()}
+              >
+                {saving ? "Working…" : "Delete"}
+              </button>
+            ) : null}
             <button
               type="button"
               className={styles.secondaryButton}

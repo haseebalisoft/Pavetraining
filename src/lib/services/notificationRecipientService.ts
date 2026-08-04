@@ -20,7 +20,11 @@ import type {
 
 const permissionFields = getSharePointFields("permissions");
 
-export type NotificationAudience = "document" | "expiry" | "admin_alert";
+export type NotificationAudience =
+  | "document"
+  | "expiry"
+  | "booking"
+  | "admin_alert";
 
 export interface NotificationRecipient {
   email: string;
@@ -222,6 +226,8 @@ export async function resolveNotificationRecipients(input: {
     if (input.audience === "expiry") {
       if (!permission.receiveExpiryNotifications) continue;
     }
+    // Booking confirmations: master customerNotificationsEnabled + Active TM
+    // only (do not reuse document opt-out).
 
     const role = permission.customerRole;
     if (role === "TrainingManager") {
@@ -276,13 +282,14 @@ export async function resolveNotificationRecipients(input: {
 
 /**
  * Active Training Managers for a company (booking confirmation audience).
+ * Uses booking audience so document-upload opt-out does not suppress these.
  */
 export async function resolveTrainingManagerRecipients(
   companyId: string,
 ): Promise<NotificationRecipient[]> {
   const all = await resolveNotificationRecipients({
     companyId,
-    audience: "document",
+    audience: "booking",
   });
   return all.filter(
     (recipient) => recipient.customerRole === "TrainingManager",

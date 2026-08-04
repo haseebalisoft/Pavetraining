@@ -28,8 +28,7 @@ export async function POST(request: Request) {
     "POST /api/admin/events",
     async (_context, req) => {
       const body = (await req.json()) as Record<string, unknown>;
-      const record = await createAdminEvent(body);
-      return { record };
+      return createAdminEvent(body);
     },
     { errorMessage: "Failed to create event" },
     request,

@@ -421,6 +421,7 @@ export function AdminMatrixClient({
         tableClassName={styles.matrixTable}
         listUrl="/api/admin/training-matrix"
         updateUrl={(id) => `/api/admin/training-matrix/${id}`}
+        deleteUrl={(id) => `/api/admin/training-matrix/${id}`}
         allowCreate={false}
         mapResponse={(payload) =>
           ((payload as { records?: AdminMatrixRecord[] }).records ?? [])

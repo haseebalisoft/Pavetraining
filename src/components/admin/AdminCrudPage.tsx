@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 import { AdminConfirm } from "@/components/admin/AdminConfirm";
@@ -144,9 +151,19 @@ interface AdminCrudPageProps<T extends { id: string }> {
   stickyColumnKey?: string;
   /** Extra table class (e.g. matrix grid layout). */
   tableClassName?: string;
+  /** Defaults merged into the create form (e.g. next company number). */
+  getCreateDefaults?: (
+    rows: T[],
+  ) => Partial<Record<string, string | boolean>>;
 }
 
 type FormState = Record<string, string | boolean>;
+
+const EMPTY_COMPANIES: Company[] = [];
+const EMPTY_WORKFORCE: AdminWorkforceOption[] = [];
+const EMPTY_PERMISSION_PEOPLE: AdminPermissionPersonOption[] = [];
+const EMPTY_DEPARTMENTS: AdminDepartmentOption[] = [];
+const EMPTY_WARNINGS: string[] = [];
 
 function toFormValue(value: unknown, type: AdminFieldType): string | boolean {
   if (typeof value === "boolean") return value;
@@ -259,10 +276,10 @@ export function AdminCrudPage<T extends { id: string }>({
   initialRows,
   mapResponse,
   onRowsChange,
-  companies = [],
-  workforce = [],
-  permissionPeople = [],
-  departments = [],
+  companies = EMPTY_COMPANIES,
+  workforce = EMPTY_WORKFORCE,
+  permissionPeople = EMPTY_PERMISSION_PEOPLE,
+  departments = EMPTY_DEPARTMENTS,
   enableCompanyFilter = false,
   getCompanyName,
   searchKeys,
@@ -274,13 +291,14 @@ export function AdminCrudPage<T extends { id: string }>({
   drawerWide = false,
   editLabel = "Edit",
   toolbarExtra,
-  warnings = [],
+  warnings = EMPTY_WARNINGS,
   extraActions,
   breadcrumbs,
   wideTable = false,
   stickyLeadColumns = false,
   stickyColumnKey,
   tableClassName,
+  getCreateDefaults,
 }: AdminCrudPageProps<T>) {
   const { pushToast } = useAdminToast();
   const router = useRouter();
@@ -300,15 +318,17 @@ export function AdminCrudPage<T extends { id: string }>({
   const [pendingSave, setPendingSave] = useState<FormState | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
-  const [livePermissionPeople, setLivePermissionPeople] =
-    useState<AdminPermissionPersonOption[]>(permissionPeople);
+  // Prefer live API refresh when opening create/edit; fall back to prop.
+  // Do not sync prop→state in an effect — unstable array identities (or
+  // default `= []`) re-trigger setState every render and hit max update depth.
+  const [permissionPeopleLive, setPermissionPeopleLive] = useState<
+    AdminPermissionPersonOption[] | null
+  >(null);
+  const livePermissionPeople = permissionPeopleLive ?? permissionPeople;
   const needsPermissionPeople = fields.some(
     (field) => Boolean(field.permissionRoleFilter),
   );
-
-  useEffect(() => {
-    setLivePermissionPeople(permissionPeople);
-  }, [permissionPeople]);
+  const openedFromQueryRef = useRef(false);
 
   const refreshPermissionPeople = useCallback(async () => {
     if (!needsPermissionPeople) return;
@@ -321,7 +341,7 @@ export function AdminCrudPage<T extends { id: string }>({
         records?: AdminPermissionPersonOption[];
       } | null;
       const records = payload?.records ?? [];
-      setLivePermissionPeople(
+      setPermissionPeopleLive(
         records.map((row) => ({
           id: row.id,
           userEmail: row.userEmail,
@@ -342,25 +362,35 @@ export function AdminCrudPage<T extends { id: string }>({
 
   function openCreate() {
     setEditing(null);
-    setForm(buildInitialForm(fields));
+    const next = buildInitialForm(fields);
+    const defaults = getCreateDefaults?.(rows) ?? {};
+    for (const [key, value] of Object.entries(defaults)) {
+      if (value !== undefined) next[key] = value;
+    }
+    setForm(next);
     setFormError(null);
     setWorkforceQuery("");
     void refreshPermissionPeople();
     setDrawerOpen(true);
   }
 
+  const createAction = searchParams.get("action");
   useEffect(() => {
-    const action = searchParams.get("action");
+    if (openedFromQueryRef.current) return;
     if (
-      allowCreate &&
-      (action === "add" || action === "create" || action === "upload")
+      !allowCreate ||
+      (createAction !== "add" &&
+        createAction !== "create" &&
+        createAction !== "upload")
     ) {
-      openCreate();
-      router.replace(pathname);
+      return;
     }
-    // Intentionally run once when action is present in the URL.
+    openedFromQueryRef.current = true;
+    openCreate();
+    router.replace(pathname);
+    // openCreate reads latest form helpers; guard ref prevents re-entry.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
+  }, [allowCreate, createAction, pathname, router]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -454,6 +484,10 @@ export function AdminCrudPage<T extends { id: string }>({
         next.delete(id);
         return next;
       });
+      if (editing?.id === id) {
+        setDrawerOpen(false);
+        setEditing(null);
+      }
       await load();
     } catch (error) {
       pushToast(
@@ -776,7 +810,14 @@ export function AdminCrudPage<T extends { id: string }>({
                     {column.header}
                   </th>
                 ))}
-                <th scope="col">Actions</th>
+                <th
+                  scope="col"
+                  className={
+                    updateUrl || deleteUrl ? styles.stickyActionsCell : undefined
+                  }
+                >
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -807,7 +848,13 @@ export function AdminCrudPage<T extends { id: string }>({
                       {column.render(row)}
                     </td>
                   ))}
-                  <td>
+                  <td
+                    className={
+                      updateUrl || deleteUrl
+                        ? styles.stickyActionsCell
+                        : undefined
+                    }
+                  >
                     {updateUrl ? (
                       <button
                         type="button"
@@ -853,17 +900,30 @@ export function AdminCrudPage<T extends { id: string }>({
         wide={drawerWide}
         footer={
           <>
+            {editing && deleteUrl ? (
+              <button
+                type="button"
+                className={styles.linkButtonDanger}
+                disabled={saving || deleting}
+                onClick={() => {
+                  void deleteOne(editing.id);
+                }}
+              >
+                {deleting ? "Deleting…" : "Delete"}
+              </button>
+            ) : null}
             <button
               type="button"
               className={styles.secondaryButton}
               onClick={() => setDrawerOpen(false)}
+              disabled={saving || deleting}
             >
               Cancel
             </button>
             <button
               type="button"
               className={styles.primaryButton}
-              disabled={saving}
+              disabled={saving || deleting}
               onClick={requestSave}
             >
               {saving ? "Saving…" : "Save"}
@@ -1009,17 +1069,27 @@ export function AdminCrudPage<T extends { id: string }>({
                           ...current,
                           candidateName: "",
                           companyName: current.companyName,
+                          companyNumber: current.companyNumber,
                           nporsNumber: "",
                           eusrNumber: "",
                           swqrNumber: "",
                           inHouseCertificationNumber: "",
+                          workforceNumber: "",
                         }));
                         return;
                       }
+                      const companyMatch = companies.find(
+                        (company) =>
+                          company.companyName.trim().toLowerCase() ===
+                          hit.companyName.trim().toLowerCase(),
+                      );
                       setForm((current) => ({
                         ...current,
                         candidateName: hit.candidateName,
                         companyName: hit.companyName,
+                        companyNumber:
+                          companyMatch?.companyNumber?.trim() ||
+                          String(current.companyNumber ?? ""),
                         // Always refresh projected Workforce numbers for the chosen candidate.
                         nporsNumber: hit.nporsNumbers || "",
                         eusrNumber: hit.eusrNumber || "",
@@ -1372,6 +1442,27 @@ export function AdminCrudPage<T extends { id: string }>({
                           next.supervisor = "";
                           next.department = "";
                           next.departmentsAllowed = "";
+                        }
+
+                        if (field.name === "companyName") {
+                          const companyMatch = companies.find(
+                            (company) =>
+                              company.companyName.trim().toLowerCase() ===
+                              value.trim().toLowerCase(),
+                          );
+                          next.companyNumber =
+                            companyMatch?.companyNumber?.trim() || "";
+                        }
+
+                        if (field.name === "companyId") {
+                          const companyMatch = companies.find(
+                            (company) => company.id === value,
+                          );
+                          next.companyNumber =
+                            companyMatch?.companyNumber?.trim() || "";
+                          if (companyMatch) {
+                            next.companyName = companyMatch.companyName;
+                          }
                         }
 
                         if (field.name !== "companyName") {

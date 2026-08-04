@@ -142,6 +142,7 @@ export function CustomerTopNav({
   const [accountOpen, setAccountOpen] = useState(false);
   const navRef = useRef<HTMLElement | null>(null);
   const accountTriggerRef = useRef<HTMLButtonElement>(null);
+  const ignoreScrimClickRef = useRef(false);
   const initials = avatarInitials(email);
 
   const trainingActive = useMemo(() => isTrainingPath(pathname), [pathname]);
@@ -177,12 +178,28 @@ export function CustomerTopNav({
 
   useEffect(() => {
     if (!mobileOpen) return;
+    ignoreScrimClickRef.current = true;
+    const release = window.setTimeout(() => {
+      ignoreScrimClickRef.current = false;
+    }, 400);
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
+      window.clearTimeout(release);
       document.body.style.overflow = previous;
     };
   }, [mobileOpen]);
+
+  function toggleMobileMenu() {
+    setMobileOpen((value) => !value);
+    setTrainingOpen(false);
+    setMoreOpen(false);
+  }
+
+  function closeMobileMenu() {
+    if (ignoreScrimClickRef.current) return;
+    setMobileOpen(false);
+  }
 
   function openAccountPanel(event: MouseEvent<HTMLButtonElement>) {
     event.preventDefault();
@@ -194,7 +211,10 @@ export function CustomerTopNav({
   }
 
   return (
-    <header className={styles.topNav} ref={navRef}>
+    <header
+      className={`${styles.topNav} ${mobileOpen ? styles.topNavMenuOpen : ""}`}
+      ref={navRef}
+    >
       <div className={styles.topNavBar}>
         <div className={styles.topNavBrand}>
           <Link href="/customer" className={styles.topNavBrandLink}>
@@ -312,11 +332,7 @@ export function CustomerTopNav({
             className={styles.topNavMenuToggle}
             aria-expanded={mobileOpen}
             aria-controls="customer-mobile-drawer"
-            onClick={() => {
-              setMobileOpen((value) => !value);
-              setTrainingOpen(false);
-              setMoreOpen(false);
-            }}
+            onClick={toggleMobileMenu}
           >
             <span className={styles.menuToggleBars} aria-hidden>
               <span />
@@ -331,7 +347,13 @@ export function CustomerTopNav({
       {mobileOpen ? (
         <div
           className={styles.mobileDrawerScrim}
-          onClick={() => setMobileOpen(false)}
+          onClick={closeMobileMenu}
+          onTouchEnd={(event) => {
+            if (ignoreScrimClickRef.current) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+          }}
           aria-hidden
         />
       ) : null}

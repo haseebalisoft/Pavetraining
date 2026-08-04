@@ -37,10 +37,10 @@ export async function getNotificationSettings(): Promise<NotificationSettingsSum
   const envExpiry = envFlag("EXPIRY_REMINDERS_ENABLED", true);
 
   return {
+    // Master switch for customer-facing mail. Per-type flags (document,
+    // booking, expiry) are enforced in sendNotification / callers.
     notificationsEnabled:
-      envNotifications &&
-      settings.enableCustomerNotifications &&
-      settings.enableDocumentUploadNotifications,
+      envNotifications && settings.enableCustomerNotifications,
     expiryRemindersEnabled:
       envExpiry &&
       settings.enableCustomerNotifications &&

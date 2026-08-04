@@ -26,23 +26,55 @@ export interface SendNotificationInput {
   dedupeKey?: string | null;
   actorEmail?: string | null;
   detail?: string | null;
+  /** Optional file attachments (e.g. .ics calendar invite). */
+  attachments?: Array<{
+    filename: string;
+    contentType: string;
+    /** UTF-8 text or already-encoded base64 content. */
+    content: string;
+    encoding?: "utf8" | "base64";
+  }>;
+  /** Optional From display name (mailbox address still uses NOTIFICATION_FROM_EMAIL). */
+  fromName?: string | null;
 }
 
 async function sendViaGraph(input: {
   from: string;
+  fromName?: string | null;
   to: string;
   subject: string;
   text: string;
   html?: string;
+  attachments?: SendNotificationInput["attachments"];
 }): Promise<{ ok: true; messageId?: string } | { ok: false; error: string }> {
   try {
     const client = getGraphClient();
+    const attachments =
+      input.attachments?.map((file) => {
+        const contentBytes =
+          file.encoding === "base64"
+            ? file.content
+            : Buffer.from(file.content, "utf8").toString("base64");
+        return {
+          "@odata.type": "#microsoft.graph.fileAttachment",
+          name: file.filename,
+          contentType: file.contentType,
+          contentBytes,
+        };
+      }) ?? [];
+
     await client.api(`/users/${encodeURIComponent(input.from)}/sendMail`).post({
       message: {
         subject: input.subject,
         body: {
           contentType: input.html ? "HTML" : "Text",
           content: input.html ?? input.text,
+        },
+        from: {
+          emailAddress: {
+            address: input.from,
+            name: input.fromName?.trim() || "PAVE Training Portal",
+          },
         },
         toRecipients: [
           {
@@ -51,6 +83,7 @@ async function sendViaGraph(input: {
             },
           },
         ],
+        ...(attachments.length > 0 ? { attachments } : {}),
       },
       saveToSentItems: false,
     });
@@ -76,6 +109,7 @@ export async function sendNotification(
   const isAdminAlert = input.type === "admin_alert";
   const isPortalInvite = input.type === "portal_invite";
   const isLoginOtp = input.type === "login_otp";
+  const isBookingConfirmed = input.type === "booking_confirmed";
   const isExpiry =
     input.type === "expiry_3m" ||
     input.type === "expiry_6m" ||
@@ -104,6 +138,7 @@ export async function sendNotification(
   }
 
   // Portal invites + login OTP must send when mail is configured.
+  // Booking confirmations only need the customer master switch (not document-upload).
   if (
     !isAdminAlert &&
     !isPortalInvite &&
@@ -156,8 +191,27 @@ export async function sendNotification(
     };
   }
 
-  // Booking confirmations use the same customer-notification master switch
-  // (enableCustomerNotifications) already checked above.
+  if (isBookingConfirmed && !portal.enableCustomerNotifications) {
+    await writeNotificationLog({
+      type: input.type,
+      status: "skipped",
+      recipientEmail: to,
+      companyName: input.companyName,
+      subject: input.subject,
+      dedupeKey: input.dedupeKey,
+      itemId: input.itemId,
+      errorMessage: "Customer notifications disabled by settings.",
+      detail: input.detail,
+      actorEmail: input.actorEmail,
+    });
+    return {
+      status: "skipped",
+      recipientEmail: to,
+      subject: input.subject,
+      errorMessage: "Customer notifications disabled by settings.",
+      logged: true,
+    };
+  }
 
   if (isExpiry && !portal.enableExpiryReminders) {
     await writeNotificationLog({
@@ -205,10 +259,12 @@ export async function sendNotification(
 
   const delivery = await sendViaGraph({
     from: settings.fromEmail,
+    fromName: input.fromName,
     to,
     subject: input.subject,
     text: input.text,
     html: input.html,
+    attachments: input.attachments,
   });
 
   if (!delivery.ok) {

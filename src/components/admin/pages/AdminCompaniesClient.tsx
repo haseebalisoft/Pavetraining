@@ -7,6 +7,7 @@ import {
 } from "@/components/admin/AdminCrudPage";
 import { ImageUploadButton } from "@/components/admin/ImageUploadButton";
 import { Thumbnail } from "@/components/ui/Thumbnail";
+import { allocateNextCompanyNumber } from "@/lib/companyNumber";
 import type { Company } from "@/types/models";
 
 function cell(value: string | null | undefined) {
@@ -123,7 +124,9 @@ const fields: AdminFieldConfig[] = [
     name: "companyNumber",
     label: "Company Number",
     type: "text",
-    required: true,
+    required: false,
+    readOnly: true,
+    placeholder: "Auto-generated (C00001, C00002, …)",
     section: "Company List",
   },
   {
@@ -237,6 +240,9 @@ export function AdminCompaniesClient({
       deleteUrl={(id) => `/api/admin/companies/${id}`}
       bulkDeleteUrl="/api/admin/companies/bulk-delete"
       enableBulkDelete
+      getCreateDefaults={(rows) => ({
+        companyNumber: allocateNextCompanyNumber(rows),
+      })}
       deleteConfirmExtra={
         "This also deletes related Customer Documents, Training Matrix rows, NPORS/EUSR/Streetworks/In-House registers, NVQ records, Events, Workforce candidates, Permissions, and matching Training Manager Logs for that company."
       }

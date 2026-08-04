@@ -92,6 +92,7 @@ export function AdminTopNav({ email, signOutAction }: AdminTopNavProps) {
   const [moreOpen, setMoreOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const navRef = useRef<HTMLElement | null>(null);
+  const ignoreScrimClickRef = useRef(false);
 
   const registersActive = useMemo(() => isRegistersPath(pathname), [pathname]);
   const moreActive = useMemo(() => isMorePath(pathname), [pathname]);
@@ -130,15 +131,38 @@ export function AdminTopNav({ email, signOutAction }: AdminTopNavProps) {
 
   useEffect(() => {
     if (!mobileOpen) return;
+    // Mobile browsers synthesize a click on whatever appears under the finger
+    // after touchend — usually the new full-screen scrim — which would close
+    // the drawer instantly. Ignore scrim closes briefly after open.
+    ignoreScrimClickRef.current = true;
+    const release = window.setTimeout(() => {
+      ignoreScrimClickRef.current = false;
+    }, 400);
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
+      window.clearTimeout(release);
       document.body.style.overflow = previous;
     };
   }, [mobileOpen]);
 
+  function toggleMobileMenu() {
+    setMobileOpen((value) => !value);
+    setProfileOpen(false);
+    setRegistersOpen(false);
+    setMoreOpen(false);
+  }
+
+  function closeMobileMenu() {
+    if (ignoreScrimClickRef.current) return;
+    setMobileOpen(false);
+  }
+
   return (
-    <header className={styles.topNav} ref={navRef}>
+    <header
+      className={`${styles.topNav} ${mobileOpen ? styles.topNavMenuOpen : ""}`}
+      ref={navRef}
+    >
       <div className={styles.topNavBar}>
         <div className={styles.topNavBrand}>
           <Link href="/admin" className={styles.topNavBrandLink}>
@@ -284,10 +308,7 @@ export function AdminTopNav({ email, signOutAction }: AdminTopNavProps) {
             className={styles.topNavMenuToggle}
             aria-expanded={mobileOpen}
             aria-controls="admin-mobile-drawer"
-            onClick={() => {
-              setMobileOpen((value) => !value);
-              setProfileOpen(false);
-            }}
+            onClick={toggleMobileMenu}
           >
             <span className={styles.menuToggleBars} aria-hidden>
               <span />
@@ -302,7 +323,14 @@ export function AdminTopNav({ email, signOutAction }: AdminTopNavProps) {
       {mobileOpen ? (
         <div
           className={styles.mobileDrawerScrim}
-          onClick={() => setMobileOpen(false)}
+          onClick={closeMobileMenu}
+          onTouchEnd={(event) => {
+            // Swallow the ghost touch that would otherwise click the scrim.
+            if (ignoreScrimClickRef.current) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+          }}
           aria-hidden
         />
       ) : null}
@@ -337,6 +365,7 @@ export function AdminTopNav({ email, signOutAction }: AdminTopNavProps) {
                   ? styles.mobileDrawerLinkActive
                   : ""
               }`}
+              onClick={() => setMobileOpen(false)}
             >
               {link.label}
             </Link>

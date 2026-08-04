@@ -4,6 +4,8 @@ import { commitBulkUpload } from "@/lib/services/bulkUpload/bulkUploadService";
 import type { BulkCommitRowInput } from "@/types/bulkUpload";
 
 export const dynamic = "force-dynamic";
+/** Large Workforce imports can exceed the default serverless window. */
+export const maxDuration = 300;
 
 export async function POST(request: Request) {
   return withAdminApi(

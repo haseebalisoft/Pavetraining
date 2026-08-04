@@ -161,6 +161,9 @@ export async function listNotificationLogs(options?: {
 /**
  * True when a successful/queued notification with this dedupe key already exists
  * inside the lookback window (default 30 days).
+ *
+ * Failed / skipped / not_configured do NOT block retries — otherwise fixing
+ * mail config or recipient prefs still leaves bookings silently undelivered.
  */
 export async function hasRecentNotificationDedupe(
   dedupeKey: string,
@@ -171,7 +174,7 @@ export async function hasRecentNotificationDedupe(
   const cutoff = Date.now() - lookbackDays * 86_400_000;
   return logs.some((entry) => {
     if (entry.dedupeKey !== dedupeKey) return false;
-    if (entry.status !== "sent" && entry.status !== "queued" && entry.status !== "not_configured") {
+    if (entry.status !== "sent" && entry.status !== "queued") {
       return false;
     }
     return new Date(entry.createdAt).getTime() >= cutoff;

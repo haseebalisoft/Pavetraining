@@ -14,7 +14,8 @@ const serwist = new Serwist({
   precacheEntries: self.__SW_MANIFEST,
   skipWaiting: true,
   clientsClaim: true,
-  navigationPreload: true,
+  // Avoid unused navigation-preload console warnings on admin API pages.
+  navigationPreload: false,
   runtimeCaching: defaultCache,
   fallbacks: {
     entries: [

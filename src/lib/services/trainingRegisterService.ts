@@ -327,6 +327,7 @@ export function normalizeRegisterFromAdminRecord(
     streetworksCategory?: string | null;
     certificateCategory?: string | null;
     courseCategory?: string | null;
+    course?: string | null;
     customerVisible?: boolean;
   },
   lookupHints?: {
@@ -347,8 +348,9 @@ export function normalizeRegisterFromAdminRecord(
     nporsCategories: parseNporsCategories(record.nporsCategory),
     eusrCategory: record.eusrCategory ?? null,
     streetworksCategory: record.streetworksCategory ?? null,
-    certificateCategory: record.certificateCategory ?? null,
-    courseCategory: record.courseCategory ?? null,
+    certificateCategory:
+      record.certificateCategory ?? record.course ?? null,
+    courseCategory: record.courseCategory ?? record.course ?? null,
     customerVisible: record.customerVisible ?? true,
     modifiedAt: new Date().toISOString(),
   };

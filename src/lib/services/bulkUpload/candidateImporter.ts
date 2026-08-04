@@ -1,5 +1,7 @@
 import "server-only";
 
+import { allocateNextCompanyNumber } from "@/lib/companyNumber";
+import { allocateNextWorkforceNumber } from "@/lib/workforceNumber";
 import {
   createAdminCompany,
   createAdminWorkforce,
@@ -207,10 +209,13 @@ function validateCandidateRow(
   companies: Company[],
   workforce: AdminWorkforceRecord[],
   people: PermissionPersonRef[],
+  allocatedWorkforceNumbers: string[] = [],
 ): BulkPreviewRow {
   const messages: string[] = [];
   const candidateName = fields.candidateName?.trim() ?? "";
   const companyInput = fields.company?.trim() ?? "";
+  let workforceNumber = fields.workforceNumber?.trim() ?? "";
+  let autoAssignedWorkforceNumber = false;
 
   if (!candidateName) {
     messages.push("Candidate Name is required.");
@@ -231,6 +236,13 @@ function validateCandidateRow(
     );
   }
 
+  const department = fields.department?.trim();
+  if (department) {
+    messages.push(
+      `Department "${department}" will be linked (created for the company if missing).`,
+    );
+  }
+
   const tm = fields.trainingManager?.trim();
   if (tm && !findPermissionPerson(people, tm)) {
     messages.push(
@@ -244,12 +256,35 @@ function validateCandidateRow(
     );
   }
 
+  if (!workforceNumber && candidateName && companyInput) {
+    workforceNumber = allocateNextWorkforceNumber(workforce, [
+      ...allocatedWorkforceNumbers,
+    ]);
+    autoAssignedWorkforceNumber = true;
+    messages.push(
+      `Workforce Number will be auto-assigned: ${workforceNumber}.`,
+    );
+  }
+  if (
+    workforceNumber &&
+    !allocatedWorkforceNumbers.some(
+      (value) => value.toLowerCase() === workforceNumber.toLowerCase(),
+    )
+  ) {
+    allocatedWorkforceNumbers.push(workforceNumber);
+  }
+
+  const fieldsWithNumber = {
+    ...fields,
+    workforceNumber: workforceNumber || fields.workforceNumber,
+  };
+
   if (!candidateName || !companyInput) {
     return {
       rowNumber,
       status: "Error",
       messages,
-      fields,
+      fields: fieldsWithNumber,
       resolvedCompanyName: company?.companyName ?? null,
       matchedEntityId: null,
       matchedEntityName: null,
@@ -262,7 +297,7 @@ function validateCandidateRow(
       rowNumber,
       status: "Error",
       messages,
-      fields,
+      fields: fieldsWithNumber,
       resolvedCompanyName: company?.companyName ?? null,
       matchedEntityId: null,
       matchedEntityName: null,
@@ -274,7 +309,7 @@ function validateCandidateRow(
   const duplicate = findCandidateDuplicate(workforce, {
     candidateName,
     companyName: resolvedCompanyName,
-    workforceNumber: fields.workforceNumber,
+    workforceNumber: workforceNumber || null,
     dateOfBirth: fields.dateOfBirth,
   });
 
@@ -285,7 +320,7 @@ function validateCandidateRow(
       messages: [
         `Duplicate: workforce number matches existing candidate "${duplicate.record.candidateName}".`,
       ],
-      fields: { ...fields, company: resolvedCompanyName },
+      fields: { ...fieldsWithNumber, company: resolvedCompanyName },
       resolvedCompanyName,
       matchedEntityId: duplicate.record.id,
       matchedEntityName: duplicate.record.candidateName,
@@ -300,7 +335,7 @@ function validateCandidateRow(
       messages: [
         `Duplicate: name + DOB + company matches existing candidate "${duplicate.record.candidateName}".`,
       ],
-      fields: { ...fields, company: resolvedCompanyName },
+      fields: { ...fieldsWithNumber, company: resolvedCompanyName },
       resolvedCompanyName,
       matchedEntityId: duplicate.record.id,
       matchedEntityName: duplicate.record.candidateName,
@@ -315,7 +350,7 @@ function validateCandidateRow(
       messages: [
         `Possible match: name + company matches existing candidate "${duplicate.record.candidateName}". Import will create a new record unless you choose Update existing.`,
       ],
-      fields: { ...fields, company: resolvedCompanyName },
+      fields: { ...fieldsWithNumber, company: resolvedCompanyName },
       resolvedCompanyName,
       matchedEntityId: duplicate.record.id,
       matchedEntityName: duplicate.record.candidateName,
@@ -329,7 +364,7 @@ function validateCandidateRow(
       rowNumber,
       status: "Warning",
       messages,
-      fields: { ...fields, company: resolvedCompanyName },
+      fields: { ...fieldsWithNumber, company: resolvedCompanyName },
       resolvedCompanyName,
       matchedEntityId: null,
       matchedEntityName: null,
@@ -337,7 +372,7 @@ function validateCandidateRow(
     };
   }
 
-  if (!fields.workforceNumber) {
+  if (!autoAssignedWorkforceNumber && !workforceNumber) {
     messages.push("Workforce Number is missing (optional).");
   }
   if (!fields.dateOfBirth) {
@@ -348,7 +383,7 @@ function validateCandidateRow(
     rowNumber,
     status: messages.length ? "Warning" : "Ready",
     messages,
-    fields: { ...fields, company: resolvedCompanyName },
+    fields: { ...fieldsWithNumber, company: resolvedCompanyName },
     resolvedCompanyName,
     matchedEntityId: null,
     matchedEntityName: null,
@@ -367,7 +402,8 @@ async function ensureCompany(
   }
   const created = await createAdminCompany({
     companyName,
-    companyNumber: companyNumber?.trim() || `AUTO-${Date.now()}`,
+    companyNumber:
+      companyNumber?.trim() || allocateNextCompanyNumber(companies),
     status: "Active",
   });
   return { companies: [...companies, created], company: created };
@@ -381,6 +417,7 @@ export async function previewCandidateImport(
     listAdminWorkforce(),
     loadPermissionPeople(),
   ]);
+  const allocatedWorkforceNumbers: string[] = [];
 
   return spreadsheet.rows.map((raw, index) => {
     const fields = mapCandidateFields(raw);
@@ -390,6 +427,7 @@ export async function previewCandidateImport(
       companies,
       workforce,
       people,
+      allocatedWorkforceNumbers,
     );
     return {
       ...validated,
@@ -410,6 +448,7 @@ export async function commitCandidateImport(input: {
   let people = initialPeople;
   const liveWorkforce = [...workforce];
   const results: BulkPreviewRow[] = [];
+  const allocatedWorkforceNumbers: string[] = [];
 
   for (const row of input.rows) {
     const fields = mapCandidateFields(row.fields);
@@ -424,17 +463,28 @@ export async function commitCandidateImport(input: {
     fields.swqrExpiry = normalizeDateValue(fields.swqrExpiry);
     fields.eusrExpiry = normalizeDateValue(fields.eusrExpiry);
 
+    // Drop blank workforce number so validate/create can allocate the next W#####.
+    if (!fields.workforceNumber?.trim()) {
+      fields.workforceNumber = null;
+    }
+
     const validated = validateCandidateRow(
       row.rowNumber,
       fields,
       companies,
       liveWorkforce,
       people,
+      allocatedWorkforceNumbers,
     );
 
     if (validated.status === "Error") {
       results.push(validated);
       continue;
+    }
+
+    const assignedNumber = validated.fields.workforceNumber?.trim();
+    if (assignedNumber && !allocatedWorkforceNumbers.includes(assignedNumber)) {
+      allocatedWorkforceNumbers.push(assignedNumber);
     }
 
     try {
@@ -447,12 +497,18 @@ export async function commitCandidateImport(input: {
       const companyName = ensured.company.companyName;
 
       const runCreate = async (extraMessages: string[]) => {
+        const hadTm = Boolean(validated.fields.trainingManager?.trim());
+        const hadSup = Boolean(validated.fields.supervisor?.trim());
         const created = await createAdminWorkforce({
           ...workforceWritePayload(validated.fields, companyName),
           createMissingPermissionPeople: true,
+          // Bulk: skip per-row Graph folder + matrix seed (was ~minutes for big files).
+          bulkMode: true,
         });
         liveWorkforce.push(created);
-        people = await loadPermissionPeople();
+        if (hadTm || hadSup) {
+          people = await loadPermissionPeople();
+        }
         results.push({
           ...validated,
           status: "Imported",
@@ -464,13 +520,17 @@ export async function commitCandidateImport(input: {
       };
 
       const runUpdate = async (id: string, extraMessages: string[]) => {
+        const hadTm = Boolean(validated.fields.trainingManager?.trim());
+        const hadSup = Boolean(validated.fields.supervisor?.trim());
         const updated = await updateAdminWorkforce(id, {
           ...buildNonBlankUpdate(validated.fields, companyName),
           createMissingPermissionPeople: true,
         });
         const idx = liveWorkforce.findIndex((w) => w.id === updated.id);
         if (idx >= 0) liveWorkforce[idx] = updated;
-        people = await loadPermissionPeople();
+        if (hadTm || hadSup) {
+          people = await loadPermissionPeople();
+        }
         results.push({
           ...validated,
           status: "Imported",

@@ -1063,7 +1063,8 @@ export async function syncAfterRegisterSave(
   if (registerKey === "inHouseCertificates") {
     const asbestos =
       isAsbestosAwarenessCategory(record.certificateCategory) ||
-      isAsbestosAwarenessCategory(record.courseCategory);
+      isAsbestosAwarenessCategory(record.courseCategory) ||
+      isAsbestosAwarenessCategory(record.course);
     if (!asbestos) {
       const items = [
         emptyResultItem({

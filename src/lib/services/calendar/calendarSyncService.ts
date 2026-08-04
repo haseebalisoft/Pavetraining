@@ -422,6 +422,7 @@ export async function syncEventToOutlook(
       trainingAddress: core.trainingAddress,
       companyName,
       companyId,
+      bookingStatus: core.bookingStatus,
     });
 
     if (

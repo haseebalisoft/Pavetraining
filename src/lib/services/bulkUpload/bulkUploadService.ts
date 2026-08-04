@@ -190,7 +190,7 @@ export async function previewBulkUpload(input: {
       implemented: true,
       message:
         importType === "inHouse"
-          ? "In-House import is standalone and will not update the Training Matrix."
+          ? "In-House: use Course = Asbestos Awareness (or N031) with Outcome Pass + Expiry to update Training Matrix N031. Other courses stay on the In-House register only."
           : importType === "nvq"
             ? "NVQ import is standalone and will not update the Training Matrix."
             : "NPORS / EUSR / Streetworks imports sync Pass expiry dates into the Training Matrix after each row.",

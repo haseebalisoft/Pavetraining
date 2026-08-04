@@ -420,6 +420,7 @@ export function AdminRegisterClient({
       listUrl={`/api/admin/training-records/${kind}`}
       createUrl={`/api/admin/training-records/${kind}`}
       updateUrl={(id) => `/api/admin/training-records/${kind}/${id}`}
+      deleteUrl={(id) => `/api/admin/training-records/${kind}/${id}`}
       mapResponse={(payload) =>
         ((payload as { records?: AdminTrainingRecord[] }).records ?? [])
       }

@@ -14,7 +14,7 @@ const COMPANY_COLUMNS: BulkImportColumn[] = CLIENT_COMPANY_HEADERS.map(
   (label) => ({
     key: label,
     label,
-    required: label === "Company Number" || label === "Company Name",
+    required: label === "Company Name",
   }),
 );
 
@@ -73,7 +73,11 @@ const STREETWORKS_COLUMNS: BulkImportColumn[] = [
 const IN_HOUSE_COLUMNS: BulkImportColumn[] = [
   { key: "candidateName", label: "Candidate Name", required: true },
   { key: "company", label: "Company", required: true },
-  { key: "course", label: "Course" },
+  {
+    key: "course",
+    label: "Course",
+    required: true,
+  },
   { key: "certificateCategory", label: "Certificate Category" },
   { key: "startDate", label: "Start Date" },
   { key: "expiry", label: "Expiry" },
@@ -82,14 +86,31 @@ const IN_HOUSE_COLUMNS: BulkImportColumn[] = [
 
 const NVQ_COLUMNS: BulkImportColumn[] = [
   { key: "candidateName", label: "Candidate Name", required: true },
-  { key: "company", label: "Company", required: true },
+  { key: "company", label: "NVQ Company", required: true },
+  { key: "niNumber", label: "NI Number" },
+  { key: "ulnNumber", label: "ULN Number" },
   { key: "nvqTitle", label: "NVQ Title" },
-  { key: "boltOn", label: "Bolt On" },
+  { key: "boltOn", label: "Bolt-on NVQ" },
+  { key: "poNumber", label: "PO Number" },
+  { key: "cardSchemeCategory", label: "Card Scheme Category" },
+  { key: "cardExtensionDateNeeded", label: "Card Extension Date Needed" },
+  { key: "siteAddress", label: "Site Address" },
+  { key: "siteContact", label: "Site Contact Name/Number" },
+  { key: "englishUnderstandingConfirmed", label: "English Understanding Confirmed" },
+  { key: "tcAcknowledged", label: "T&C Acknowledged" },
+  { key: "gdprConsent", label: "GDPR Consent" },
   { key: "dateRegistered", label: "Date Registered" },
   { key: "inductionDate", label: "Date Induction Booked" },
   { key: "stageOfNvq", label: "Stage of NVQ" },
   { key: "notes", label: "Notes" },
   { key: "completedDate", label: "Completed Date" },
+  { key: "certificationDate", label: "Certification Date" },
+  { key: "customerUpdateNotes", label: "Customer Update Notes" },
+  { key: "trainingOutcome", label: "TrainingOutcome" },
+  { key: "outcomeDate", label: "OutcomeDate" },
+  { key: "assessorTrainer", label: "AssessorTrainer" },
+  { key: "customerVisible", label: "CustomerVisible" },
+  { key: "outcomeNotes", label: "OutcomeNotes" },
 ];
 
 export const BULK_IMPORT_TEMPLATES: BulkImportTemplate[] = [
@@ -151,7 +172,7 @@ export const BULK_IMPORT_TEMPLATES: BulkImportTemplate[] = [
     importType: "inHouse",
     label: "In-House records",
     description:
-      "Import in-house certificates (standalone — does not update the Training Matrix).",
+      "Import in-house certificates. Put the course in Course (e.g. Asbestos Awareness or Face Fit). Asbestos Awareness Pass rows sync expiry to N031 on the Training Matrix; other courses stay on the In-House register only.",
     fileName: "pave-in-house-template.csv",
     columns: IN_HOUSE_COLUMNS,
     implemented: true,
@@ -196,6 +217,20 @@ export function buildTemplateCsv(importType: BulkImportType): string {
     throw new Error(`Unknown import type: ${importType}`);
   }
   const header = template.columns.map((c) => escapeCsv(c.label)).join(",");
+  if (importType === "inHouse") {
+    const sample = [
+      "Example Candidate",
+      "Example Company",
+      "Asbestos Awareness",
+      "",
+      "2026-01-15",
+      "2027-01-15",
+      "Pass",
+    ]
+      .map(escapeCsv)
+      .join(",");
+    return `${header}\r\n${sample}\r\n`;
+  }
   return `${header}\r\n`;
 }
 

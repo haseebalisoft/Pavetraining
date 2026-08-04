@@ -188,12 +188,44 @@ function mapRegisterSpecificFields(
     ...common,
     nvqTitle: pickField(raw, ["NVQ Title", "Nvq Title", "NvqTitle", "Title"]),
     boltOn: pickField(raw, [
+      "Bolt-on NVQ",
       "Bolt On",
       "Bolt on Nvq",
       "Bolt On NVQ",
       "BoltonNvq",
       "BoltOn",
     ]),
+    niNumber: pickField(raw, ["NI Number", "NINumber", "Ni Number"]),
+    ulnNumber: pickField(raw, ["ULN Number", "ULNNumber", "ULN"]),
+    poNumber: pickField(raw, ["PO Number", "PONumber", "PO"]),
+    cardSchemeCategory: pickField(raw, [
+      "Card Scheme Category",
+      "CardSchemeCategory",
+    ]),
+    cardExtensionDateNeeded: normalizeDateValue(
+      pickField(raw, [
+        "Card Extension Date Needed",
+        " Card Extension Date Needed",
+        "CardExtensionDateNeeded",
+      ]),
+    ),
+    siteAddress: pickField(raw, ["Site Address", "SiteAddress"]),
+    siteContact: pickField(raw, [
+      "Site Contact Name/Number",
+      "Site Contact Name/Number",
+      "SiteContactNameNumber",
+      "Site Contact",
+    ]),
+    englishUnderstandingConfirmed: pickField(raw, [
+      "English Understanding Confirmed",
+      "EnglishUnderstandingConfirmed",
+    ]),
+    tcAcknowledged: pickField(raw, [
+      "T&C Acknowledged",
+      "TC Acknowledged",
+      "TCAcknowledged",
+    ]),
+    gdprConsent: pickField(raw, ["GDPR Consent", "GDPRConsent"]),
     dateRegistered: normalizeDateValue(
       pickField(raw, [
         "Date Registered",
@@ -216,9 +248,33 @@ function mapRegisterSpecificFields(
       "StageofNvq",
       "Stage",
     ]),
+    notes: pickField(raw, ["Notes"]),
+    customerUpdateNotes: pickField(raw, [
+      "Customer Update Notes",
+      " Customer Update Notes",
+      "CustomerUpdateNotes",
+    ]),
     completedDate: normalizeDateValue(
-      pickField(raw, ["Completed Date", "CompletedDate", "Certification Date"]),
+      pickField(raw, ["Completed Date", "CompletedDate"]),
     ),
+    certificationDate: normalizeDateValue(
+      pickField(raw, ["Certification Date", "CertificationDate"]),
+    ),
+    trainingOutcome: pickField(raw, [
+      "TrainingOutcome",
+      "Training Outcome",
+      "Outcome",
+    ]),
+    outcomeDate: normalizeDateValue(
+      pickField(raw, ["OutcomeDate", "Outcome Date"]),
+    ),
+    assessorTrainer: pickField(raw, [
+      "AssessorTrainer",
+      "Assessor Trainer",
+      "Assessor",
+    ]),
+    outcomeNotes: pickField(raw, ["OutcomeNotes", "Outcome Notes"]),
+    customerVisible: pickField(raw, ["CustomerVisible", "Customer Visible"]),
   };
 }
 
@@ -346,14 +402,30 @@ function toCreateInput(
       workforceId: resolved.workforceId,
       candidateName: resolved.candidateName,
       companyName: resolved.companyName,
+      niNumber: fields.niNumber,
+      ulnNumber: fields.ulnNumber,
       nvqTitle: fields.nvqTitle,
       boltOn: fields.boltOn,
+      poNumber: fields.poNumber,
+      cardSchemeCategory: fields.cardSchemeCategory,
+      cardExtensionDateNeeded: fields.cardExtensionDateNeeded,
+      siteAddress: fields.siteAddress,
+      siteContact: fields.siteContact,
+      englishUnderstandingConfirmed: fields.englishUnderstandingConfirmed,
+      tcAcknowledged: fields.tcAcknowledged,
+      gdprConsent: fields.gdprConsent,
       dateRegistered: fields.dateRegistered ?? fields.trainingDate,
       inductionDate: fields.inductionDate,
       stageOfNvq: fields.stageOfNvq,
       notes: fields.notes,
+      customerUpdateNotes: fields.customerUpdateNotes,
       completedDate: fields.completedDate,
-      customerVisible: true,
+      certificationDate: fields.certificationDate,
+      trainingOutcome: fields.trainingOutcome,
+      outcomeDate: fields.outcomeDate,
+      assessorTrainer: fields.assessorTrainer,
+      outcomeNotes: fields.outcomeNotes,
+      customerVisible: fields.customerVisible ?? true,
     };
   }
 
@@ -374,7 +446,8 @@ function toCreateInput(
     course: fields.course ?? fields.courseCategory,
     courseCategory: fields.courseCategory ?? fields.course,
     streetworksCategory: fields.streetworksCategory,
-    certificateCategory: fields.certificateCategory,
+    certificateCategory:
+      fields.certificateCategory ?? fields.course ?? fields.courseCategory,
     customerVisible: true,
   };
 }

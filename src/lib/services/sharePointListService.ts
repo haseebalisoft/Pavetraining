@@ -78,7 +78,7 @@ async function hydrateEmptyItemFields(
   const siteRoot = getSharePointSiteApiRoot();
   const client = getGraphClient();
   const byId = new Map<string, SharePointFields>();
-  const batchSize = 12;
+  const batchSize = 20;
 
   for (let i = 0; i < missing.length; i += batchSize) {
     const chunk = missing.slice(i, i + batchSize);
@@ -525,6 +525,7 @@ export async function updateListItemFieldsByKey(
 
 /**
  * Deletes a SharePoint list item via Graph.
+ * Treats already-missing items as success. Falls back to recycle if hard delete is blocked.
  */
 export async function deleteListItemByKey(
   listKey: SharePointListKey,
@@ -533,9 +534,68 @@ export async function deleteListItemByKey(
   const siteRoot = getSharePointSiteApiRoot();
   const listId = getSharePointListId(listKey);
   const client = getGraphClient();
+  const trimmedId = String(itemId ?? "").trim();
+  if (!trimmedId) {
+    throw new Error("List item id is required for delete.");
+  }
 
-  await client.api(`${siteRoot}/lists/${listId}/items/${itemId}`).delete();
-  revalidateSharePointList(listKey);
+  const itemPath = `${siteRoot}/lists/${listId}/items/${encodeURIComponent(trimmedId)}`;
+
+  try {
+    await client.api(itemPath).delete();
+    revalidateSharePointList(listKey);
+    return;
+  } catch (error: unknown) {
+    const status =
+      typeof error === "object" &&
+      error !== null &&
+      "statusCode" in error &&
+      typeof (error as { statusCode?: unknown }).statusCode === "number"
+        ? (error as { statusCode: number }).statusCode
+        : null;
+
+    // Already gone — treat as success so the UI can refresh cleanly.
+    if (status === 404) {
+      revalidateSharePointList(listKey);
+      return;
+    }
+
+    // Some tenants block direct delete but allow recycle-bin soft delete.
+    try {
+      await client.api(`${itemPath}/recycle`).post({});
+      revalidateSharePointList(listKey);
+      return;
+    } catch (recycleError: unknown) {
+      const recycleStatus =
+        typeof recycleError === "object" &&
+        recycleError !== null &&
+        "statusCode" in recycleError &&
+        typeof (recycleError as { statusCode?: unknown }).statusCode === "number"
+          ? (recycleError as { statusCode: number }).statusCode
+          : null;
+      if (recycleStatus === 404) {
+        revalidateSharePointList(listKey);
+        return;
+      }
+
+      const detail =
+        error instanceof Error
+          ? error.message
+          : recycleError instanceof Error
+            ? recycleError.message
+            : "SharePoint delete failed.";
+      const related =
+        /related to another item|cannot be deleted because/i.test(detail);
+      const err = new Error(
+        related
+          ? `This ${listKey} item cannot be deleted because another list still references it. ${detail}`
+          : status === 403 || recycleStatus === 403
+            ? `SharePoint denied deleting this ${listKey} row (check app permissions / list settings). ${detail}`
+            : `Could not delete ${listKey} item ${trimmedId}. ${detail}`,
+      );
+      throw err;
+    }
+  }
 }
 
 /**

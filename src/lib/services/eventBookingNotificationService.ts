@@ -4,6 +4,8 @@ import {
   shouldSendBookingConfirmation,
   type BookingStatus,
 } from "@/lib/services/bookingStatusService";
+import { buildBookingIcsInvite } from "@/lib/services/calendar/icsInviteService";
+import { getNotificationSettings } from "@/lib/services/notificationConfig";
 import { hasRecentNotificationDedupe } from "@/lib/services/notificationLogService";
 import { resolveTrainingManagerRecipients } from "@/lib/services/notificationRecipientService";
 import { sendNotification } from "@/lib/services/notificationService";
@@ -31,6 +33,7 @@ function timeRangeLabel(
 
 /**
  * Emails company Training Managers when a booking becomes Confirmed.
+ * Attaches an Outlook-compatible .ics invite so Accept adds it to calendar.
  * Never throws — failures are logged via sendNotification.
  */
 export async function notifyBookingConfirmed(input: {
@@ -54,7 +57,8 @@ export async function notifyBookingConfirmed(input: {
     return {
       attempted: false,
       skipped: true,
-      skipReason: "Booking is not newly confirmed.",
+      skipReason:
+        "Booking is not newly confirmed. Set status to Confirmed to email Training Managers.",
       recipients: [],
       results: [],
     };
@@ -75,7 +79,8 @@ export async function notifyBookingConfirmed(input: {
     return {
       attempted: true,
       skipped: true,
-      skipReason: "No Active Training Managers found for this company.",
+      skipReason:
+        "No Active Training Managers found for this company (with customer notifications enabled).",
       recipients: [],
       results: [],
     };
@@ -83,6 +88,9 @@ export async function notifyBookingConfirmed(input: {
 
   const dateLabel = formatDate(input.eventDate) || "Date TBC";
   const timeLabel = timeRangeLabel(input.eventDate, input.endDate);
+  const settings = await getNotificationSettings();
+  const organizerEmail =
+    settings.fromEmail?.trim() || "info@pavetraining.co.uk";
   const results: NotificationSendResult[] = [];
   const recipients: string[] = [];
 
@@ -100,6 +108,28 @@ export async function notifyBookingConfirmed(input: {
       location: input.location,
     });
 
+    const ics = buildBookingIcsInvite({
+      eventId: input.eventId,
+      title: input.title,
+      startIso: input.eventDate,
+      endIso: input.endDate,
+      location: input.location,
+      description: [
+        `Event: ${input.title}`,
+        `Date: ${dateLabel}`,
+        `Time: ${timeLabel}`,
+        input.location?.trim() ? `Location: ${input.location.trim()}` : null,
+        input.companyName?.trim()
+          ? `Company: ${input.companyName.trim()}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      organizerEmail,
+      attendeeEmail: manager.email,
+      attendeeName: manager.displayName,
+    });
+
     recipients.push(manager.email);
     results.push(
       await sendNotification({
@@ -113,17 +143,35 @@ export async function notifyBookingConfirmed(input: {
         dedupeKey,
         actorEmail: input.actorEmail,
         detail: `Booking confirmed: ${input.title}`,
+        fromName: "PAVE Training",
+        attachments: ics
+          ? [
+              {
+                filename: ics.filename,
+                contentType: ics.contentType,
+                content: ics.content,
+                encoding: "utf8",
+              },
+            ]
+          : undefined,
       }),
     );
   }
 
+  const sentCount = results.filter((r) => r.status === "sent").length;
+  const failed = results.find(
+    (r) => r.status === "failed" || r.status === "not_configured",
+  );
+
   return {
     attempted: true,
-    skipped: recipients.length === 0,
+    skipped: recipients.length === 0 || sentCount === 0,
     skipReason:
       recipients.length === 0
         ? "Confirmation already sent recently for these recipients."
-        : undefined,
+        : sentCount === 0
+          ? failed?.errorMessage || "Booking confirmation email was not delivered."
+          : undefined,
     recipients,
     results,
   };

@@ -681,7 +681,7 @@ export const CLIENT_MATRIX_CATEGORY_COLUMNS: MatrixCategoryColumn[] = [
     "header": "N031 - Asbestos Awareness",
     "code": "N031",
     "name": "Asbestos Awareness",
-    "matrixField": null
+    "matrixField": "n031Expiry"
   },
   {
     "header": "N034 - Plant Supervisor Awareness",

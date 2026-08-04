@@ -1,5 +1,6 @@
 import "server-only";
 
+import { allocateNextCompanyNumber } from "@/lib/companyNumber";
 import {
   createAdminCompany,
   listAdminCompanies,
@@ -205,13 +206,22 @@ function validateCompanyRow(
   fields: Record<string, string | null>,
   companies: Company[],
   seenInFile: { numbers: Set<string>; names: Set<string> },
+  allocatedNumbers: string[],
 ): BulkPreviewRow {
   const messages: string[] = [];
   const companyName = fields.companyName?.trim() ?? "";
-  const companyNumber = fields.companyNumber?.trim() ?? "";
+  let companyNumber = fields.companyNumber?.trim() ?? "";
+  let autoAssigned = false;
 
   if (!companyName) messages.push("Company Name is required.");
-  if (!companyNumber) messages.push("Company Number is required.");
+  if (!companyNumber) {
+    companyNumber = allocateNextCompanyNumber(companies, [
+      ...seenInFile.numbers,
+      ...allocatedNumbers,
+    ]);
+    autoAssigned = true;
+    messages.push(`Company Number will be auto-assigned: ${companyNumber}.`);
+  }
   if (!fields.email?.trim()) {
     messages.push(
       "Email is required in SharePoint Company List — row will fail without it.",
@@ -236,6 +246,7 @@ function validateCompanyRow(
       );
     } else {
       seenInFile.numbers.add(key);
+      if (autoAssigned) allocatedNumbers.push(companyNumber);
     }
   }
 
@@ -258,6 +269,7 @@ function validateCompanyRow(
 
   const normalizedFields = {
     ...fields,
+    companyNumber,
     status: statusInfo.status,
     companySize: sizeInfo.size,
   };
@@ -280,7 +292,7 @@ function validateCompanyRow(
     };
   }
 
-  const duplicate = findCompanyDuplicate(companies, fields);
+  const duplicate = findCompanyDuplicate(companies, normalizedFields);
   if (duplicate) {
     return {
       rowNumber,
@@ -315,6 +327,7 @@ export async function previewCompanyImport(
 ): Promise<BulkPreviewRow[]> {
   const companies = await listAdminCompanies();
   const seenInFile = { numbers: new Set<string>(), names: new Set<string>() };
+  const allocatedNumbers: string[] = [];
   const rows: BulkPreviewRow[] = [];
 
   for (let i = 0; i < spreadsheet.rows.length; i++) {
@@ -325,6 +338,7 @@ export async function previewCompanyImport(
       fields,
       companies,
       seenInFile,
+      allocatedNumbers,
     );
     preview.source = raw;
     rows.push(preview);
@@ -339,17 +353,18 @@ export async function commitCompanyImport(input: {
 }): Promise<BulkPreviewRow[]> {
   let companies = await listAdminCompanies();
   const results: BulkPreviewRow[] = [];
+  const allocatedInBatch: string[] = [];
 
   for (const row of input.rows) {
     const fields = { ...row.fields };
     const companyName = fields.companyName?.trim() ?? "";
-    const companyNumber = fields.companyNumber?.trim() ?? "";
+    let companyNumber = fields.companyNumber?.trim() ?? "";
 
-    if (!companyName || !companyNumber) {
+    if (!companyName) {
       results.push({
         rowNumber: row.rowNumber,
         status: "Error",
-        messages: ["Company Name and Company Number are required."],
+        messages: ["Company Name is required."],
         fields,
         matchedEntityId: null,
         matchedEntityName: null,
@@ -357,6 +372,12 @@ export async function commitCompanyImport(input: {
       });
       continue;
     }
+
+    if (!companyNumber) {
+      companyNumber = allocateNextCompanyNumber(companies, allocatedInBatch);
+      fields.companyNumber = companyNumber;
+    }
+    allocatedInBatch.push(companyNumber);
 
     const duplicate = findCompanyDuplicate(companies, fields);
     const payload = companyWritePayload(fields);
@@ -395,8 +416,12 @@ export async function commitCompanyImport(input: {
           continue;
         }
 
-        // create despite duplicate — force unique number suffix
-        const forcedNumber = `${companyNumber}-DUP-${row.rowNumber}`;
+        // create despite duplicate — allocate a fresh portal number
+        const forcedNumber = allocateNextCompanyNumber(
+          companies,
+          allocatedInBatch,
+        );
+        allocatedInBatch.push(forcedNumber);
         const created = await createAdminCompany({
           ...payload,
           companyNumber: forcedNumber,
@@ -420,8 +445,13 @@ export async function commitCompanyImport(input: {
       results.push({
         rowNumber: row.rowNumber,
         status: "Imported",
-        messages: [`Created company #${created.id}.`],
-        fields,
+        messages: [
+          `Created company #${created.id} (${created.companyNumber ?? companyNumber}).`,
+        ],
+        fields: {
+          ...fields,
+          companyNumber: created.companyNumber ?? companyNumber,
+        },
         matchedEntityId: created.id,
         matchedEntityName: created.companyName,
         duplicateMatch: null,

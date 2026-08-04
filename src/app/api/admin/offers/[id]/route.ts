@@ -1,5 +1,8 @@
 import { withAdminApi } from "@/lib/api/adminApi";
-import { updateAdminOffer } from "@/lib/services/adminCrudService";
+import {
+  deleteAdminOffer,
+  updateAdminOffer,
+} from "@/lib/services/adminCrudService";
 
 export const dynamic = "force-dynamic";
 
@@ -17,5 +20,21 @@ export async function PATCH(
     },
     { errorMessage: "Failed to update offer" },
     request,
+  );
+}
+
+export async function DELETE(
+  _request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  const { id } = await context.params;
+  return withAdminApi(
+    "DELETE /api/admin/offers/[id]",
+    async () => {
+      await deleteAdminOffer(id);
+      return { ok: true };
+    },
+    { errorMessage: "Failed to delete offer" },
+    _request,
   );
 }

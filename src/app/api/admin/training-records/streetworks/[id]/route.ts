@@ -1,5 +1,8 @@
 import { withAdminApi } from "@/lib/api/adminApi";
-import { updateAdminRegister } from "@/lib/services/adminCrudService";
+import {
+  deleteAdminRegister,
+  updateAdminRegister,
+} from "@/lib/services/adminCrudService";
 import { triggerMatrixSyncAfterRegister } from "@/lib/services/matrixSyncHook";
 
 export const dynamic = "force-dynamic";
@@ -27,5 +30,21 @@ export async function PATCH(
     },
     { errorMessage: "Failed to update Streetworks record" },
     request,
+  );
+}
+
+export async function DELETE(
+  _request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  const { id } = await context.params;
+  return withAdminApi(
+    "DELETE /api/admin/training-records/streetworks/[id]",
+    async () => {
+      await deleteAdminRegister("nrswaRegister", id);
+      return { ok: true };
+    },
+    { errorMessage: "Failed to delete Streetworks record" },
+    _request,
   );
 }

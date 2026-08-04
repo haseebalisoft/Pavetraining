@@ -182,3 +182,29 @@ export async function updateOutlookEvent(
   }
   return mapGraphEventResult(response, config.calendarId);
 }
+
+/**
+ * Deletes an Outlook calendar event. No-ops when Outlook is not configured.
+ * Treats already-missing events as success.
+ */
+export async function deleteOutlookEvent(
+  outlookEventId: string,
+): Promise<void> {
+  const config = getOutlookCalendarConfig();
+  if (!config || !outlookEventId.trim()) return;
+
+  const client = getGraphClient();
+  try {
+    await client.api(eventItemPath(config, outlookEventId)).delete();
+  } catch (error) {
+    const status =
+      typeof error === "object" &&
+      error &&
+      "statusCode" in error &&
+      typeof (error as { statusCode?: unknown }).statusCode === "number"
+        ? (error as { statusCode: number }).statusCode
+        : null;
+    if (status === 404) return;
+    throw error;
+  }
+}

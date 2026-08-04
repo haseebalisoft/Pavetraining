@@ -117,6 +117,20 @@ const fields: AdminFieldConfig[] = [
   { name: "canEdit", label: "Can edit", type: "boolean" },
 ];
 
+function mapPermissionsResponse(payload: unknown): AdminPermissionRecord[] {
+  return ((payload as { records?: AdminPermissionRecord[] }).records ?? []);
+}
+
+const permissionSearchKeys: Array<
+  (row: AdminPermissionRecord) => string | null | undefined
+> = [
+  (row) => row.userEmail,
+  (row) => row.name,
+  (row) => row.companyName,
+  (row) => row.roleLabel,
+  (row) => row.departmentScopes?.join(" "),
+];
+
 export function AdminPermissionsClient({
   companies,
   departments,
@@ -129,7 +143,7 @@ export function AdminPermissionsClient({
   return (
     <AdminCrudPage<AdminPermissionRecord>
       title="Permissions"
-      description="Assign Training Manager, Supervisor, or Candidate. For Enterprise: set Access scope to Department Only and tick the departments they cover — they only see those candidates in the customer portal. Changing coverage or a candidate’s department never deletes training history."
+      description="Fully editable by admin: Edit or Delete any row. For Enterprise TMs, set Access scope to Department Only and tick departments — or use Full Company when the company has no departments yet."
       columns={columns}
       fields={fields}
       companies={companies}
@@ -138,16 +152,13 @@ export function AdminPermissionsClient({
       listUrl="/api/admin/permissions"
       createUrl="/api/admin/permissions"
       updateUrl={(id) => `/api/admin/permissions/${id}`}
-      mapResponse={(payload) =>
-        ((payload as { records?: AdminPermissionRecord[] }).records ?? [])
-      }
-      searchKeys={[
-        (row) => row.userEmail,
-        (row) => row.name,
-        (row) => row.companyName,
-        (row) => row.roleLabel,
-        (row) => row.departmentScopes?.join(" "),
-      ]}
+      deleteUrl={(id) => `/api/admin/permissions/${id}`}
+      deleteConfirmExtra="This removes portal access for this user. Training records are not deleted."
+      drawerWide
+      stickyColumnKey="email"
+      wideTable
+      mapResponse={mapPermissionsResponse}
+      searchKeys={permissionSearchKeys}
     />
   );
 }

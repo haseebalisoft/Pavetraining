@@ -21,6 +21,16 @@
   border-bottom: 1px solid var(--pave-border);
 }
 
+/* Keep the Menu / Close control above the full-screen scrim on mobile. */
+.topNavMenuOpen {
+  z-index: 90;
+}
+
+.topNavMenuOpen .topNavBar {
+  position: relative;
+  z-index: 100;
+}
+
 .topNavBar {
   display: flex;
   flex-wrap: nowrap;
@@ -1556,6 +1566,30 @@ th.stickyIdentityCell {
 
 .rowNeedsMetadata td.stickyIdentityCell {
   background: color-mix(in srgb, #9a3412 5%, #fff);
+}
+
+/* Keep Edit / Delete visible while wide tables scroll horizontally. */
+.stickyActionsCell {
+  position: sticky;
+  right: 0;
+  min-width: 7.5rem;
+  white-space: nowrap;
+  border-left: 1px solid var(--pave-border);
+  box-shadow: -6px 0 8px -6px rgba(var(--pave-charcoal-rgb), 0.18);
+}
+
+td.stickyActionsCell {
+  z-index: 1;
+  background: #fff;
+}
+
+th.stickyActionsCell {
+  z-index: 4;
+  background: #f3f4f2;
+}
+
+.dataTable tbody tr:hover td.stickyActionsCell {
+  background: var(--pave-lime-tint);
 }
 
 .matrixTable {

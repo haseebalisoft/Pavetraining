@@ -15,6 +15,7 @@ import type {
   AdminWorkforceRecord,
 } from "@/lib/services/adminCrudService";
 import type { AdminDepartmentRecord } from "@/lib/services/departmentTypes";
+import { allocateNextWorkforceNumber } from "@/lib/workforceNumber";
 import { formatDate } from "@/lib/utils/formatDate";
 import type { Company } from "@/types/models";
 
@@ -165,7 +166,14 @@ const fields: AdminFieldConfig[] = [
     type: "company",
     required: true,
   },
-  { name: "workforceNumber", label: "Workforce Number", type: "text" },
+  {
+    name: "workforceNumber",
+    label: "Workforce Number",
+    type: "text",
+    required: false,
+    readOnly: true,
+    placeholder: "Auto-generated (W00001, W00002, …)",
+  },
   {
     name: "trainingManager",
     label: "Training manager",
@@ -239,6 +247,9 @@ export function AdminWorkforceClient({
       initialRows={initialRows}
       enableCompanyFilter
       getCompanyName={(row) => row.companyName}
+      getCreateDefaults={(rows) => ({
+        workforceNumber: allocateNextWorkforceNumber(rows),
+      })}
       drawerWide
       listUrl="/api/admin/workforce"
       createUrl="/api/admin/workforce"

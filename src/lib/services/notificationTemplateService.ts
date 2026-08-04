@@ -172,6 +172,8 @@ export function bookingConfirmedEmailTemplate(input: {
       ? `View in the PAVE Training Portal:\n${eventsUrl}`
       : "View in the PAVE Training Portal.",
     "",
+    "This email includes a calendar invite (.ics). Open / Accept it in Outlook to add the booking to your calendar.",
+    "",
     "Any questions please contact:",
     contact,
     "",
@@ -195,6 +197,7 @@ ${
     ? `<p>View in the <a href="${escapeHtml(eventsUrl)}">PAVE Training Portal</a>.</p>`
     : `<p>View in the PAVE Training Portal.</p>`
 }
+<p>This email includes a calendar invite (<strong>.ics</strong>). Open or Accept it in Outlook to add the booking to your calendar.</p>
 <p>Any questions please contact:<br/>
 <a href="mailto:info@pavetraining.co.uk">${escapeHtml(contact)}</a></p>
 <p><strong>Cancellation terms:</strong><br/>

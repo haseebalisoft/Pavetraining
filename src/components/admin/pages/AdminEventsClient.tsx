@@ -24,6 +24,8 @@ import type { Company } from "@/types/models";
 
 type EventsViewMode = "list" | CalendarView;
 
+const EMPTY_EVENT_WARNINGS: string[] = [];
+
 interface EventFormState {
   title: string;
   companyId: string;
@@ -229,7 +231,7 @@ function ViewButtons({
 export function AdminEventsClient({
   companies,
   initialRows,
-  warnings = [],
+  warnings = EMPTY_EVENT_WARNINGS,
 }: {
   companies: Company[];
   initialRows: AdminEventRecord[];
@@ -245,6 +247,7 @@ export function AdminEventsClient({
   const [form, setForm] = useState<EventFormState>(() => createForm());
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const handleRowsChange = useCallback((nextRows: AdminEventRecord[]) => {
     setRows(nextRows);
@@ -335,7 +338,46 @@ export function AdminEventsClient({
         },
       );
       if (!response.ok) throw new Error(await readPublicApiError(response));
-      pushToast(editing ? "Event updated." : "Event created.", "success");
+      const payload = (await response.json()) as {
+        record?: AdminEventRecord;
+        bookingNotification?: {
+          attempted?: boolean;
+          skipped?: boolean;
+          skipReason?: string;
+          recipients?: string[];
+          results?: Array<{ status: string; recipientEmail: string }>;
+        } | null;
+      };
+
+      const notify = payload.bookingNotification;
+      const sentTo =
+        notify?.results
+          ?.filter((r) => r.status === "sent")
+          .map((r) => r.recipientEmail) ?? [];
+
+      if (form.bookingStatus === "Confirmed" && notify) {
+        if (sentTo.length > 0) {
+          pushToast(
+            `${editing ? "Event updated" : "Event created"}. Confirmation emailed to ${sentTo.join(", ")} (calendar invite attached).`,
+            "success",
+          );
+        } else if (notify.skipped || notify.attempted) {
+          pushToast(
+            `${editing ? "Event updated" : "Event created"}. Email not sent: ${notify.skipReason || "No Training Manager recipients."}`,
+            "error",
+          );
+        } else {
+          pushToast(editing ? "Event updated." : "Event created.", "success");
+        }
+      } else {
+        pushToast(
+          editing
+            ? "Event updated."
+            : "Event created. Set status to Confirmed to email Training Managers.",
+          "success",
+        );
+      }
+
       setDrawerOpen(false);
       await reload();
     } catch (error) {
@@ -344,6 +386,34 @@ export function AdminEventsClient({
       pushToast(message, "error");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function deleteEvent() {
+    if (!editing) return;
+    const confirmed = window.confirm(
+      `Delete event “${editing.title}”?\n\nThis removes it from the portal and tries to remove it from Outlook. This cannot be undone.`,
+    );
+    if (!confirmed) return;
+
+    setDeleting(true);
+    setFormError(null);
+    try {
+      const response = await fetch(`/api/admin/events/${editing.id}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) throw new Error(await readPublicApiError(response));
+      pushToast("Event deleted.", "success");
+      setDrawerOpen(false);
+      setEditing(null);
+      await reload();
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to delete event.";
+      setFormError(message);
+      pushToast(message, "error");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -366,6 +436,8 @@ export function AdminEventsClient({
         listUrl="/api/admin/events"
         createUrl="/api/admin/events"
         updateUrl={(id) => `/api/admin/events/${id}`}
+        deleteUrl={(id) => `/api/admin/events/${id}`}
+        deleteConfirmExtra="This also tries to remove the event from Outlook."
         mapResponse={(payload) =>
           ((payload as { records?: AdminEventRecord[] }).records ?? [])
         }
@@ -453,10 +525,20 @@ export function AdminEventsClient({
         wide
         footer={
           <>
-            <button type="button" className={styles.secondaryButton} onClick={() => setDrawerOpen(false)} disabled={saving}>
+            {editing ? (
+              <button
+                type="button"
+                className={styles.linkButtonDanger}
+                onClick={() => void deleteEvent()}
+                disabled={saving || deleting}
+              >
+                {deleting ? "Deleting…" : "Delete"}
+              </button>
+            ) : null}
+            <button type="button" className={styles.secondaryButton} onClick={() => setDrawerOpen(false)} disabled={saving || deleting}>
               Cancel
             </button>
-            <button type="button" className={styles.primaryButton} onClick={() => void saveEvent()} disabled={saving}>
+            <button type="button" className={styles.primaryButton} onClick={() => void saveEvent()} disabled={saving || deleting}>
               {saving ? "Saving…" : editing ? "Save changes" : "Create event"}
             </button>
           </>

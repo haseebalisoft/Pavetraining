@@ -64,7 +64,7 @@ const IMPORT_OPTIONS: Array<{
   {
     value: "inHouse",
     label: "In-House records",
-    hint: "Import in-house certificates. Standalone — does not update the Training Matrix.",
+    hint: "Course column: Asbestos Awareness (or N031) / Face Fit / etc. Asbestos Awareness Pass + Expiry syncs to Training Matrix N031.",
     implemented: true,
   },
   {
@@ -328,10 +328,21 @@ export function AdminBulkUploadClient() {
       if (!response.ok) throw new Error(await readPublicApiError(response));
       const data = (await response.json()) as BulkCommitResult;
       setCommitResult(data);
-      pushToast(
-        `Import finished: ${data.summary.importedRows} imported, ${data.summary.skippedRows} skipped, ${data.summary.errorRows} errors.`,
-        "success",
+      const firstError = data.rows.find(
+        (row) => row.status === "Error" && row.messages.length,
       );
+      if (data.summary.importedRows === 0 && data.summary.errorRows > 0) {
+        pushToast(
+          firstError?.messages.slice(-1)[0] ??
+            `Import failed for ${data.summary.errorRows} row(s). Check Messages in the table.`,
+          "error",
+        );
+      } else {
+        pushToast(
+          `Import finished: ${data.summary.importedRows} imported, ${data.summary.skippedRows} skipped, ${data.summary.errorRows} errors.`,
+          data.summary.errorRows > 0 ? "error" : "success",
+        );
+      }
     } catch (error) {
       pushToast(
         error instanceof Error ? error.message : "Import failed",
