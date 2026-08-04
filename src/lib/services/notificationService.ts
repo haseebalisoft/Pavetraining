@@ -5,6 +5,7 @@ import { getNotificationSettings, getPortalSettingsCached } from "@/lib/services
 import { writeNotificationLog } from "@/lib/services/notificationLogService";
 import {
   adminAlertEmailTemplate,
+  loadPaveLogoAttachment,
   portalInviteEmailTemplate,
   testEmailTemplate,
 } from "@/lib/services/notificationTemplateService";
@@ -26,13 +27,16 @@ export interface SendNotificationInput {
   dedupeKey?: string | null;
   actorEmail?: string | null;
   detail?: string | null;
-  /** Optional file attachments (e.g. .ics calendar invite). */
+  /** Optional file attachments (e.g. .ics calendar invite or inline logo). */
   attachments?: Array<{
     filename: string;
     contentType: string;
     /** UTF-8 text or already-encoded base64 content. */
     content: string;
     encoding?: "utf8" | "base64";
+    /** When set with isInline, referenced from HTML as cid:{contentId}. */
+    contentId?: string;
+    isInline?: boolean;
   }>;
   /** Optional From display name (mailbox address still uses NOTIFICATION_FROM_EMAIL). */
   fromName?: string | null;
@@ -60,6 +64,12 @@ async function sendViaGraph(input: {
           name: file.filename,
           contentType: file.contentType,
           contentBytes,
+          ...(file.contentId
+            ? {
+                contentId: file.contentId,
+                isInline: file.isInline !== false,
+              }
+            : {}),
         };
       }) ?? [];
 
@@ -403,6 +413,7 @@ export async function sendPortalInviteNotification(input: {
     companyName: input.companyName,
     roleLabel: input.roleLabel,
   });
+  const logo = await loadPaveLogoAttachment();
   return sendNotification({
     type: "portal_invite",
     to: input.to,
@@ -413,7 +424,9 @@ export async function sendPortalInviteNotification(input: {
     itemId: input.itemId,
     actorEmail: input.actorEmail,
     detail: "Permissions list invite",
+    fromName: "PAVE Training",
     dedupeKey: `portal-invite:${input.to.toLowerCase()}:${input.itemId ?? "new"}`,
+    attachments: logo ? [logo] : undefined,
   });
 }
 

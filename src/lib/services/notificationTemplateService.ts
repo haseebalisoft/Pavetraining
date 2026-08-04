@@ -1,6 +1,44 @@
 import "server-only";
 
+import { readFile } from "fs/promises";
+import path from "path";
+
 import { getNotificationSettingsSync } from "@/lib/services/notificationConfig";
+
+export const PAVE_EMAIL_LOGO_CID = "pave-logo";
+
+/** Inline logo HTML for emails (paired with cid attachment from loadPaveLogoAttachment). */
+export function emailLogoHtml(): string {
+  return `<p style="margin:0 0 20px 0;">
+<img src="cid:${PAVE_EMAIL_LOGO_CID}" alt="PAVE Training" width="160" style="display:block;width:160px;max-width:100%;height:auto;border:0;" />
+</p>`;
+}
+
+/** Reads public/brand/pave-logo.png for inline email embedding. */
+export async function loadPaveLogoAttachment(): Promise<{
+  filename: string;
+  contentType: string;
+  content: string;
+  encoding: "base64";
+  contentId: string;
+  isInline: true;
+} | null> {
+  try {
+    const logoPath = path.join(process.cwd(), "public", "brand", "pave-logo.png");
+    const bytes = await readFile(logoPath);
+    return {
+      filename: "pave-logo.png",
+      contentType: "image/png",
+      content: bytes.toString("base64"),
+      encoding: "base64",
+      contentId: PAVE_EMAIL_LOGO_CID,
+      isInline: true,
+    };
+  } catch (error) {
+    console.warn("[notifications] Could not load PAVE logo for email:", error);
+    return null;
+  }
+}
 
 function portalDocumentsUrl(): string | null {
   const settings = getNotificationSettingsSync();
@@ -125,7 +163,7 @@ export function portalInviteEmailTemplate(input: {
     .filter((line): line is string => line !== null)
     .join("\n");
 
-  const html = `<p>Hi ${escapeHtml(who)},</p>
+  const html = `${emailLogoHtml()}<p>Hi ${escapeHtml(who)},</p>
 <p>You have been invited to the <strong>PAVE Training Portal</strong>.</p>
 ${company ? `<p>Company: <strong>${escapeHtml(company)}</strong></p>` : ""}
 ${role ? `<p>Role: <strong>${escapeHtml(role)}</strong></p>` : ""}
