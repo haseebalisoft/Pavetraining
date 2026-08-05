@@ -323,7 +323,7 @@ export async function deleteAdminCompany(id: string) {
   } = await import("@/lib/services/companyCascadeDeleteService");
   const result = await deleteCompanyWithRelatedData(id);
   if (!result.companyDeleted) {
-    throw new Error(
+    throw new ValidationError(
       result.errors.join(" | ") || "Company could not be deleted.",
     );
   }

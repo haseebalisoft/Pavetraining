@@ -3,11 +3,12 @@ import "server-only";
 import { cache } from "react";
 
 import { getSharePointFields } from "@/lib/schema/sharepointSchema";
+import { getSharePointListId } from "@/lib/config/sharepoint";
 import {
   asBoolean,
   asString,
   buildSchemaFieldEqualsFilter,
-  getListItemsByKey,
+  getListItems,
   type SharePointFields,
 } from "@/lib/services/sharePointListService";
 import type {
@@ -18,6 +19,15 @@ import type {
 } from "@/types/models";
 
 const permissionFields = getSharePointFields("permissions");
+
+/**
+ * Auth decisions must not use the SharePoint list cache. A stale/empty cached
+ * Permissions query caused Admin UI to load (RSC) while DELETE /api/admin/*
+ * returned 403 “You do not have access to this portal.”
+ */
+async function fetchActivePermissionItems(filter: string, top: number) {
+  return getListItems(getSharePointListId("permissions"), { filter, top });
+}
 
 /**
  * SharePoint RoleType values used by the portal:
@@ -331,16 +341,13 @@ export const getActivePermissionByEmail = cache(
       buildSchemaFieldEqualsFilter("permissions", "status", "Active"),
     ].join(" and ");
 
-    let items = await getListItemsByKey("permissions", {
-      filter: exactFilter,
-      top: 10,
-    });
+    let items = await fetchActivePermissionItems(exactFilter, 10);
 
     if (items.length === 0) {
-      items = await getListItemsByKey("permissions", {
-        filter: buildSchemaFieldEqualsFilter("permissions", "status", "Active"),
-        top: 500,
-      });
+      items = await fetchActivePermissionItems(
+        buildSchemaFieldEqualsFilter("permissions", "status", "Active"),
+        500,
+      );
     }
 
     const matches: PermissionProfile[] = [];
