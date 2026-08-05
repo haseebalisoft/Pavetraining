@@ -25,12 +25,17 @@ export async function POST(request: Request) {
         suppressRaw === null || suppressRaw === undefined
           ? true
           : !["false", "0", "no"].includes(String(suppressRaw).toLowerCase());
+      const autoCreateRaw = form.get("autoCreateMissingCompanies");
+      const autoCreateMissingCompanies = ["true", "1", "yes"].includes(
+        String(autoCreateRaw ?? "").toLowerCase(),
+      );
 
       try {
         const result = await previewBulkUpload({
           importType,
           file,
           suppressNotifications,
+          autoCreateMissingCompanies,
         });
 
         await logBulkUpload({

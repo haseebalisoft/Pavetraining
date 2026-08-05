@@ -58,6 +58,12 @@ export type BulkPreviewRow = {
   matchedEntityId?: string | null;
   matchedEntityName?: string | null;
   duplicateMatch?: "workforceNumber" | "nameDobCompany" | "nameCompany" | null;
+  /** Company-match report (workforce import): which Company List item the row resolved to. */
+  matchedCompanyId?: string | null;
+  matchedCompanyNumber?: string | null;
+  matchedCompanyName?: string | null;
+  /** How the company was matched, or "create" when a new company will be made. */
+  companyMatchedBy?: "companyNumber" | "companyName" | "create" | null;
 };
 
 export type BulkImportSummary = {

@@ -31,6 +31,10 @@ export async function POST(request: Request) {
         body.suppressNotifications === undefined
           ? true
           : Boolean(body.suppressNotifications);
+      const autoCreateMissingCompanies =
+        body.autoCreateMissingCompanies === undefined
+          ? false
+          : Boolean(body.autoCreateMissingCompanies);
 
       if (!Array.isArray(body.rows)) {
         throw new ValidationError("rows must be an array.");
@@ -68,6 +72,7 @@ export async function POST(request: Request) {
           fileName,
           duplicateMode,
           suppressNotifications,
+          autoCreateMissingCompanies,
           rows,
         });
 

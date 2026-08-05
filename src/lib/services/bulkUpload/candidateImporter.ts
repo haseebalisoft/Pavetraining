@@ -19,8 +19,8 @@ import {
 } from "@/lib/services/sharePointListService";
 import {
   findCandidateDuplicate,
-  findCompanyByName,
 } from "@/lib/services/bulkUpload/matching";
+import { resolveWorkforceCompanyMatch } from "@/lib/services/bulkUpload/companyMatch";
 import {
   normalizeDateValue,
   pickField,
@@ -215,18 +215,17 @@ function validateCandidateRow(
   workforce: AdminWorkforceRecord[],
   people: PermissionPersonRef[],
   allocatedWorkforceNumbers: string[] = [],
+  options: { autoCreateMissing: boolean } = { autoCreateMissing: false },
 ): BulkPreviewRow {
   const messages: string[] = [];
   const candidateName = fields.candidateName?.trim() ?? "";
   const companyInput = fields.company?.trim() ?? "";
+  const companyNumberInput = fields.companyNumber?.trim() ?? "";
   let workforceNumber = fields.workforceNumber?.trim() ?? "";
   let autoAssignedWorkforceNumber = false;
 
   if (!candidateName) {
     messages.push("Candidate Name is required.");
-  }
-  if (!companyInput) {
-    messages.push("Company Name is required.");
   }
   if (!fields.email?.trim()) {
     messages.push(
@@ -234,12 +233,33 @@ function validateCandidateRow(
     );
   }
 
-  const company = findCompanyByName(companies, companyInput);
-  if (companyInput && !company) {
-    messages.push(
-      `Company "${companyInput}" was not found — it will be created on import.`,
-    );
-  }
+  // Company matching: Company Number first, then a UNIQUE Company Name. Never
+  // assign by fuzzy name when a number is present; never auto-match ambiguous
+  // names into a silent duplicate company.
+  const match = resolveWorkforceCompanyMatch(
+    companies,
+    { companyNumber: companyNumberInput, companyName: companyInput },
+    options,
+  );
+  const report = match.report;
+  const matchedCompany = match.kind === "matched" ? match.company : null;
+  const resolvedCompanyName = matchedCompany?.companyName ?? companyInput;
+  const companyMatchedBy: BulkPreviewRow["companyMatchedBy"] =
+    match.kind === "matched"
+      ? match.matchedBy
+      : match.kind === "create"
+        ? "create"
+        : null;
+  const reportFields = {
+    matchedCompanyId: report.matchedCompanyId,
+    matchedCompanyNumber:
+      report.matchedCompanyNumber ??
+      matchedCompany?.companyNumber ??
+      (companyNumberInput || null),
+    matchedCompanyName: report.matchedCompanyName ?? resolvedCompanyName ?? null,
+    companyMatchedBy,
+  };
+  if (report.warning) messages.push(report.warning);
 
   const department = fields.department?.trim();
   if (department) {
@@ -261,7 +281,8 @@ function validateCandidateRow(
     );
   }
 
-  if (!workforceNumber && candidateName && companyInput) {
+  const hasCompanyInput = Boolean(companyInput || companyNumberInput);
+  if (!workforceNumber && candidateName && hasCompanyInput) {
     workforceNumber = allocateNextWorkforceNumber(workforce, [
       ...allocatedWorkforceNumbers,
     ]);
@@ -282,35 +303,26 @@ function validateCandidateRow(
   const fieldsWithNumber = {
     ...fields,
     workforceNumber: workforceNumber || fields.workforceNumber,
+    company: resolvedCompanyName,
   };
 
-  if (!candidateName || !companyInput) {
+  // Hard failures: missing candidate/email, or an unresolved company (wrong
+  // number, ambiguous name, or missing company without auto-create).
+  if (!candidateName || !fields.email?.trim() || match.kind === "error") {
+    if (match.kind === "error" && report.error) messages.push(report.error);
     return {
       rowNumber,
       status: "Error",
       messages,
       fields: fieldsWithNumber,
-      resolvedCompanyName: company?.companyName ?? null,
+      resolvedCompanyName: matchedCompany?.companyName ?? null,
       matchedEntityId: null,
       matchedEntityName: null,
       duplicateMatch: null,
+      ...reportFields,
     };
   }
 
-  if (!fields.email?.trim()) {
-    return {
-      rowNumber,
-      status: "Error",
-      messages,
-      fields: fieldsWithNumber,
-      resolvedCompanyName: company?.companyName ?? null,
-      matchedEntityId: null,
-      matchedEntityName: null,
-      duplicateMatch: null,
-    };
-  }
-
-  const resolvedCompanyName = company?.companyName ?? companyInput;
   const duplicate = findCandidateDuplicate(workforce, {
     candidateName,
     companyName: resolvedCompanyName,
@@ -325,11 +337,12 @@ function validateCandidateRow(
       messages: [
         `Duplicate: workforce number matches existing candidate "${duplicate.record.candidateName}".`,
       ],
-      fields: { ...fieldsWithNumber, company: resolvedCompanyName },
+      fields: fieldsWithNumber,
       resolvedCompanyName,
       matchedEntityId: duplicate.record.id,
       matchedEntityName: duplicate.record.candidateName,
       duplicateMatch: "workforceNumber",
+      ...reportFields,
     };
   }
 
@@ -340,11 +353,12 @@ function validateCandidateRow(
       messages: [
         `Duplicate: name + DOB + company matches existing candidate "${duplicate.record.candidateName}".`,
       ],
-      fields: { ...fieldsWithNumber, company: resolvedCompanyName },
+      fields: fieldsWithNumber,
       resolvedCompanyName,
       matchedEntityId: duplicate.record.id,
       matchedEntityName: duplicate.record.candidateName,
       duplicateMatch: "nameDobCompany",
+      ...reportFields,
     };
   }
 
@@ -355,25 +369,27 @@ function validateCandidateRow(
       messages: [
         `Possible match: name + company matches existing candidate "${duplicate.record.candidateName}". Import will create a new record unless you choose Update existing.`,
       ],
-      fields: { ...fieldsWithNumber, company: resolvedCompanyName },
+      fields: fieldsWithNumber,
       resolvedCompanyName,
       matchedEntityId: duplicate.record.id,
       matchedEntityName: duplicate.record.candidateName,
       duplicateMatch: "nameCompany",
+      ...reportFields,
     };
   }
 
-  if (!company) {
-    // keep as Warning — will auto-create company on commit
+  if (match.kind === "create") {
+    // Auto-create mode: company will be created on commit.
     return {
       rowNumber,
       status: "Warning",
       messages,
-      fields: { ...fieldsWithNumber, company: resolvedCompanyName },
+      fields: fieldsWithNumber,
       resolvedCompanyName,
       matchedEntityId: null,
       matchedEntityName: null,
       duplicateMatch: null,
+      ...reportFields,
     };
   }
 
@@ -388,23 +404,51 @@ function validateCandidateRow(
     rowNumber,
     status: messages.length ? "Warning" : "Ready",
     messages,
-    fields: { ...fieldsWithNumber, company: resolvedCompanyName },
+    fields: fieldsWithNumber,
     resolvedCompanyName,
     matchedEntityId: null,
     matchedEntityName: null,
     duplicateMatch: null,
+    ...reportFields,
   };
 }
 
-async function ensureCompany(
+/**
+ * Resolve the row's company by Number-first / unique-Name matching. Returns the
+ * matched Company List item, or (only when auto-create is enabled) creates it.
+ * Throws with the matcher's error message when the company cannot be resolved,
+ * so the row is reported as an Error instead of silently mis-assigned.
+ */
+async function resolveOrCreateCompany(
   companies: Company[],
   companyName: string,
   companyNumber: string | null,
+  options: { autoCreateMissing: boolean },
 ): Promise<{ companies: Company[]; company: Company }> {
-  const existing = findCompanyByName(companies, companyName);
-  if (existing) {
-    return { companies, company: existing };
+  const match = resolveWorkforceCompanyMatch(
+    companies,
+    { companyNumber, companyName },
+    options,
+  );
+
+  if (match.kind === "matched") {
+    const existing =
+      companies.find((c) => c.id === match.company.id) ?? null;
+    if (existing) return { companies, company: existing };
+    // Matched a ref that is not in the local array (shouldn't happen) — fall
+    // through to a fresh lookup by id below.
+    const byId = companies.find((c) => c.id === match.company.id);
+    if (byId) return { companies, company: byId };
   }
+
+  if (match.kind === "error") {
+    throw new ValidationErrorLike(
+      match.report.error ?? "Company could not be resolved.",
+    );
+  }
+
+  // match.kind === "create" — auto-create the missing company. Preserve a
+  // supplied Company Number; otherwise allocate a fresh one.
   const created = await createAdminCompany({
     companyName,
     companyNumber:
@@ -416,6 +460,9 @@ async function ensureCompany(
   });
   return { companies: [...companies, created], company: created };
 }
+
+/** Local error carrier so the commit loop reports the matcher message per row. */
+class ValidationErrorLike extends Error {}
 
 /** Bound parallel Graph POSTs — ~5× faster than serial for workforce creates. */
 const BULK_CREATE_CONCURRENCY = 5;
@@ -446,7 +493,9 @@ async function mapPool<T, R>(
 
 export async function previewCandidateImport(
   spreadsheet: ParsedSpreadsheet,
+  options: { autoCreateMissingCompanies?: boolean } = {},
 ): Promise<BulkPreviewRow[]> {
+  const autoCreateMissing = options.autoCreateMissingCompanies ?? false;
   const [companies, workforce, people] = await Promise.all([
     listAdminCompanies(),
     listAdminWorkforce(),
@@ -463,6 +512,7 @@ export async function previewCandidateImport(
       workforce,
       people,
       allocatedWorkforceNumbers,
+      { autoCreateMissing },
     );
     return {
       ...validated,
@@ -474,7 +524,9 @@ export async function previewCandidateImport(
 export async function commitCandidateImport(input: {
   rows: BulkCommitRowInput[];
   duplicateMode: BulkDuplicateMode;
+  autoCreateMissingCompanies?: boolean;
 }): Promise<BulkPreviewRow[]> {
+  const autoCreateMissing = input.autoCreateMissingCompanies ?? false;
   let companies = await listAdminCompanies();
   const [workforce, initialPeople, initialDepartments] = await Promise.all([
     listAdminWorkforce(),
@@ -517,6 +569,10 @@ export async function commitCandidateImport(input: {
 
   const pendingCreates: PendingCreate[] = [];
   const pendingUpdates: PendingUpdate[] = [];
+  // Imported workforce records (created + updated). Drives the two post-import
+  // passes: matrix row sync (Phase 3c) and document folders (Phase 3d).
+  const importedTargets: Array<{ index: number; wf: AdminWorkforceRecord }> =
+    [];
 
   // Phase 1: validate + ensure companies (serial — unique company names).
   for (const row of input.rows) {
@@ -542,6 +598,7 @@ export async function commitCandidateImport(input: {
       liveWorkforce,
       people,
       allocatedWorkforceNumbers,
+      { autoCreateMissing },
     );
 
     if (validated.status === "Error") {
@@ -555,10 +612,11 @@ export async function commitCandidateImport(input: {
     }
 
     try {
-      const ensured = await ensureCompany(
+      const ensured = await resolveOrCreateCompany(
         companies,
         validated.resolvedCompanyName ?? validated.fields.company ?? "",
         validated.fields.companyNumber,
+        { autoCreateMissing },
       );
       companies = ensured.companies;
       const companyName = ensured.company.companyName;
@@ -721,9 +779,12 @@ export async function commitCandidateImport(input: {
           createMissingPermissionPeople: true,
           permissionPeople: people,
           departmentRecords,
+          // Bulk syncs the matrix once in Phase 3c — skip per-row sync here.
+          bulkMode: true,
         });
         const idx = liveWorkforce.findIndex((w) => w.id === updated.id);
         if (idx >= 0) liveWorkforce[idx] = updated;
+        importedTargets.push({ index: job.index, wf: updated });
         results[job.index] = {
           ...job.validated,
           status: "Imported",
@@ -764,6 +825,7 @@ export async function commitCandidateImport(input: {
         liveWorkforce.push(created);
         const wfNum = created.workforceNumber?.trim().toLowerCase();
         if (wfNum) knownWorkforceNumbers.add(wfNum);
+        importedTargets.push({ index: job.index, wf: created });
         results[job.index] = {
           ...job.validated,
           status: "Imported",
@@ -785,6 +847,96 @@ export async function commitCandidateImport(input: {
         };
       }
     });
+
+    // Phase 3c: create/update REAL Training Matrix Update rows for every
+    // imported candidate, so the matrix no longer relies on synthetic
+    // `workforce-only:` ids and later matrix spreadsheet imports can PATCH
+    // real ids. One matrix read up front; sequential writes keep the dedupe
+    // cache consistent and never wipe existing expiry data with blanks.
+    if (importedTargets.length) {
+      const { listTrainingMatrixExampleRows, syncWorkforceToTrainingMatrix } =
+        await import(
+          "@/lib/services/bulkUpload/trainingMatrixExampleService"
+        );
+      const matrixRows = await listTrainingMatrixExampleRows();
+      for (const { index, wf } of importedTargets) {
+        const current = results[index];
+        if (!current) continue;
+        try {
+          const sync = await syncWorkforceToTrainingMatrix(wf, {
+            existingRows: matrixRows,
+          });
+          if (sync.created) matrixRows.push(sync.row);
+          results[index] = {
+            ...current,
+            messages: [
+              ...current.messages,
+              sync.created
+                ? `Training Matrix row created (#${sync.id}).`
+                : `Training Matrix row updated (#${sync.id}).`,
+            ],
+          };
+        } catch (error) {
+          results[index] = {
+            ...current,
+            messages: [
+              ...current.messages,
+              `Candidate imported, but Training Matrix row sync failed: ${
+                error instanceof Error ? error.message : "unknown error"
+              }.`,
+            ],
+          };
+        }
+      }
+    }
+
+    // Phase 3d: ensure the Customer Documents folder structure for every
+    // imported candidate — company folder + Company Documents + Candidates +
+    // {Workforce Number - Candidate Name} + Certificates / Card Scans /
+    // NVQ Documents / Other Documents. Reuses ensureCandidateDocumentFolders,
+    // which is idempotent (resolve-first, number-prefix match) and never
+    // throws — folder issues are reported per row, never blocking the import.
+    // Bounded concurrency keeps 50 candidates well under the route timeout.
+    if (importedTargets.length) {
+      const { ensureCandidateDocumentFolders } = await import(
+        "@/lib/services/customerDocumentsFolderService"
+      );
+      await mapPool(
+        importedTargets,
+        BULK_CREATE_CONCURRENCY,
+        async ({ index, wf }) => {
+          const current = results[index];
+          if (!current) return;
+          try {
+            const folders = await ensureCandidateDocumentFolders({
+              companyName: wf.companyName,
+              companyNumber: wf.companyNumber ?? null,
+              candidateName: wf.candidateName,
+              workforceNumber: wf.workforceNumber ?? null,
+            });
+            results[index] = {
+              ...current,
+              messages: [
+                ...current.messages,
+                folders.ok
+                  ? "Document folders ensured (created or already existed)."
+                  : folders.warning,
+              ],
+            };
+          } catch (error) {
+            results[index] = {
+              ...current,
+              messages: [
+                ...current.messages,
+                `Candidate imported, but document folders were not created: ${
+                  error instanceof Error ? error.message : "unknown error"
+                }.`,
+              ],
+            };
+          }
+        },
+      );
+    }
   });
 
   return results;
@@ -799,11 +951,17 @@ export function buildValidationReportCsv(rows: BulkPreviewRow[]): string {
     "Workforce Number",
     "DOB",
     "Department",
-    "Matched Id",
+    "Matched Company Id",
+    "Matched Company Number",
+    "Matched Company Name",
+    "Company Matched By",
+    "Matched Candidate Id",
+    "Warning/Error",
     "Messages",
   ];
   const lines = [header.map(escapeCsv).join(",")];
   for (const row of rows) {
+    const isProblem = row.status === "Error" || row.status === "Warning";
     lines.push(
       [
         String(row.rowNumber),
@@ -813,7 +971,12 @@ export function buildValidationReportCsv(rows: BulkPreviewRow[]): string {
         row.fields.workforceNumber ?? "",
         row.fields.dateOfBirth ?? "",
         row.fields.department ?? "",
+        row.matchedCompanyId ?? "",
+        row.matchedCompanyNumber ?? "",
+        row.matchedCompanyName ?? "",
+        row.companyMatchedBy ?? "",
         row.matchedEntityId ?? "",
+        isProblem ? row.messages.join("; ") : "",
         row.messages.join("; "),
       ]
         .map(escapeCsv)

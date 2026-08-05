@@ -5,6 +5,10 @@ import { useCallback, useMemo, useState, type DragEvent } from "react";
 import { useAdminToast } from "@/components/admin/AdminToast";
 import { Breadcrumbs } from "@/components/ui/Breadcrumbs";
 import { StatusBadge } from "@/components/ui/StatusBadge";
+import {
+  bulkUploadRowLimit,
+  checkBulkUploadRowLimit,
+} from "@/lib/services/bulkUpload/bulkUploadLimits";
 import { readPublicApiError } from "@/lib/errors/publicMessages";
 import type { StatusTone } from "@/lib/ui/status";
 import type {
@@ -227,10 +231,24 @@ export function AdminBulkUploadClient() {
 
   const activeSummary = commitResult?.summary ?? preview?.summary ?? null;
 
+  /** Row cap for the currently selected import type (null = no limit). */
+  const selectedRowLimit = bulkUploadRowLimit(importType);
+
+  /** Client-side mirror of the server limit, evaluated against the preview. */
+  const rowLimitError = useMemo(() => {
+    if (!preview?.implemented || !preview.rows.length) return null;
+    const check = checkBulkUploadRowLimit(
+      preview.importType,
+      preview.rows.length,
+    );
+    return check.ok ? null : check.error;
+  }, [preview]);
+
   const canCommit =
     !!preview?.implemented &&
     !!preview.rows.length &&
     !commitResult &&
+    !rowLimitError &&
     (preview.summary.readyRows > 0 ||
       preview.summary.warningRows > 0 ||
       (duplicateMode !== "skip" && preview.summary.duplicateRows > 0));
@@ -296,6 +314,16 @@ export function AdminBulkUploadClient() {
 
   const runCommit = useCallback(async () => {
     if (!preview?.implemented) return;
+    // Mirror the server row limit before committing so oversized uploads are
+    // stopped client-side with the same clear message.
+    const limitCheck = checkBulkUploadRowLimit(
+      preview.importType,
+      preview.rows.length,
+    );
+    if (!limitCheck.ok && limitCheck.error) {
+      pushToast(limitCheck.error, "error");
+      return;
+    }
     if (
       duplicateMode === "update" ||
       duplicateMode === "create"
@@ -514,6 +542,11 @@ export function AdminBulkUploadClient() {
             {selectedOption ? (
               <p className={styles.bulkHint}>{selectedOption.hint}</p>
             ) : null}
+            {selectedRowLimit !== null ? (
+              <p className={styles.bulkHint}>
+                Limit: up to {selectedRowLimit} records per upload.
+              </p>
+            ) : null}
 
             <div className={styles.bulkTemplateRow}>
               {IMPORT_OPTIONS.map((option) => (
@@ -610,6 +643,12 @@ export function AdminBulkUploadClient() {
             </header>
             <div className={styles.settingsCardBody}>
               {activeSummary ? <SummaryCards summary={activeSummary} /> : null}
+
+              {rowLimitError ? (
+                <p className={styles.formError} role="alert">
+                  {rowLimitError}
+                </p>
+              ) : null}
 
               {!commitResult ? (
                 <>

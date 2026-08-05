@@ -7,6 +7,10 @@ import {
   summarizeBulkRows,
 } from "@/lib/services/bulkUpload/candidateImporter";
 import {
+  checkBulkUploadRowLimit,
+  countPopulatedRows,
+} from "@/lib/services/bulkUpload/bulkUploadLimits";
+import {
   commitCompanyImport,
   previewCompanyImport,
 } from "@/lib/services/bulkUpload/companyImporter";
@@ -107,11 +111,13 @@ export async function previewBulkUpload(input: {
   importType: string;
   file: File;
   suppressNotifications?: boolean;
+  autoCreateMissingCompanies?: boolean;
 }): Promise<BulkPreviewResult> {
   const importType = parseImportType(input.importType);
   const template = getBulkImportTemplate(importType);
   const { fileName, bytes } = await readUploadFile(input.file);
   const suppressNotifications = input.suppressNotifications ?? true;
+  const autoCreateMissingCompanies = input.autoCreateMissingCompanies ?? false;
 
   if (!template?.implemented) {
     return {
@@ -136,6 +142,17 @@ export async function previewBulkUpload(input: {
 
   const spreadsheet = parseSpreadsheetBuffer(bytes, fileName);
 
+  // Enforce the per-type row limit BEFORE any import/matching work. The parser
+  // has already dropped the header and blank rows, so spreadsheet.rows is the
+  // populated data-row count.
+  const previewLimit = checkBulkUploadRowLimit(
+    importType,
+    spreadsheet.rows.length,
+  );
+  if (!previewLimit.ok && previewLimit.error) {
+    throw new ValidationError(previewLimit.error);
+  }
+
   if (importType === "company") {
     const rows = await previewCompanyImport(spreadsheet);
     return {
@@ -151,7 +168,9 @@ export async function previewBulkUpload(input: {
   }
 
   if (importType === "workforce") {
-    const rows = await previewCandidateImport(spreadsheet);
+    const rows = await previewCandidateImport(spreadsheet, {
+      autoCreateMissingCompanies,
+    });
     return {
       importType,
       fileName,
@@ -160,7 +179,9 @@ export async function previewBulkUpload(input: {
       summary: summarizeBulkRows(rows),
       suppressNotifications,
       implemented: true,
-      message: null,
+      message: autoCreateMissingCompanies
+        ? null
+        : "Workforce rows are matched to existing companies (Company Number first). Upload companies first, or enable auto-create for missing companies.",
     };
   }
 
@@ -205,12 +226,17 @@ export async function commitBulkUpload(input: {
   fileName?: string | null;
   duplicateMode?: string | null;
   suppressNotifications?: boolean;
+  autoCreateMissingCompanies?: boolean;
   rows: BulkCommitRowInput[];
 }): Promise<BulkCommitResult> {
   const importType = parseImportType(input.importType);
   const template = getBulkImportTemplate(importType);
   const duplicateMode = parseDuplicateMode(input.duplicateMode);
   const suppressNotifications = asBool(input.suppressNotifications, true);
+  const autoCreateMissingCompanies = asBool(
+    input.autoCreateMissingCompanies,
+    false,
+  );
   const fileName = input.fileName?.trim() || "upload.csv";
 
   if (!template?.implemented) {
@@ -221,6 +247,16 @@ export async function commitBulkUpload(input: {
 
   if (!Array.isArray(input.rows) || input.rows.length === 0) {
     throw new ValidationError("No rows provided for import.");
+  }
+
+  // Re-enforce the row limit on commit (defence in depth) counting only
+  // populated rows, so blank rows never push a valid upload over the cap.
+  const commitLimit = checkBulkUploadRowLimit(
+    importType,
+    countPopulatedRows(input.rows),
+  );
+  if (!commitLimit.ok && commitLimit.error) {
+    throw new ValidationError(commitLimit.error);
   }
 
   if (importType === "company") {
@@ -244,6 +280,7 @@ export async function commitBulkUpload(input: {
     const rows = await commitCandidateImport({
       rows: input.rows,
       duplicateMode,
+      autoCreateMissingCompanies,
     });
     const summary = summarizeBulkRows(rows);
     return {

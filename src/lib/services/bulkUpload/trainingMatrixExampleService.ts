@@ -16,6 +16,12 @@ import {
 } from "@/lib/services/sharePointListService";
 import { normalizeDateValue } from "@/lib/services/bulkUpload/parseSpreadsheet";
 import {
+  buildWorkforceMatrixSource,
+  findMatrixRowForCandidate,
+  realMatrixItemId,
+  type WorkforceMatrixProfile,
+} from "@/lib/services/bulkUpload/workforceMatrixSync";
+import {
   MANUAL_OVERRIDES_FIELD,
   parseManualOverrides,
   serializeManualOverrides,
@@ -361,6 +367,12 @@ export async function upsertTrainingMatrixExampleRow(input: {
   existingItemId?: string | null;
   /** Spreadsheet cells keyed by template headers (Name, DOB, CSCS Expiry, N001 - …). */
   source: Record<string, string | null>;
+  /**
+   * Non-date profile columns keyed by display name (Company, Workforce Number,
+   * Training Manager, …). Each is written only when the list actually has that
+   * (text) column and the value is non-blank — so it never wipes existing data.
+   */
+  profileFields?: Record<string, string | null>;
   /** When set, replaces ManualOverrides on the row. */
   manualOverrides?: string[] | null;
 }): Promise<{ id: string; created: boolean }> {
@@ -405,6 +417,21 @@ export async function upsertTrainingMatrixExampleRow(input: {
     } else {
       // Excel-imported Number columns must receive serial day numbers.
       fields[col.name] = isoToExcelSerial(iso) ?? 0;
+    }
+  }
+
+  // Profile text columns (Company, Workforce Number, Training Manager, …):
+  // write each only when the list has that text column and the value is
+  // non-blank, so profile details appear "if fields exist" without ever
+  // clobbering expiry/date columns or overwriting with blanks.
+  if (input.profileFields) {
+    for (const [header, value] of Object.entries(input.profileFields)) {
+      if (value == null || String(value).trim() === "") continue;
+      const col =
+        columnMap.get(headerLookupKey(header)) ??
+        columnMap.get(normalizeHeader(header).toLowerCase());
+      if (!col || col.name === "Title" || col.storage !== "other") continue;
+      fields[col.name] = String(value).trim();
     }
   }
 
@@ -459,7 +486,77 @@ export async function upsertTrainingMatrixExampleRow(input: {
   }
 }
 
+/**
+ * Resolve a matrix id to a REAL SharePoint item id for updates. Returns null
+ * for blank ids AND for synthetic `workforce-only:<id>` ids so those are never
+ * used as PATCH targets (callers then create a real row instead).
+ */
 export function stripExampleMatrixId(id: string | null | undefined): string | null {
-  if (!id?.trim()) return null;
-  return id.startsWith("example:") ? id.slice("example:".length) : id.trim();
+  return realMatrixItemId(id);
+}
+
+export interface WorkforceMatrixSyncResult {
+  /** Real SharePoint item id of the Training Matrix Update row. */
+  id: string;
+  /** Id shape used by listAdminMatrix / the admin UI (`example:<id>`). */
+  matrixId: string;
+  created: boolean;
+  /** Lightweight row for callers to keep an in-memory cache consistent. */
+  row: TrainingMatrixExampleRow;
+}
+
+/**
+ * Create or update the REAL Training Matrix Update row for a workforce record.
+ *
+ * The single sync path shared by manual workforce create/update AND bulk
+ * workforce import, so imported candidates always get a real matrix row (never
+ * a synthetic `workforce-only:` placeholder) that later matrix spreadsheet
+ * imports can update by real id.
+ *
+ * - Reuses an existing row (matched by candidate name + DOB) — no duplicates.
+ * - Writes profile detail columns that exist on the list.
+ * - Never overwrites existing expiry columns with blanks (blank values are
+ *   omitted from the payload entirely).
+ *
+ * Pass `existingRows` from a single upfront read to avoid a per-row Graph fetch
+ * during bulk import.
+ */
+export async function syncWorkforceToTrainingMatrix(
+  profile: WorkforceMatrixProfile,
+  options: { existingRows?: TrainingMatrixExampleRow[] } = {},
+): Promise<WorkforceMatrixSyncResult> {
+  const name = profile.candidateName?.trim();
+  if (!name) {
+    throw new Error("Candidate name is required to sync the Training Matrix row.");
+  }
+
+  const existingRows =
+    options.existingRows ?? (await listTrainingMatrixExampleRows());
+  const existing = findMatrixRowForCandidate(existingRows, profile);
+  const { source, profileFields } = buildWorkforceMatrixSource(profile);
+
+  const result = await upsertTrainingMatrixExampleRow({
+    candidateName: name,
+    existingItemId: existing?.id ?? null,
+    source,
+    profileFields,
+  });
+
+  const row: TrainingMatrixExampleRow = existing
+    ? existing
+    : {
+        id: result.id,
+        candidateName: name,
+        dateOfBirth: source.DOB ?? null,
+        columnValues: { ...source },
+        nextExpiryDate: earliestDateFromColumns(source),
+        manualOverrides: [],
+      };
+
+  return {
+    id: result.id,
+    matrixId: `example:${result.id}`,
+    created: result.created,
+    row,
+  };
 }

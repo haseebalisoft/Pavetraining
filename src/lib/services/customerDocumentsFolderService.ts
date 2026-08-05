@@ -5,31 +5,38 @@ import {
   getSharePointSiteApiRoot,
 } from "@/lib/config/sharepoint";
 import { getGraphClient } from "@/lib/graph/graphClient";
+import {
+  CANDIDATE_SUBFOLDERS,
+  COMPANY_LEVEL_FOLDERS,
+  candidateDocumentsFolderName,
+  companyDocumentsFolderName,
+  resolveDocumentFolderSegments,
+  resolveDocumentTypeFolder,
+  sanitizeFolderSegment,
+  type CandidateDocumentSubfolder,
+  type DocumentDestinationFolder,
+  type DocumentFolderResolveInput,
+  type DocumentFolderSegments,
+} from "@/lib/services/documentFolderPaths";
 
-const CANDIDATE_SUBFOLDERS = [
-  "Certificates",
-  "Card Scans",
-  "NVQ Documents",
-  "Other Documents",
-] as const;
-
-export type CandidateDocumentSubfolder = (typeof CANDIDATE_SUBFOLDERS)[number];
-
-export type DocumentDestinationFolder =
-  | "Company Documents"
-  | CandidateDocumentSubfolder;
-
-export type DocumentFolderSegments = string[];
-
-export interface DocumentFolderResolveInput {
-  companyNumber?: string | null;
-  companyName: string;
-  workforceNumber?: string | null;
-  candidateName?: string | null;
-  documentType?: string | null;
-  /** When false / omitted with no candidate name, routes to Company Documents. */
-  hasCandidate?: boolean;
-}
+// Folder naming + path rules live in the dependency-free documentFolderPaths
+// module (single source of truth, unit-testable). Re-export so existing
+// importers of this service keep working unchanged.
+export {
+  CANDIDATE_SUBFOLDERS,
+  COMPANY_LEVEL_FOLDERS,
+  candidateDocumentsFolderName,
+  companyDocumentsFolderName,
+  resolveDocumentFolderSegments,
+  resolveDocumentTypeFolder,
+  sanitizeFolderSegment,
+};
+export type {
+  CandidateDocumentSubfolder,
+  DocumentDestinationFolder,
+  DocumentFolderResolveInput,
+  DocumentFolderSegments,
+};
 
 export interface ResolvedDocumentUploadFolder {
   driveId: string;
@@ -38,122 +45,6 @@ export interface ResolvedDocumentUploadFolder {
   destinationFolder: DocumentDestinationFolder;
   /** Display path joined with `/`. */
   path: string;
-}
-
-function sanitizeFolderSegment(value: string): string {
-  return value
-    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 120);
-}
-
-export function companyDocumentsFolderName(
-  companyNumber: string | null | undefined,
-  companyName: string,
-): string {
-  const name = sanitizeFolderSegment(companyName) || "Company";
-  const number = sanitizeFolderSegment(companyNumber ?? "");
-  return number ? `${number} - ${name}` : name;
-}
-
-export function candidateDocumentsFolderName(
-  workforceNumber: string | null | undefined,
-  candidateName: string,
-): string {
-  const name = sanitizeFolderSegment(candidateName) || "Candidate";
-  const number = sanitizeFolderSegment(workforceNumber ?? "");
-  return number ? `${number} - ${name}` : name;
-}
-
-/**
- * Maps portal Document Type (+ whether a candidate is attached) to the
- * physical library folder under Customer Documents.
- */
-export function resolveDocumentTypeFolder(options: {
-  documentType?: string | null;
-  hasCandidate: boolean;
-}): DocumentDestinationFolder {
-  if (!options.hasCandidate) {
-    return "Company Documents";
-  }
-
-  const normalized = (options.documentType ?? "").trim().toLowerCase();
-
-  if (
-    normalized === "certificate" ||
-    normalized === "certificates" ||
-    normalized.includes("certificate")
-  ) {
-    return "Certificates";
-  }
-
-  if (
-    normalized === "card scan" ||
-    normalized === "card scans" ||
-    normalized.includes("card scan") ||
-    (normalized.includes("card") && normalized.includes("scan"))
-  ) {
-    return "Card Scans";
-  }
-
-  if (
-    normalized === "nvq document" ||
-    normalized === "nvq documents" ||
-    normalized.includes("nvq")
-  ) {
-    return "NVQ Documents";
-  }
-
-  return "Other Documents";
-}
-
-/**
- * Builds the expected folder path segments using stable company / workforce
- * numbers (names are display suffixes only).
- */
-export function resolveDocumentFolderSegments(
-  input: DocumentFolderResolveInput,
-): {
-  segments: DocumentFolderSegments;
-  destinationFolder: DocumentDestinationFolder;
-} {
-  const hasCandidate = Boolean(
-    input.hasCandidate ??
-      (input.candidateName?.trim() || input.workforceNumber?.trim()),
-  );
-
-  const destinationFolder = resolveDocumentTypeFolder({
-    documentType: input.documentType,
-    hasCandidate,
-  });
-
-  const companyFolder = companyDocumentsFolderName(
-    input.companyNumber,
-    input.companyName,
-  );
-
-  if (!hasCandidate || destinationFolder === "Company Documents") {
-    return {
-      segments: [companyFolder, "Company Documents"],
-      destinationFolder: "Company Documents",
-    };
-  }
-
-  const candidateFolder = candidateDocumentsFolderName(
-    input.workforceNumber,
-    input.candidateName ?? "Candidate",
-  );
-
-  return {
-    segments: [
-      companyFolder,
-      "Candidates",
-      candidateFolder,
-      destinationFolder,
-    ],
-    destinationFolder,
-  };
 }
 
 async function getCustomerDocumentsDriveId(): Promise<string> {
@@ -243,14 +134,6 @@ export async function browseCustomerDocumentsFolder(
       return a.name.localeCompare(b.name);
     });
 }
-
-/** Expected top-level children under a company folder. */
-export const COMPANY_LEVEL_FOLDERS = [
-  "Company Documents",
-  "Candidates",
-] as const;
-
-export { CANDIDATE_SUBFOLDERS };
 
 async function listChildFolders(
   driveId: string,

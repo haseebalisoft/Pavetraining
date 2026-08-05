@@ -2,6 +2,11 @@ import "server-only";
 
 import { allocateNextCompanyNumber } from "@/lib/companyNumber";
 import {
+  companyNumberDuplicateInFileError,
+  resolveCompanyImport,
+  type CompanyImportMatch,
+} from "@/lib/services/bulkUpload/companyNumberRules";
+import {
   createAdminCompany,
   listAdminCompanies,
   updateAdminCompany,
@@ -184,21 +189,18 @@ function companyWritePayload(
   return payload;
 }
 
-function findCompanyDuplicate(
+/** Existing company whose Company Number equals `number` (case/space-insensitive). */
+function matchCompanyByNumber(
   companies: Company[],
-  fields: Record<string, string | null>,
-): { kind: "companyNumber" | "companyName"; record: Company } | null {
-  const number = fields.companyNumber?.trim();
-  if (number) {
-    const byNumber = companies.find(
-      (c) => nameKey(c.companyNumber) === nameKey(number),
-    );
-    if (byNumber) return { kind: "companyNumber", record: byNumber };
-  }
+  number: string | null | undefined,
+): Company | null {
+  const key = nameKey(number);
+  if (!key) return null;
+  return companies.find((c) => nameKey(c.companyNumber) === key) ?? null;
+}
 
-  const byName = findCompanyByName(companies, fields.companyName);
-  if (byName) return { kind: "companyName", record: byName };
-  return null;
+function toImportMatch(record: Company | null): CompanyImportMatch {
+  return record ? { id: record.id, companyNumber: record.companyNumber } : null;
 }
 
 function validateCompanyRow(
@@ -210,18 +212,10 @@ function validateCompanyRow(
 ): BulkPreviewRow {
   const messages: string[] = [];
   const companyName = fields.companyName?.trim() ?? "";
-  let companyNumber = fields.companyNumber?.trim() ?? "";
-  let autoAssigned = false;
+  const incoming = fields.companyNumber?.trim() ?? "";
+  let companyNumber = incoming;
 
   if (!companyName) messages.push("Company Name is required.");
-  if (!companyNumber) {
-    companyNumber = allocateNextCompanyNumber(companies, [
-      ...seenInFile.numbers,
-      ...allocatedNumbers,
-    ]);
-    autoAssigned = true;
-    messages.push(`Company Number will be auto-assigned: ${companyNumber}.`);
-  }
   if (!fields.email?.trim()) {
     messages.push(
       "Email is required in SharePoint Company List — row will fail without it.",
@@ -238,15 +232,64 @@ function validateCompanyRow(
     );
   }
 
-  if (companyNumber) {
+  // Match against existing companies BEFORE any allocation so an existing
+  // company's number is never replaced by a freshly generated one.
+  const matchByNumber = matchCompanyByNumber(companies, incoming);
+  const matchByName = companyName
+    ? findCompanyByName(companies, companyName)
+    : null;
+  const decision = resolveCompanyImport({
+    incoming,
+    matchByNumber: toImportMatch(matchByNumber),
+    matchByName: toImportMatch(matchByName),
+    duplicateMode: "update", // preview classifies matched rows; commit applies the chosen mode
+  });
+
+  let matchedRecord: Company | null = null;
+  let hardError = false;
+
+  if (decision.action === "reject") {
+    hardError = true;
+    messages.push(decision.message);
+    matchedRecord = matchByName ?? matchByNumber;
+  } else if (decision.action === "update") {
+    matchedRecord = matchByName ?? matchByNumber;
+    if (decision.companyNumber) {
+      companyNumber = decision.companyNumber;
+      if (!incoming) {
+        messages.push(
+          `Company Number preserved from existing company: ${companyNumber}.`,
+        );
+      }
+    } else {
+      // Matched company has no number yet — assign one (not an overwrite).
+      companyNumber = allocateNextCompanyNumber(companies, [
+        ...seenInFile.numbers,
+        ...allocatedNumbers,
+      ]);
+      messages.push(
+        `Existing company has no Company Number — ${companyNumber} will be assigned.`,
+      );
+    }
+  } else if (!incoming) {
+    // create with blank number — auto-assign for the new company only.
+    companyNumber = allocateNextCompanyNumber(companies, [
+      ...seenInFile.numbers,
+      ...allocatedNumbers,
+    ]);
+    messages.push(`Company Number will be auto-assigned: ${companyNumber}.`);
+  }
+
+  // Reject the same Company Number appearing twice within one uploaded file.
+  let duplicateInFile = false;
+  if (!hardError && companyNumber) {
     const key = nameKey(companyNumber);
     if (seenInFile.numbers.has(key)) {
-      messages.push(
-        `Duplicate Company Number "${companyNumber}" appears earlier in this file.`,
-      );
+      duplicateInFile = true;
+      messages.push(companyNumberDuplicateInFileError(companyNumber));
     } else {
       seenInFile.numbers.add(key);
-      if (autoAssigned) allocatedNumbers.push(companyNumber);
+      allocatedNumbers.push(companyNumber);
     }
   }
 
@@ -275,6 +318,8 @@ function validateCompanyRow(
   };
 
   if (
+    hardError ||
+    duplicateInFile ||
     !companyName ||
     !companyNumber ||
     !fields.email?.trim() ||
@@ -286,26 +331,23 @@ function validateCompanyRow(
       status: "Error",
       messages,
       fields: normalizedFields,
-      matchedEntityId: null,
-      matchedEntityName: null,
+      matchedEntityId: matchedRecord?.id ?? null,
+      matchedEntityName: matchedRecord?.companyName ?? null,
       duplicateMatch: null,
     };
   }
 
-  const duplicate = findCompanyDuplicate(companies, normalizedFields);
-  if (duplicate) {
+  if (matchedRecord) {
     return {
       rowNumber,
       status: "Duplicate",
       messages: [
         ...messages,
-        duplicate.kind === "companyNumber"
-          ? `Matches existing company by Company Number (#${duplicate.record.id}).`
-          : `Matches existing company by Company Name (#${duplicate.record.id}).`,
+        `Matches existing company #${matchedRecord.id} (${matchedRecord.companyName}).`,
       ],
       fields: normalizedFields,
-      matchedEntityId: duplicate.record.id,
-      matchedEntityName: duplicate.record.companyName,
+      matchedEntityId: matchedRecord.id,
+      matchedEntityName: matchedRecord.companyName,
       duplicateMatch: null,
     };
   }
@@ -354,11 +396,12 @@ export async function commitCompanyImport(input: {
   let companies = await listAdminCompanies();
   const results: BulkPreviewRow[] = [];
   const allocatedInBatch: string[] = [];
+  const seenNumbers = new Set<string>(); // reject the same number twice in one file
 
   for (const row of input.rows) {
     const fields = { ...row.fields };
     const companyName = fields.companyName?.trim() ?? "";
-    let companyNumber = fields.companyNumber?.trim() ?? "";
+    const incoming = fields.companyNumber?.trim() ?? "";
 
     if (!companyName) {
       results.push({
@@ -373,85 +416,137 @@ export async function commitCompanyImport(input: {
       continue;
     }
 
-    if (!companyNumber) {
-      companyNumber = allocateNextCompanyNumber(companies, allocatedInBatch);
-      fields.companyNumber = companyNumber;
-    }
-    allocatedInBatch.push(companyNumber);
+    // Match BEFORE any allocation so an existing company's Company Number is
+    // never overwritten by a freshly generated one.
+    const matchByNumber = matchCompanyByNumber(companies, incoming);
+    const matchByName = findCompanyByName(companies, companyName);
+    const target = matchByName ?? matchByNumber;
+    const decision = resolveCompanyImport({
+      incoming,
+      matchByNumber: toImportMatch(matchByNumber),
+      matchByName: toImportMatch(matchByName),
+      duplicateMode: input.duplicateMode,
+    });
 
-    const duplicate = findCompanyDuplicate(companies, fields);
-    const payload = companyWritePayload(fields);
+    const isDuplicateInFile = (value: string | null): boolean =>
+      !!value && seenNumbers.has(nameKey(value));
 
     try {
-      if (duplicate) {
-        if (input.duplicateMode === "skip") {
-          results.push({
-            rowNumber: row.rowNumber,
-            status: "Skipped",
-            messages: [
-              `Skipped duplicate company "${duplicate.record.companyName}".`,
-            ],
-            fields,
-            matchedEntityId: duplicate.record.id,
-            matchedEntityName: duplicate.record.companyName,
-            duplicateMatch: null,
-          });
-          continue;
-        }
-
-        if (input.duplicateMode === "update") {
-          await updateAdminCompany(duplicate.record.id, payload);
-          results.push({
-            rowNumber: row.rowNumber,
-            status: "Imported",
-            messages: [
-              `Updated existing company #${duplicate.record.id} (${duplicate.record.companyName}).`,
-            ],
-            fields,
-            matchedEntityId: duplicate.record.id,
-            matchedEntityName: duplicate.record.companyName,
-            duplicateMatch: null,
-          });
-          companies = await listAdminCompanies();
-          continue;
-        }
-
-        // create despite duplicate — allocate a fresh portal number
-        const forcedNumber = allocateNextCompanyNumber(
-          companies,
-          allocatedInBatch,
-        );
-        allocatedInBatch.push(forcedNumber);
-        const created = await createAdminCompany({
-          ...payload,
-          companyNumber: forcedNumber,
+      if (decision.action === "reject") {
+        results.push({
+          rowNumber: row.rowNumber,
+          status: "Error",
+          messages: [decision.message],
+          fields,
+          matchedEntityId: target?.id ?? null,
+          matchedEntityName: target?.companyName ?? null,
+          duplicateMatch: null,
         });
+        continue;
+      }
+
+      if (decision.action === "skip") {
+        results.push({
+          rowNumber: row.rowNumber,
+          status: "Skipped",
+          messages: [
+            `Skipped duplicate company "${target?.companyName ?? companyName}".`,
+          ],
+          fields,
+          matchedEntityId: decision.targetId,
+          matchedEntityName: target?.companyName ?? null,
+          duplicateMatch: null,
+        });
+        continue;
+      }
+
+      if (decision.action === "update") {
+        let finalNumber = decision.companyNumber;
+        let payload: Record<string, unknown>;
+        if (finalNumber) {
+          // Preserve the existing number: omit it from the payload entirely so
+          // SharePoint never rewrites it.
+          if (isDuplicateInFile(finalNumber)) {
+            results.push({
+              rowNumber: row.rowNumber,
+              status: "Error",
+              messages: [companyNumberDuplicateInFileError(finalNumber)],
+              fields: { ...fields, companyNumber: finalNumber },
+              matchedEntityId: decision.targetId,
+              matchedEntityName: target?.companyName ?? null,
+              duplicateMatch: null,
+            });
+            continue;
+          }
+          const { companyNumber: _omitNumber, ...rest } = companyWritePayload({
+            ...fields,
+            companyNumber: finalNumber,
+          });
+          void _omitNumber;
+          payload = rest;
+        } else {
+          // Matched company has no number yet — assign one (not an overwrite).
+          finalNumber = allocateNextCompanyNumber(companies, [
+            ...seenNumbers,
+            ...allocatedInBatch,
+          ]);
+          payload = companyWritePayload({ ...fields, companyNumber: finalNumber });
+        }
+
+        seenNumbers.add(nameKey(finalNumber));
+        fields.companyNumber = finalNumber;
+        await updateAdminCompany(decision.targetId, payload);
         results.push({
           rowNumber: row.rowNumber,
           status: "Imported",
           messages: [
-            `Created new company despite duplicate (number set to ${forcedNumber}).`,
+            `Updated existing company #${decision.targetId} (${target?.companyName ?? companyName}); Company Number ${finalNumber} preserved.`,
           ],
-          fields: { ...fields, companyNumber: forcedNumber },
-          matchedEntityId: created.id,
-          matchedEntityName: created.companyName,
+          fields,
+          matchedEntityId: decision.targetId,
+          matchedEntityName: target?.companyName ?? null,
           duplicateMatch: null,
         });
         companies = await listAdminCompanies();
         continue;
       }
 
-      const created = await createAdminCompany(payload);
+      // action === "create" — new company. A blank number is allocated only
+      // here; a supplied number was already proven unique by resolveCompanyImport.
+      let finalNumber =
+        decision.companyNumber ??
+        allocateNextCompanyNumber(companies, [
+          ...seenNumbers,
+          ...allocatedInBatch,
+        ]);
+      if (isDuplicateInFile(finalNumber)) {
+        results.push({
+          rowNumber: row.rowNumber,
+          status: "Error",
+          messages: [companyNumberDuplicateInFileError(finalNumber)],
+          fields: { ...fields, companyNumber: finalNumber },
+          matchedEntityId: null,
+          matchedEntityName: null,
+          duplicateMatch: null,
+        });
+        continue;
+      }
+      seenNumbers.add(nameKey(finalNumber));
+      allocatedInBatch.push(finalNumber);
+      fields.companyNumber = finalNumber;
+      const created = await createAdminCompany(
+        companyWritePayload({ ...fields, companyNumber: finalNumber }),
+      );
+      finalNumber = created.companyNumber ?? finalNumber;
       results.push({
         rowNumber: row.rowNumber,
         status: "Imported",
         messages: [
-          `Created company #${created.id} (${created.companyNumber ?? companyNumber}).`,
+          target
+            ? `Created new company despite duplicate (number set to ${finalNumber}).`
+            : `Created company #${created.id} (${finalNumber}).`,
         ],
-        fields: {
-          ...fields,
-          companyNumber: created.companyNumber ?? companyNumber,
-        },
+        fields: { ...fields, companyNumber: finalNumber },
         matchedEntityId: created.id,
         matchedEntityName: created.companyName,
         duplicateMatch: null,

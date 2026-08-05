@@ -48,6 +48,7 @@ import {
   earliestDateFromColumns,
   listTrainingMatrixExampleRows,
   stripExampleMatrixId,
+  syncWorkforceToTrainingMatrix,
   upsertTrainingMatrixExampleRow,
 } from "@/lib/services/bulkUpload/trainingMatrixExampleService";
 
@@ -1198,27 +1199,17 @@ export async function createAdminWorkforce(input: Record<string, unknown>) {
     folderWarning = folderResult.ok ? undefined : folderResult.warning;
   }
 
-  // Seed a Training Matrix row so the candidate appears from day one.
-  // Skipped in bulkMode — matrix import / manual sync can fill expiry columns.
+  // Seed a REAL Training Matrix Update row so the candidate appears from day
+  // one. Skipped in bulkMode — the bulk importer syncs all imported rows once,
+  // sharing a single matrix read (see candidateImporter Phase 3c). Manual and
+  // bulk paths both go through syncWorkforceToTrainingMatrix.
   let matrixSeedWarning: string | undefined;
   if (!skipMatrix) {
     try {
-      const { upsertTrainingMatrixExampleRow } = await import(
-        "@/lib/services/bulkUpload/trainingMatrixExampleService"
-      );
-      await upsertTrainingMatrixExampleRow({
-        candidateName,
-        source: {
-          Name: candidateName,
-          DOB: asNullableString(asDateInput(input.dateOfBirth) ?? null),
-          "CSCS Expiry": asNullableString(asDateInput(input.cscsExpiry) ?? null),
-          "EUSR Expiry": asNullableString(asDateInput(input.eusrExpiry) ?? null),
-          "NRSWA Expiry": asNullableString(asDateInput(input.swqrExpiry) ?? null),
-        },
-      });
+      await syncWorkforceToTrainingMatrix(mapped);
     } catch (error) {
       console.error(
-        "[workforce] matrix seed failed (candidate still created):",
+        "[workforce] matrix sync failed (candidate still created):",
         error,
       );
       matrixSeedWarning =
@@ -1373,6 +1364,20 @@ export async function updateAdminWorkforce(
     departmentNameByIdMap(departmentLookups.departments),
   );
   if (!mapped) throw new Error("Updated candidate could not be mapped.");
+
+  // Keep the candidate's REAL Training Matrix Update row in step with profile
+  // edits. Skipped for bulk (the importer syncs once at the end); best-effort
+  // so a matrix hiccup never fails the workforce update.
+  const isBulkUpdate =
+    input.bulkMode === true || input.bulkMode === "true";
+  if (!isBulkUpdate) {
+    try {
+      await syncWorkforceToTrainingMatrix(mapped);
+    } catch (error) {
+      console.error("[workforce] matrix sync on update failed:", error);
+    }
+  }
+
   return mapped;
 }
 
