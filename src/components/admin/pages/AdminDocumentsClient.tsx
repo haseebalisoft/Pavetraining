@@ -12,6 +12,11 @@ import { Breadcrumbs } from "@/components/ui/Breadcrumbs";
 import { LoadingState } from "@/components/ui/States";
 import { readPublicApiError } from "@/lib/errors/publicMessages";
 import {
+  candidateDocumentsFolderName,
+  companyDocumentsFolderName,
+  resolveDocumentTypeFolder,
+} from "@/lib/services/documentFolderPaths";
+import {
   CUSTOMER_DOCUMENT_TYPES,
 } from "@/types/adminDocuments";
 import type { AdminDocumentRecord } from "@/types/adminDocuments";
@@ -42,6 +47,21 @@ function buildForm(row: AdminDocumentRecord): FormState {
     notificationSent: Boolean(row.notificationSent),
     notifyCustomer: Boolean(row.notifyCustomer),
   };
+}
+
+/** Reverse of resolveDocumentTypeFolder: candidate subfolder → Document Type. */
+const SUBFOLDER_TO_DOCUMENT_TYPE: Record<string, string> = {
+  Certificates: "Certificate",
+  "Card Scans": "Card Scan",
+  "NVQ Documents": "NVQ Document",
+  "Other Documents": "Other",
+};
+
+/** "C00002 - ali" → "C00002" (the stable number prefix before " - "). */
+function folderNumberPrefix(segment: string | undefined | null): string {
+  if (!segment) return "";
+  const idx = segment.indexOf(" - ");
+  return (idx >= 0 ? segment.slice(0, idx) : segment).trim();
 }
 
 /**
@@ -217,6 +237,94 @@ export function AdminDocumentsClient({
     () => candidatesForCompany(uploadCompanyId),
     [candidatesForCompany, uploadCompanyId],
   );
+
+  // Seed the upload dialog from the folder currently open so a file lands in
+  // THIS folder. Previously the dialog defaulted to companies[0] + no candidate,
+  // so uploading inside a candidate subfolder (e.g. Card Scans) silently went to
+  // the company's "Company Documents" folder and never appeared where expected.
+  const deriveUploadSeed = useCallback(() => {
+    const seed = {
+      companyId: companies[0]?.id ?? "",
+      candidateId: "",
+      documentType: "Certificate",
+    };
+    const companySegment = folderPath[0];
+    if (!companySegment) return seed;
+
+    const companyMatch =
+      companies.find(
+        (c) =>
+          companyDocumentsFolderName(c.companyNumber, c.companyName) ===
+          companySegment,
+      ) ??
+      companies.find(
+        (c) =>
+          (c.companyNumber ?? "").trim() === folderNumberPrefix(companySegment),
+      );
+    if (!companyMatch) return seed;
+    seed.companyId = companyMatch.id;
+
+    if (/^candidates$/i.test((folderPath[1] ?? "").trim())) {
+      const candidateSegment = folderPath[2];
+      if (candidateSegment) {
+        const companyKey = companyMatch.companyName.trim().toLowerCase();
+        const candidateMatch =
+          workforce.find(
+            (w) =>
+              w.companyName.trim().toLowerCase() === companyKey &&
+              candidateDocumentsFolderName(
+                w.workforceNumber,
+                w.candidateName,
+              ) === candidateSegment,
+          ) ??
+          workforce.find(
+            (w) =>
+              w.companyName.trim().toLowerCase() === companyKey &&
+              (w.workforceNumber ?? "").trim() ===
+                folderNumberPrefix(candidateSegment),
+          );
+        if (candidateMatch) seed.candidateId = candidateMatch.id;
+      }
+      const subfolder = folderPath[3];
+      if (subfolder && SUBFOLDER_TO_DOCUMENT_TYPE[subfolder]) {
+        seed.documentType = SUBFOLDER_TO_DOCUMENT_TYPE[subfolder];
+      }
+    }
+    return seed;
+  }, [companies, workforce, folderPath]);
+
+  // Live preview of the exact SharePoint folder the file will be stored in,
+  // built from the current selections with the same rules as the server.
+  const uploadDestination = useMemo(() => {
+    const company = companyById.get(uploadCompanyId);
+    if (!company) return null;
+    const hasCandidate = Boolean(uploadCandidateId);
+    const destinationFolder = resolveDocumentTypeFolder({
+      documentType: uploadDocumentType,
+      hasCandidate,
+    });
+    const companyFolder = companyDocumentsFolderName(
+      company.companyNumber,
+      company.companyName,
+    );
+    if (!hasCandidate || destinationFolder === "Company Documents") {
+      return `${companyFolder}/Company Documents`;
+    }
+    const candidate = workforce.find((w) => w.id === uploadCandidateId);
+    const candidateFolder = candidate
+      ? candidateDocumentsFolderName(
+          candidate.workforceNumber,
+          candidate.candidateName,
+        )
+      : "Candidate";
+    return `${companyFolder}/Candidates/${candidateFolder}/${destinationFolder}`;
+  }, [
+    companyById,
+    uploadCompanyId,
+    uploadCandidateId,
+    uploadDocumentType,
+    workforce,
+  ]);
 
   useEffect(() => {
     if (
@@ -572,12 +680,13 @@ export function AdminDocumentsClient({
             className={styles.primaryButton}
             whileTap={{ scale: 0.97, transition: { duration: 0.15 } }}
             onClick={() => {
+              const seed = deriveUploadSeed();
               setUploadOpen(true);
               setUploadError(null);
               setUploadFile(null);
-              setUploadCompanyId(companies[0]?.id ?? "");
-              setUploadCandidateId("");
-              setUploadDocumentType("Certificate");
+              setUploadCompanyId(seed.companyId);
+              setUploadCandidateId(seed.candidateId);
+              setUploadDocumentType(seed.documentType);
               setUploadCustomerVisible(true);
             }}
           >
@@ -829,6 +938,11 @@ export function AdminDocumentsClient({
               ))}
             </select>
           </label>
+          {uploadDestination ? (
+            <p className={styles.helpText}>
+              Uploads to: <strong>{uploadDestination}</strong>
+            </p>
+          ) : null}
           <label className={styles.field}>
             <span className={styles.fieldLabel}>File</span>
             <input

@@ -230,16 +230,64 @@ type PathStep = {
   stableNumber?: string | null;
 };
 
-async function ensureFolderPathSteps(steps: PathStep[]): Promise<{
-  driveId: string;
-  folderId: string;
-}> {
-  const driveId = await getCustomerDocumentsDriveId();
+/**
+ * Memoizes the drive id + resolved folder ids for the duration of ONE bulk
+ * import. Without it, every candidate re-fetched the drive id (~6×/candidate)
+ * and re-resolved the shared company / "Candidates" folders from root for every
+ * subfolder — the dominant cost of a 50-row import. Values are stored as
+ * in-flight PROMISES so parallel candidates of the same company share a single
+ * resolve instead of racing to create the same folder.
+ */
+export interface FolderEnsureCache {
+  driveId?: Promise<string>;
+  folders: Map<string, Promise<string>>;
+}
+
+export function createFolderEnsureCache(): FolderEnsureCache {
+  return { folders: new Map() };
+}
+
+function getDriveIdCached(cache: FolderEnsureCache): Promise<string> {
+  if (!cache.driveId) {
+    const pending = getCustomerDocumentsDriveId();
+    cache.driveId = pending;
+    // On failure, clear so a later attempt can retry.
+    pending.catch(() => {
+      if (cache.driveId === pending) cache.driveId = undefined;
+    });
+  }
+  return cache.driveId;
+}
+
+function ensureChildFolderCached(
+  cache: FolderEnsureCache,
+  driveId: string,
+  parentId: string,
+  name: string,
+  stableNumber?: string | null,
+): Promise<string> {
+  const key = `${driveId}::${parentId}::${name.toLowerCase()}`;
+  const hit = cache.folders.get(key);
+  if (hit) return hit;
+  const pending = ensureChildFolder(driveId, parentId, name, stableNumber);
+  cache.folders.set(key, pending);
+  pending.catch(() => {
+    if (cache.folders.get(key) === pending) cache.folders.delete(key);
+  });
+  return pending;
+}
+
+async function ensureFolderPathStepsCached(
+  steps: PathStep[],
+  cache: FolderEnsureCache,
+): Promise<{ driveId: string; folderId: string }> {
+  const driveId = await getDriveIdCached(cache);
   let parentId = "root";
   for (const step of steps) {
     const safe = sanitizeFolderSegment(step.name);
     if (!safe) continue;
-    parentId = await ensureChildFolder(
+    parentId = await ensureChildFolderCached(
+      cache,
       driveId,
       parentId,
       safe,
@@ -247,6 +295,15 @@ async function ensureFolderPathSteps(steps: PathStep[]): Promise<{
     );
   }
   return { driveId, folderId: parentId };
+}
+
+async function ensureFolderPathSteps(steps: PathStep[]): Promise<{
+  driveId: string;
+  folderId: string;
+}> {
+  // Single-call callers get a throwaway cache: still fetches the drive id once
+  // and dedupes repeated segments within the one call.
+  return ensureFolderPathStepsCached(steps, createFolderEnsureCache());
 }
 
 function companyFolderStep(
@@ -315,14 +372,17 @@ export async function resolveDocumentUploadFolder(
  * Never throws to callers that should keep list-item create successful —
  * returns a warning string on failure.
  */
-export async function ensureCompanyDocumentFolders(input: {
-  companyName: string;
-  companyNumber?: string | null;
-}): Promise<{ ok: true } | { ok: false; warning: string }> {
+export async function ensureCompanyDocumentFolders(
+  input: {
+    companyName: string;
+    companyNumber?: string | null;
+  },
+  cache: FolderEnsureCache = createFolderEnsureCache(),
+): Promise<{ ok: true } | { ok: false; warning: string }> {
   try {
     const company = companyFolderStep(input.companyNumber, input.companyName);
-    await ensureFolderPathSteps([company, { name: "Company Documents" }]);
-    await ensureFolderPathSteps([company, { name: "Candidates" }]);
+    await ensureFolderPathStepsCached([company, { name: "Company Documents" }], cache);
+    await ensureFolderPathStepsCached([company, { name: "Candidates" }], cache);
     return { ok: true };
   } catch (error) {
     const message =
@@ -340,12 +400,15 @@ export async function ensureCompanyDocumentFolders(input: {
  * .../Candidates/{WorkforceNumber - Candidate}/
  *   Certificates | Card Scans | NVQ Documents | Other Documents
  */
-export async function ensureCandidateDocumentFolders(input: {
-  companyName: string;
-  companyNumber?: string | null;
-  candidateName: string;
-  workforceNumber?: string | null;
-}): Promise<{ ok: true } | { ok: false; warning: string }> {
+export async function ensureCandidateDocumentFolders(
+  input: {
+    companyName: string;
+    companyNumber?: string | null;
+    candidateName: string;
+    workforceNumber?: string | null;
+  },
+  cache: FolderEnsureCache = createFolderEnsureCache(),
+): Promise<{ ok: true } | { ok: false; warning: string }> {
   try {
     const company = companyFolderStep(input.companyNumber, input.companyName);
     const candidate = candidateFolderStep(
@@ -353,17 +416,29 @@ export async function ensureCandidateDocumentFolders(input: {
       input.candidateName,
     );
 
-    await ensureFolderPathSteps([company, { name: "Company Documents" }]);
-    await ensureFolderPathSteps([company, { name: "Candidates" }]);
+    // Company-level folders — memoized, so a batch resolves them once per
+    // company instead of once per candidate per subfolder.
+    await ensureFolderPathStepsCached([company, { name: "Company Documents" }], cache);
+    const { driveId, folderId: candidatesId } = await ensureFolderPathStepsCached(
+      [company, { name: "Candidates" }],
+      cache,
+    );
 
-    for (const sub of CANDIDATE_SUBFOLDERS) {
-      await ensureFolderPathSteps([
-        company,
-        { name: "Candidates" },
-        candidate,
-        { name: sub },
-      ]);
-    }
+    // Candidate folder under Candidates, then the four required subfolders in
+    // parallel (distinct names under a known parent — safe, and removes the
+    // repeated root-to-Candidates walk the loop used to do per subfolder).
+    const candidateId = await ensureChildFolderCached(
+      cache,
+      driveId,
+      candidatesId,
+      sanitizeFolderSegment(candidate.name),
+      candidate.stableNumber,
+    );
+    await Promise.all(
+      CANDIDATE_SUBFOLDERS.map((sub) =>
+        ensureChildFolderCached(cache, driveId, candidateId, sub),
+      ),
+    );
     return { ok: true };
   } catch (error) {
     const message =

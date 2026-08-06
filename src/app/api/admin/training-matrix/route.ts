@@ -7,10 +7,16 @@ import {
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  const companyName = new URL(request.url).searchParams.get("companyName");
+  const params = new URL(request.url).searchParams;
+  const companyName = params.get("companyName");
+  // Admin-only route: include orphan/needs-review rows unless a caller opts out
+  // (`includeUnlinked=false`). The client hides them behind "Show all".
+  const includeUnlinked = params.get("includeUnlinked") !== "false";
   return withAdminApi(
     "GET /api/admin/training-matrix",
-    async () => ({ records: await listAdminMatrix(companyName) }),
+    async () => ({
+      records: await listAdminMatrix(companyName, { includeUnlinked }),
+    }),
     { errorMessage: "Failed to load training matrix" },
     request,
   );

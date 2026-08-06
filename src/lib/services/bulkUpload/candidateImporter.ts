@@ -10,6 +10,7 @@ import {
   listAdminCompanies,
   listAdminWorkforce,
   loadPermissionPeople,
+  toMatrixProfile,
   updateAdminWorkforce,
   type AdminWorkforceRecord,
   type PermissionPersonRef,
@@ -21,6 +22,10 @@ import {
   findCandidateDuplicate,
 } from "@/lib/services/bulkUpload/matching";
 import { resolveWorkforceCompanyMatch } from "@/lib/services/bulkUpload/companyMatch";
+import {
+  createBulkLogger,
+  type BulkLogger,
+} from "@/lib/services/bulkUpload/bulkUploadLog";
 import {
   normalizeDateValue,
   pickField,
@@ -525,16 +530,29 @@ export async function commitCandidateImport(input: {
   rows: BulkCommitRowInput[];
   duplicateMode: BulkDuplicateMode;
   autoCreateMissingCompanies?: boolean;
+  log?: BulkLogger;
 }): Promise<BulkPreviewRow[]> {
   const autoCreateMissing = input.autoCreateMissingCompanies ?? false;
-  let companies = await listAdminCompanies();
-  const [workforce, initialPeople, initialDepartments] = await Promise.all([
-    listAdminWorkforce(),
-    loadPermissionPeople(),
-    import("@/lib/services/departmentService").then((mod) =>
-      mod.listAdminDepartments(),
-    ),
-  ]);
+  const log = input.log ?? createBulkLogger("commit:workforce");
+  // Load all reference data in one parallel round-trip (companies used to be a
+  // separate serial read before this Promise.all).
+  const loadPhase = log.phase("load");
+  const [companiesInitial, workforce, initialPeople, initialDepartments] =
+    await Promise.all([
+      listAdminCompanies(),
+      listAdminWorkforce(),
+      loadPermissionPeople(),
+      import("@/lib/services/departmentService").then((mod) =>
+        mod.listAdminDepartments(),
+      ),
+    ]);
+  let companies = companiesInitial;
+  loadPhase.end({
+    companies: companies.length,
+    workforce: workforce.length,
+    people: initialPeople.length,
+    departments: initialDepartments.length,
+  });
   let people = initialPeople;
   let departmentRecords = initialDepartments.map((row) => ({
     id: row.id,
@@ -575,6 +593,7 @@ export async function commitCandidateImport(input: {
     [];
 
   // Phase 1: validate + ensure companies (serial — unique company names).
+  const phase1 = log.phase("phase1:validate+companies");
   for (const row of input.rows) {
     const fields = mapCandidateFields(row.fields);
     for (const [key, value] of Object.entries(row.fields)) {
@@ -602,6 +621,10 @@ export async function commitCandidateImport(input: {
     );
 
     if (validated.status === "Error") {
+      log.debug("row rejected", {
+        row: validated.rowNumber,
+        reason: validated.messages[0] ?? "validation error",
+      });
       results.push(validated);
       continue;
     }
@@ -701,6 +724,11 @@ export async function commitCandidateImport(input: {
         extraMessages: ["Imported successfully."],
       });
     } catch (error) {
+      log.warn("company resolve failed", {
+        row: validated.rowNumber,
+        company: validated.fields.company ?? null,
+        error: error instanceof Error ? error.message : String(error),
+      });
       results.push({
         ...validated,
         status: "Error",
@@ -714,8 +742,17 @@ export async function commitCandidateImport(input: {
     }
   }
 
+  phase1.end({
+    rows: input.rows.length,
+    creates: pendingCreates.length,
+    updates: pendingUpdates.length,
+    errors: results.filter((r) => r.status === "Error").length,
+    companies: companies.length,
+  });
+
   await withBulkSharePointWrites(async () => {
     // Phase 2: pre-create unique TMs / supervisors / departments (serial).
+    const phase2 = log.phase("phase2:permissions+departments");
     const { createAdminDepartment } = await import(
       "@/lib/services/departmentService"
     );
@@ -770,7 +807,13 @@ export async function commitCandidateImport(input: {
       }
     }
 
+    phase2.end({
+      people: people.length,
+      departments: departmentRecords.length,
+    });
+
     // Phase 3a: updates stay sequential (rarer path).
+    const phase3a = log.phase("phase3a:updates");
     for (const job of pendingUpdates) {
       try {
         const updated = await updateAdminWorkforce(job.entityId, {
@@ -791,7 +834,17 @@ export async function commitCandidateImport(input: {
           resolvedCompanyName: job.companyName,
           messages: [...job.validated.messages, ...job.extraMessages],
         };
+        log.debug("row updated", {
+          row: job.validated.rowNumber,
+          wf: updated.workforceNumber ?? null,
+          name: updated.candidateName,
+        });
       } catch (error) {
+        log.warn("update failed", {
+          row: job.validated.rowNumber,
+          name: job.validated.fields.candidateName ?? null,
+          error: error instanceof Error ? error.message : String(error),
+        });
         results[job.index] = {
           ...job.validated,
           status: "Error",
@@ -804,8 +857,11 @@ export async function commitCandidateImport(input: {
         };
       }
     }
+    phase3a.end({ updates: pendingUpdates.length });
 
     // Phase 3b: parallel workforce creates (main speed win).
+    const phase3b = log.phase("phase3b:creates");
+    let createdCount = 0;
     const knownSnapshot = Array.from(knownWorkforceNumbers);
     await mapPool(pendingCreates, BULK_CREATE_CONCURRENCY, async (job) => {
       try {
@@ -834,7 +890,24 @@ export async function commitCandidateImport(input: {
           resolvedCompanyName: job.companyName,
           messages: [...job.validated.messages, ...job.extraMessages],
         };
+        createdCount += 1;
+        log.debug("row created", {
+          row: job.validated.rowNumber,
+          wf: created.workforceNumber ?? null,
+          name: created.candidateName,
+        });
+        if (createdCount % 10 === 0) {
+          log.info("progress", {
+            done: createdCount,
+            total: pendingCreates.length,
+          });
+        }
       } catch (error) {
+        log.warn("create failed", {
+          row: job.validated.rowNumber,
+          name: job.validated.fields.candidateName ?? null,
+          error: error instanceof Error ? error.message : String(error),
+        });
         results[job.index] = {
           ...job.validated,
           status: "Error",
@@ -847,6 +920,11 @@ export async function commitCandidateImport(input: {
         };
       }
     });
+    phase3b.end({
+      created: createdCount,
+      errors: pendingCreates.length - createdCount,
+      concurrency: BULK_CREATE_CONCURRENCY,
+    });
 
     // Phase 3c: create/update REAL Training Matrix Update rows for every
     // imported candidate, so the matrix no longer relies on synthetic
@@ -854,40 +932,94 @@ export async function commitCandidateImport(input: {
     // real ids. One matrix read up front; sequential writes keep the dedupe
     // cache consistent and never wipe existing expiry data with blanks.
     if (importedTargets.length) {
+      const phase3c = log.phase("phase3c:trainingMatrix");
       const { listTrainingMatrixExampleRows, syncWorkforceToTrainingMatrix } =
         await import(
           "@/lib/services/bulkUpload/trainingMatrixExampleService"
         );
+      const { candidateNameKey } = await import(
+        "@/lib/services/bulkUpload/workforceMatrixSync"
+      );
       const matrixRows = await listTrainingMatrixExampleRows();
-      for (const { index, wf } of importedTargets) {
-        const current = results[index];
-        if (!current) continue;
-        try {
-          const sync = await syncWorkforceToTrainingMatrix(wf, {
-            existingRows: matrixRows,
-          });
-          if (sync.created) matrixRows.push(sync.row);
-          results[index] = {
-            ...current,
-            messages: [
-              ...current.messages,
-              sync.created
-                ? `Training Matrix row created (#${sync.id}).`
-                : `Training Matrix row updated (#${sync.id}).`,
-            ],
-          };
-        } catch (error) {
-          results[index] = {
-            ...current,
-            messages: [
-              ...current.messages,
-              `Candidate imported, but Training Matrix row sync failed: ${
-                error instanceof Error ? error.message : "unknown error"
-              }.`,
-            ],
-          };
-        }
+      log.info("matrix read", { rows: matrixRows.length });
+
+      // Group by the dedupe key (candidate name). Distinct names never share a
+      // matrix row, so groups run in parallel; same-name candidates stay
+      // sequential inside a group so the first creates the row and the rest
+      // update it — identical to the old sequential result, still no duplicates.
+      const groups = new Map<
+        string,
+        Array<{ index: number; wf: AdminWorkforceRecord }>
+      >();
+      for (const target of importedTargets) {
+        const key = candidateNameKey(target.wf.candidateName);
+        const bucket = groups.get(key);
+        if (bucket) bucket.push(target);
+        else groups.set(key, [target]);
       }
+
+      let synced = 0;
+      await mapPool(
+        [...groups.entries()],
+        BULK_CREATE_CONCURRENCY,
+        async ([groupKey, group]) => {
+          // Seed a local rows view from the up-front snapshot for this name, so
+          // a create by the first same-name candidate is visible to the rest.
+          const localRows = matrixRows.filter(
+            (row) => candidateNameKey(row.candidateName) === groupKey,
+          );
+          for (const { index, wf } of group) {
+            const current = results[index];
+            if (!current) continue;
+            try {
+              // Thread the strong link keys (WorkforceItemId, CompanyItemId) so
+              // bulk-created rows link by id like the manual create/update path.
+              const sync = await syncWorkforceToTrainingMatrix(
+                toMatrixProfile(wf),
+                { existingRows: localRows },
+              );
+              if (sync.created) localRows.push(sync.row);
+              results[index] = {
+                ...current,
+                messages: [
+                  ...current.messages,
+                  sync.created
+                    ? `Training Matrix row created (#${sync.id}).`
+                    : `Training Matrix row updated (#${sync.id}).`,
+                ],
+              };
+              synced += 1;
+              log.debug("matrix synced", {
+                row: current.rowNumber,
+                id: sync.id,
+                created: sync.created,
+              });
+              if (synced % 10 === 0) {
+                log.info("progress", {
+                  done: synced,
+                  total: importedTargets.length,
+                });
+              }
+            } catch (error) {
+              log.warn("matrix sync failed", {
+                row: current.rowNumber,
+                error:
+                  error instanceof Error ? error.message : String(error),
+              });
+              results[index] = {
+                ...current,
+                messages: [
+                  ...current.messages,
+                  `Candidate imported, but Training Matrix row sync failed: ${
+                    error instanceof Error ? error.message : "unknown error"
+                  }.`,
+                ],
+              };
+            }
+          }
+        },
+      );
+      phase3c.end({ synced, targets: importedTargets.length });
     }
 
     // Phase 3d: ensure the Customer Documents folder structure for every
@@ -898,9 +1030,14 @@ export async function commitCandidateImport(input: {
     // throws — folder issues are reported per row, never blocking the import.
     // Bounded concurrency keeps 50 candidates well under the route timeout.
     if (importedTargets.length) {
-      const { ensureCandidateDocumentFolders } = await import(
-        "@/lib/services/customerDocumentsFolderService"
-      );
+      const phase3d = log.phase("phase3d:documentFolders");
+      let foldersDone = 0;
+      const { ensureCandidateDocumentFolders, createFolderEnsureCache } =
+        await import("@/lib/services/customerDocumentsFolderService");
+      // One cache for the whole batch: the drive id and each company's
+      // Company Documents / Candidates folders resolve once and are shared
+      // (as in-flight promises) across all candidates instead of per-row.
+      const folderCache = createFolderEnsureCache();
       await mapPool(
         importedTargets,
         BULK_CREATE_CONCURRENCY,
@@ -908,12 +1045,15 @@ export async function commitCandidateImport(input: {
           const current = results[index];
           if (!current) return;
           try {
-            const folders = await ensureCandidateDocumentFolders({
-              companyName: wf.companyName,
-              companyNumber: wf.companyNumber ?? null,
-              candidateName: wf.candidateName,
-              workforceNumber: wf.workforceNumber ?? null,
-            });
+            const folders = await ensureCandidateDocumentFolders(
+              {
+                companyName: wf.companyName,
+                companyNumber: wf.companyNumber ?? null,
+                candidateName: wf.candidateName,
+                workforceNumber: wf.workforceNumber ?? null,
+              },
+              folderCache,
+            );
             results[index] = {
               ...current,
               messages: [
@@ -923,7 +1063,22 @@ export async function commitCandidateImport(input: {
                   : folders.warning,
               ],
             };
+            if (!folders.ok) {
+              log.warn("folders warning", {
+                row: current.rowNumber,
+                warning: folders.warning,
+              });
+            } else {
+              log.debug("folders ensured", {
+                row: current.rowNumber,
+                name: wf.candidateName,
+              });
+            }
           } catch (error) {
+            log.warn("folders failed", {
+              row: current.rowNumber,
+              error: error instanceof Error ? error.message : String(error),
+            });
             results[index] = {
               ...current,
               messages: [
@@ -933,9 +1088,18 @@ export async function commitCandidateImport(input: {
                 }.`,
               ],
             };
+          } finally {
+            foldersDone += 1;
+            if (foldersDone % 10 === 0) {
+              log.info("progress", {
+                done: foldersDone,
+                total: importedTargets.length,
+              });
+            }
           }
         },
       );
+      phase3d.end({ processed: foldersDone, targets: importedTargets.length });
     }
   });
 

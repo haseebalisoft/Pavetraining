@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useMemo, useState, type DragEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+} from "react";
 
 import { useAdminToast } from "@/components/admin/AdminToast";
 import { Breadcrumbs } from "@/components/ui/Breadcrumbs";
@@ -205,6 +212,157 @@ function PreviewTable({
   );
 }
 
+/** One phase of a commit, with the display label and a rough weight (share of
+ *  total time) so the gauge advances smoothly across phases of very different
+ *  cost. `parallel` phases show the "running in parallel" hint. */
+interface CommitPhaseModel {
+  key: string;
+  label: string;
+  weight: number;
+  parallel?: boolean;
+}
+
+const WORKFORCE_PHASE_MODEL: CommitPhaseModel[] = [
+  { key: "load", label: "Loading data", weight: 2 },
+  { key: "phase1:validate+companies", label: "Validating rows", weight: 3 },
+  {
+    key: "phase2:permissions+departments",
+    label: "Setting up people & departments",
+    weight: 5,
+  },
+  { key: "phase3a:updates", label: "Updating existing records", weight: 5 },
+  {
+    key: "phase3b:creates",
+    label: "Creating workforce records",
+    weight: 20,
+    parallel: true,
+  },
+  {
+    key: "phase3c:trainingMatrix",
+    label: "Building Training Matrix",
+    weight: 30,
+    parallel: true,
+  },
+  {
+    key: "phase3d:documentFolders",
+    label: "Creating document folders",
+    weight: 35,
+    parallel: true,
+  },
+];
+
+const COMPANY_PHASE_MODEL: CommitPhaseModel[] = [
+  { key: "load:companies", label: "Loading companies", weight: 5 },
+  { key: "commit:rows", label: "Importing companies", weight: 95 },
+];
+
+function phaseModelFor(importType: BulkImportType): CommitPhaseModel[] {
+  if (importType === "workforce") return WORKFORCE_PHASE_MODEL;
+  if (importType === "company") return COMPANY_PHASE_MODEL;
+  // Other import types only report start/done — no weighted phases, so the
+  // gauge runs indeterminate until the result arrives.
+  return [];
+}
+
+interface CommitProgressState {
+  totalRows: number;
+  phaseLabel: string;
+  phaseKey: string | null;
+  done: number;
+  total: number;
+  completed: string[];
+  parallel: boolean;
+  /** null = indeterminate (no weighted phase model / not started). */
+  overallPct: number | null;
+}
+
+function computeOverallPct(
+  model: CommitPhaseModel[],
+  completed: Set<string>,
+  phaseKey: string | null,
+  done: number,
+  total: number,
+): number | null {
+  if (model.length === 0) return null;
+  const totalWeight = model.reduce((sum, phase) => sum + phase.weight, 0);
+  let acc = 0;
+  for (const phase of model) {
+    if (completed.has(phase.key)) {
+      acc += phase.weight;
+    } else if (phase.key === phaseKey && total > 0) {
+      acc += phase.weight * Math.min(1, done / total);
+    }
+  }
+  // Cap below 100 until the final "done" event flips it to complete.
+  return Math.min(99, Math.round((acc / totalWeight) * 100));
+}
+
+/** Circular "progress clock" shown live during a bulk commit. */
+function BulkCommitClock({
+  progress,
+  elapsedMs,
+}: {
+  progress: CommitProgressState;
+  elapsedMs: number;
+}) {
+  const radius = 52;
+  const circumference = 2 * Math.PI * radius;
+  const indeterminate = progress.overallPct == null;
+  const shownPct = indeterminate ? 30 : progress.overallPct ?? 0;
+  const offset = circumference * (1 - shownPct / 100);
+  const totalSeconds = Math.floor(elapsedMs / 1000);
+  const mm = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
+  const ss = String(totalSeconds % 60).padStart(2, "0");
+
+  return (
+    <div className={styles.commitClock} role="status" aria-live="polite">
+      <div
+        className={`${styles.commitClockGauge}${
+          indeterminate ? ` ${styles.commitClockGaugeSpin}` : ""
+        }`}
+      >
+        <svg viewBox="0 0 120 120" aria-hidden="true">
+          <circle cx="60" cy="60" r={radius} className={styles.commitClockTrack} />
+          <circle
+            cx="60"
+            cy="60"
+            r={radius}
+            className={styles.commitClockArc}
+            strokeDasharray={circumference}
+            strokeDashoffset={offset}
+            transform="rotate(-90 60 60)"
+          />
+        </svg>
+        <div className={styles.commitClockCenter}>
+          <span className={styles.commitClockPct}>
+            {indeterminate ? "…" : `${progress.overallPct}%`}
+          </span>
+        </div>
+      </div>
+      <div className={styles.commitClockMeta}>
+        <p className={styles.commitClockTime}>
+          <span aria-hidden="true">⏱ </span>
+          {mm}:{ss} elapsed
+        </p>
+        <p className={styles.commitClockPhase}>{progress.phaseLabel}</p>
+        {progress.total > 0 ? (
+          <p className={styles.commitClockCount}>
+            {progress.done} / {progress.total} uploaded
+          </p>
+        ) : progress.totalRows > 0 ? (
+          <p className={styles.commitClockCount}>
+            {progress.totalRows} record{progress.totalRows === 1 ? "" : "s"}
+          </p>
+        ) : null}
+        {progress.parallel ? (
+          <p className={styles.commitClockParallel}>Running 5 in parallel</p>
+        ) : null}
+        <p className={styles.commitClockHint}>Please keep this window open…</p>
+      </div>
+    </div>
+  );
+}
+
 export function AdminBulkUploadClient() {
   const { pushToast } = useAdminToast();
   const [importType, setImportType] = useState<BulkImportType>("workforce");
@@ -220,6 +378,22 @@ export function AdminBulkUploadClient() {
     null,
   );
   const [statusFilter, setStatusFilter] = useState<"" | BulkRowStatus>("");
+  const [commitProgress, setCommitProgress] =
+    useState<CommitProgressState | null>(null);
+  // Client-side clock: ticks every 500ms while committing so the elapsed time
+  // keeps moving smoothly even between server progress events.
+  const commitStartRef = useRef(0);
+  const [nowTick, setNowTick] = useState(0);
+
+  useEffect(() => {
+    if (!committing) return;
+    const id = setInterval(() => setNowTick(Date.now()), 500);
+    return () => clearInterval(id);
+  }, [committing]);
+
+  const commitElapsedMs = committing
+    ? Math.max(0, nowTick - commitStartRef.current)
+    : 0;
 
   const selectedOption = IMPORT_OPTIONS.find((o) => o.value === importType);
 
@@ -336,9 +510,77 @@ export function AdminBulkUploadClient() {
       if (!confirmed) return;
     }
 
+    const startedAt = Date.now();
+    commitStartRef.current = startedAt;
+    setNowTick(startedAt);
     setCommitting(true);
+
+    // Live progress state accumulated from the streamed events.
+    const model = phaseModelFor(preview.importType);
+    const state = {
+      totalRows: preview.rows.length,
+      phaseKey: null as string | null,
+      phaseLabel: "Starting…",
+      done: 0,
+      total: 0,
+      completed: new Set<string>(),
+      parallel: false,
+    };
+    const publish = () => {
+      setCommitProgress({
+        totalRows: state.totalRows,
+        phaseKey: state.phaseKey,
+        phaseLabel: state.phaseLabel,
+        done: state.done,
+        total: state.total,
+        completed: [...state.completed],
+        parallel: state.parallel,
+        overallPct: computeOverallPct(
+          model,
+          state.completed,
+          state.phaseKey,
+          state.done,
+          state.total,
+        ),
+      });
+    };
+    publish();
+
+    const applyEvent = (event: {
+      type?: string;
+      label?: string;
+      event?: string;
+      details?: Record<string, unknown>;
+    }) => {
+      if (event.type === "phase-start" && event.label) {
+        state.phaseKey = event.label;
+        const known = model.find((phase) => phase.key === event.label);
+        state.phaseLabel = known?.label ?? event.label;
+        state.parallel = Boolean(known?.parallel);
+        state.done = 0;
+        state.total = 0;
+        publish();
+      } else if (event.type === "phase-end" && event.label) {
+        state.completed.add(event.label);
+        if (state.phaseKey === event.label && state.total > 0) {
+          state.done = state.total;
+        }
+        publish();
+      } else if (event.type === "log") {
+        const details = event.details ?? {};
+        if (event.event === "start" && typeof details.rows === "number") {
+          state.totalRows = details.rows;
+          publish();
+        } else if (event.event === "progress") {
+          if (typeof details.done === "number") state.done = details.done;
+          if (typeof details.total === "number") state.total = details.total;
+          publish();
+        }
+      }
+    };
+
     try {
-      const response = await fetch("/api/admin/bulk-upload/commit", {
+      const response = await fetch("/api/admin/bulk-upload/commit-progress", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -353,22 +595,72 @@ export function AdminBulkUploadClient() {
           })),
         }),
       });
-      if (!response.ok) throw new Error(await readPublicApiError(response));
-      const data = (await response.json()) as BulkCommitResult;
-      setCommitResult(data);
-      const firstError = data.rows.find(
+      if (!response.ok || !response.body) {
+        throw new Error(await readPublicApiError(response));
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let data: BulkCommitResult | null = null;
+      let streamError: string | null = null;
+
+      const consumeLine = (line: string) => {
+        const trimmed = line.trim();
+        if (!trimmed) return;
+        let message: {
+          kind?: string;
+          result?: BulkCommitResult;
+          message?: string;
+          event?: Record<string, unknown>;
+        };
+        try {
+          message = JSON.parse(trimmed);
+        } catch {
+          return; // ignore a partial / malformed line
+        }
+        if (message.kind === "result" && message.result) {
+          data = message.result;
+        } else if (message.kind === "error") {
+          streamError = message.message ?? "Import failed.";
+        } else if (message.kind === "progress" && message.event) {
+          applyEvent(message.event);
+        }
+      };
+
+      // Read the NDJSON stream: update the clock as events arrive; the last
+      // "result" line is the final import result.
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let newline = buffer.indexOf("\n");
+        while (newline >= 0) {
+          consumeLine(buffer.slice(0, newline));
+          buffer = buffer.slice(newline + 1);
+          newline = buffer.indexOf("\n");
+        }
+      }
+      if (buffer) consumeLine(buffer);
+
+      if (streamError) throw new Error(streamError);
+      if (!data) throw new Error("Import ended without a result.");
+
+      const result: BulkCommitResult = data;
+      setCommitResult(result);
+      const firstError = result.rows.find(
         (row) => row.status === "Error" && row.messages.length,
       );
-      if (data.summary.importedRows === 0 && data.summary.errorRows > 0) {
+      if (result.summary.importedRows === 0 && result.summary.errorRows > 0) {
         pushToast(
           firstError?.messages.slice(-1)[0] ??
-            `Import failed for ${data.summary.errorRows} row(s). Check Messages in the table.`,
+            `Import failed for ${result.summary.errorRows} row(s). Check Messages in the table.`,
           "error",
         );
       } else {
         pushToast(
-          `Import finished: ${data.summary.importedRows} imported, ${data.summary.skippedRows} skipped, ${data.summary.errorRows} errors.`,
-          data.summary.errorRows > 0 ? "error" : "success",
+          `Import finished: ${result.summary.importedRows} imported, ${result.summary.skippedRows} skipped, ${result.summary.errorRows} errors.`,
+          result.summary.errorRows > 0 ? "error" : "success",
         );
       }
     } catch (error) {
@@ -378,6 +670,7 @@ export function AdminBulkUploadClient() {
       );
     } finally {
       setCommitting(false);
+      setCommitProgress(null);
     }
   }, [duplicateMode, preview, pushToast, suppressNotifications]);
 
@@ -642,6 +935,13 @@ export function AdminBulkUploadClient() {
               </p>
             </header>
             <div className={styles.settingsCardBody}>
+              {committing && commitProgress ? (
+                <BulkCommitClock
+                  progress={commitProgress}
+                  elapsedMs={commitElapsedMs}
+                />
+              ) : null}
+
               {activeSummary ? <SummaryCards summary={activeSummary} /> : null}
 
               {rowLimitError ? (

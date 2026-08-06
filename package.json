@@ -14,7 +14,7 @@
     "@serwist/next": "^9.5.12",
     "framer-motion": "^12.42.2",
     "isomorphic-fetch": "^3.0.0",
-    "next": "16.2.11",
+    "next": "^16.3.0",
     "next-auth": "^5.0.0-beta.32",
     "react": "19.2.4",
     "react-dom": "19.2.4",

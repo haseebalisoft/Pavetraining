@@ -17,8 +17,9 @@ import {
 import { normalizeDateValue } from "@/lib/services/bulkUpload/parseSpreadsheet";
 import {
   buildWorkforceMatrixSource,
-  findMatrixRowForCandidate,
+  findMatrixRowByWorkforce,
   realMatrixItemId,
+  type MatrixLinkFields,
   type WorkforceMatrixProfile,
 } from "@/lib/services/bulkUpload/workforceMatrixSync";
 import {
@@ -35,6 +36,12 @@ export interface TrainingMatrixExampleRow {
   nextExpiryDate: string | null;
   /** Headers whose dates were set manually in admin (not register sync). */
   manualOverrides: string[];
+  /** Strong link columns (present once the row is linked to a Workforce record). */
+  workforceItemId: string | null;
+  workforceNumber: string | null;
+  companyItemId: string | null;
+  companyNumber: string | null;
+  matrixLinkStatus: string | null;
 }
 
 const EXAMPLE_LIST_ENV =
@@ -281,6 +288,19 @@ function mapItemToRow(
     ),
   );
 
+  // Strong link columns, read by display name against the live column map so a
+  // list without them (older sites) simply reports null → treated as unlinked.
+  const readLinkField = (header: string): string | null => {
+    const col =
+      columnMap.get(headerLookupKey(header)) ??
+      columnMap.get(normalizeHeader(header).toLowerCase());
+    if (!col) return null;
+    const raw = fields[col.name];
+    if (raw == null || raw === "") return null;
+    const text = String(raw).trim();
+    return text ? text : null;
+  };
+
   return {
     id: item.id,
     candidateName: title,
@@ -288,6 +308,11 @@ function mapItemToRow(
     columnValues,
     nextExpiryDate,
     manualOverrides: parseManualOverrides(fields[MANUAL_OVERRIDES_FIELD]),
+    workforceItemId: readLinkField("WorkforceItemId"),
+    workforceNumber: readLinkField("WorkforceNumber"),
+    companyItemId: readLinkField("CompanyItemId"),
+    companyNumber: readLinkField("CompanyNumber"),
+    matrixLinkStatus: readLinkField("MatrixLinkStatus"),
   };
 }
 
@@ -373,6 +398,13 @@ export async function upsertTrainingMatrixExampleRow(input: {
    * (text) column and the value is non-blank — so it never wipes existing data.
    */
   profileFields?: Record<string, string | null>;
+  /**
+   * Strong link columns keyed by display name, split by storage type:
+   * `numbers` (WorkforceItemId, CompanyItemId) target Number columns, `text`
+   * (WorkforceNumber, CompanyNumber, CandidateName, MatrixLinkStatus) target
+   * text/choice columns. Each is written only when the column exists.
+   */
+  linkFields?: MatrixLinkFields;
   /** When set, replaces ManualOverrides on the row. */
   manualOverrides?: string[] | null;
 }): Promise<{ id: string; created: boolean }> {
@@ -432,6 +464,29 @@ export async function upsertTrainingMatrixExampleRow(input: {
         columnMap.get(normalizeHeader(header).toLowerCase());
       if (!col || col.name === "Title" || col.storage !== "other") continue;
       fields[col.name] = String(value).trim();
+    }
+  }
+
+  // Strong link columns. Numbers → Number columns (as numeric ids); text/choice
+  // → text columns. Each is written only when the list actually has that column,
+  // so a site missing the link columns silently skips them (nothing breaks).
+  if (input.linkFields) {
+    const findCol = (header: string) =>
+      columnMap.get(headerLookupKey(header)) ??
+      columnMap.get(normalizeHeader(header).toLowerCase());
+    for (const [header, value] of Object.entries(input.linkFields.numbers)) {
+      const col = findCol(header);
+      if (!col || col.name === "Title") continue;
+      // Never write an id into a date column; a text link column takes a string.
+      if (col.storage === "number") fields[col.name] = value;
+      else if (col.storage === "other") fields[col.name] = String(value);
+    }
+    for (const [header, value] of Object.entries(input.linkFields.text)) {
+      const text = String(value).trim();
+      if (!text) continue;
+      const col = findCol(header);
+      if (!col || col.name === "Title" || col.storage !== "other") continue;
+      fields[col.name] = text;
     }
   }
 
@@ -532,18 +587,39 @@ export async function syncWorkforceToTrainingMatrix(
 
   const existingRows =
     options.existingRows ?? (await listTrainingMatrixExampleRows());
-  const existing = findMatrixRowForCandidate(existingRows, profile);
-  const { source, profileFields } = buildWorkforceMatrixSource(profile);
+  // Match by the STRONG link keys (WorkforceItemId → WorkforceNumber+CompanyItemId
+  // → unambiguous unlinked name). An ambiguous same-name row is NOT adopted, so
+  // a distinct workforce gets its own fresh linked row instead of hijacking one.
+  const { row: existing } = findMatrixRowByWorkforce(existingRows, profile);
+  const { source, profileFields, linkFields } =
+    buildWorkforceMatrixSource(profile);
 
   const result = await upsertTrainingMatrixExampleRow({
     candidateName: name,
     existingItemId: existing?.id ?? null,
     source,
     profileFields,
+    linkFields,
   });
 
+  // Overlay the just-written link values so an in-memory cache (bulk import)
+  // reflects the row as linked, even when reusing an existing row object.
+  const linkFieldValues = {
+    workforceItemId:
+      linkFields.numbers.WorkforceItemId != null
+        ? String(linkFields.numbers.WorkforceItemId)
+        : (existing?.workforceItemId ?? null),
+    workforceNumber: linkFields.text.WorkforceNumber ?? existing?.workforceNumber ?? null,
+    companyItemId:
+      linkFields.numbers.CompanyItemId != null
+        ? String(linkFields.numbers.CompanyItemId)
+        : (existing?.companyItemId ?? null),
+    companyNumber: linkFields.text.CompanyNumber ?? existing?.companyNumber ?? null,
+    matrixLinkStatus: linkFields.text.MatrixLinkStatus ?? "Linked",
+  };
+
   const row: TrainingMatrixExampleRow = existing
-    ? existing
+    ? { ...existing, ...linkFieldValues }
     : {
         id: result.id,
         candidateName: name,
@@ -551,6 +627,7 @@ export async function syncWorkforceToTrainingMatrix(
         columnValues: { ...source },
         nextExpiryDate: earliestDateFromColumns(source),
         manualOverrides: [],
+        ...linkFieldValues,
       };
 
   return {

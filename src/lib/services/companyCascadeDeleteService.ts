@@ -7,6 +7,7 @@ import {
   asString,
   deleteListItemByKey,
   extractLookupId,
+  getListItemById,
   getListItemByKey,
   getListItems,
   getListItemsByKey,
@@ -339,12 +340,29 @@ export async function deleteCompanyWithRelatedData(
   // skip the final delete — SharePoint will reject if Restrict Delete remains.
   try {
     await deleteListItemByKey("company", companyId);
-    result.companyDeleted = true;
-    result.details.push("Company deleted");
-    if (result.errors.length > 0) {
-      result.details.push(
-        `Company deleted with ${result.errors.length} related warning(s).`,
+    // Verify the row is truly gone before reporting success. Some tenants/paths
+    // return success while the item survives (SharePoint "Restrict Delete" on a
+    // related list, or a recycle no-op), which the UI would show as a false
+    // "deleted" that reappears on refresh. A direct (uncached) re-read is
+    // strongly consistent right after a Graph delete; a read error is treated as
+    // "gone" so a transient blip can't turn a real delete into a false failure.
+    const survivor = await getListItemById(
+      getSharePointListId("company"),
+      companyId,
+    ).catch(() => null);
+    if (survivor) {
+      result.companyDeleted = false;
+      result.errors.push(
+        "Company still exists after delete — SharePoint is blocking it because a related row still references it (Workforce, Departments, Permissions, Registers, Documents, or Events). Resolve the related warnings above and retry.",
       );
+    } else {
+      result.companyDeleted = true;
+      result.details.push("Company deleted");
+      if (result.errors.length > 0) {
+        result.details.push(
+          `Company deleted with ${result.errors.length} related warning(s).`,
+        );
+      }
     }
   } catch (error) {
     result.errors.push(

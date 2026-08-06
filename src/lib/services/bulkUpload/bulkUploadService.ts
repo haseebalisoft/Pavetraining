@@ -11,6 +11,10 @@ import {
   countPopulatedRows,
 } from "@/lib/services/bulkUpload/bulkUploadLimits";
 import {
+  createBulkLogger,
+  type BulkLogEvent,
+} from "@/lib/services/bulkUpload/bulkUploadLog";
+import {
   commitCompanyImport,
   previewCompanyImport,
 } from "@/lib/services/bulkUpload/companyImporter";
@@ -228,6 +232,8 @@ export async function commitBulkUpload(input: {
   suppressNotifications?: boolean;
   autoCreateMissingCompanies?: boolean;
   rows: BulkCommitRowInput[];
+  /** Live progress sink (e.g. streamed to the admin UI). */
+  onEvent?: (event: BulkLogEvent) => void;
 }): Promise<BulkCommitResult> {
   const importType = parseImportType(input.importType);
   const template = getBulkImportTemplate(importType);
@@ -259,12 +265,43 @@ export async function commitBulkUpload(input: {
     throw new ValidationError(commitLimit.error);
   }
 
+  // Terminal/server logging for the whole commit — one timeline per upload so
+  // slow or broken phases are visible. Set BULK_UPLOAD_LOGS=verbose for per-row
+  // lines, or =off to silence.
+  const log = createBulkLogger(`commit:${importType}`, {
+    onEvent: input.onEvent,
+  });
+  log.info("start", {
+    rows: input.rows.length,
+    duplicateMode,
+    autoCreateMissingCompanies,
+    fileName,
+  });
+  const logDone = (summary: {
+    importedRows: number;
+    skippedRows: number;
+    errorRows: number;
+    duplicateRows: number;
+    warningRows: number;
+  }) => {
+    log.info("done", {
+      imported: summary.importedRows,
+      skipped: summary.skippedRows,
+      errors: summary.errorRows,
+      duplicates: summary.duplicateRows,
+      warnings: summary.warningRows,
+      ms: log.elapsed(),
+    });
+  };
+
   if (importType === "company") {
     const rows = await commitCompanyImport({
       rows: input.rows,
       duplicateMode,
+      log,
     });
     const summary = summarizeBulkRows(rows);
+    logDone(summary);
     return {
       importType,
       fileName,
@@ -281,8 +318,10 @@ export async function commitBulkUpload(input: {
       rows: input.rows,
       duplicateMode,
       autoCreateMissingCompanies,
+      log,
     });
     const summary = summarizeBulkRows(rows);
+    logDone(summary);
     return {
       importType,
       fileName,
@@ -302,6 +341,7 @@ export async function commitBulkUpload(input: {
       duplicateMode,
     });
     const summary = summarizeBulkRows(rows);
+    logDone(summary);
     return {
       importType,
       fileName,
@@ -322,6 +362,7 @@ export async function commitBulkUpload(input: {
       duplicateMode,
     });
     const summary = summarizeBulkRows(rows);
+    logDone(summary);
     return {
       importType,
       fileName,

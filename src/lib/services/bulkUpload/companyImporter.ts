@@ -21,6 +21,10 @@ import {
   type ParsedSpreadsheet,
 } from "@/lib/services/bulkUpload/parseSpreadsheet";
 import { summarizeBulkRows } from "@/lib/services/bulkUpload/candidateImporter";
+import {
+  createBulkLogger,
+  type BulkLogger,
+} from "@/lib/services/bulkUpload/bulkUploadLog";
 import type {
   BulkCommitRowInput,
   BulkDuplicateMode,
@@ -392,12 +396,19 @@ export async function previewCompanyImport(
 export async function commitCompanyImport(input: {
   rows: BulkCommitRowInput[];
   duplicateMode: BulkDuplicateMode;
+  log?: BulkLogger;
 }): Promise<BulkPreviewRow[]> {
+  const log = input.log ?? createBulkLogger("commit:company");
+  const loadPhase = log.phase("load:companies");
   let companies = await listAdminCompanies();
+  loadPhase.end({ companies: companies.length });
   const results: BulkPreviewRow[] = [];
   const allocatedInBatch: string[] = [];
   const seenNumbers = new Set<string>(); // reject the same number twice in one file
 
+  const rowsPhase = log.phase("commit:rows");
+  let created = 0;
+  let updated = 0;
   for (const row of input.rows) {
     const fields = { ...row.fields };
     const companyName = fields.companyName?.trim() ?? "";
@@ -496,6 +507,16 @@ export async function commitCompanyImport(input: {
         seenNumbers.add(nameKey(finalNumber));
         fields.companyNumber = finalNumber;
         await updateAdminCompany(decision.targetId, payload);
+        // Keep the in-memory list current instead of re-reading the whole
+        // Companies list from Graph after every row (was O(n²) reads + a
+        // stale-read risk right after a write). The matched company is already
+        // in `companies`; only its number may have just been assigned.
+        companies = companies.map((company) =>
+          company.id === decision.targetId
+            ? { ...company, companyNumber: finalNumber }
+            : company,
+        );
+        updated += 1;
         results.push({
           rowNumber: row.rowNumber,
           status: "Imported",
@@ -507,7 +528,17 @@ export async function commitCompanyImport(input: {
           matchedEntityName: target?.companyName ?? null,
           duplicateMatch: null,
         });
-        companies = await listAdminCompanies();
+        log.debug("row updated", {
+          row: row.rowNumber,
+          number: finalNumber,
+          id: decision.targetId,
+        });
+        if ((created + updated) % 10 === 0) {
+          log.info("progress", {
+            done: created + updated,
+            total: input.rows.length,
+          });
+        }
         continue;
       }
 
@@ -534,25 +565,51 @@ export async function commitCompanyImport(input: {
       seenNumbers.add(nameKey(finalNumber));
       allocatedInBatch.push(finalNumber);
       fields.companyNumber = finalNumber;
-      const created = await createAdminCompany(
-        companyWritePayload({ ...fields, companyNumber: finalNumber }),
+      const createdCompany = await createAdminCompany(
+        // Pass the live in-memory list so createAdminCompany does not re-read
+        // the whole Companies list from Graph for its duplicate check (that
+        // internal read + the old per-row re-fetch below were both O(n²)).
+        {
+          ...companyWritePayload({ ...fields, companyNumber: finalNumber }),
+          existingCompanies: companies,
+        },
       );
-      finalNumber = created.companyNumber ?? finalNumber;
+      finalNumber = createdCompany.companyNumber ?? finalNumber;
+      // Append the new company to the in-memory list so later rows in the same
+      // file match it by name/number — no Graph re-fetch, and no read-after-
+      // write staleness.
+      companies = [...companies, createdCompany];
+      created += 1;
       results.push({
         rowNumber: row.rowNumber,
         status: "Imported",
         messages: [
           target
             ? `Created new company despite duplicate (number set to ${finalNumber}).`
-            : `Created company #${created.id} (${finalNumber}).`,
+            : `Created company #${createdCompany.id} (${finalNumber}).`,
         ],
         fields: { ...fields, companyNumber: finalNumber },
-        matchedEntityId: created.id,
-        matchedEntityName: created.companyName,
+        matchedEntityId: createdCompany.id,
+        matchedEntityName: createdCompany.companyName,
         duplicateMatch: null,
       });
-      companies = await listAdminCompanies();
+      log.debug("row created", {
+        row: row.rowNumber,
+        number: finalNumber,
+        id: createdCompany.id,
+      });
+      if ((created + updated) % 10 === 0) {
+        log.info("progress", {
+          done: created + updated,
+          total: input.rows.length,
+        });
+      }
     } catch (error) {
+      log.warn("row failed", {
+        row: row.rowNumber,
+        company: companyName,
+        error: error instanceof Error ? error.message : String(error),
+      });
       results.push({
         rowNumber: row.rowNumber,
         status: "Error",
@@ -566,6 +623,13 @@ export async function commitCompanyImport(input: {
       });
     }
   }
+
+  rowsPhase.end({
+    created,
+    updated,
+    skipped: results.filter((r) => r.status === "Skipped").length,
+    errors: results.filter((r) => r.status === "Error").length,
+  });
 
   return results;
 }

@@ -19,8 +19,13 @@
 /** Minimum shape needed from a Workforce record to seed a matrix row. */
 export interface WorkforceMatrixProfile {
   id?: string | null;
+  /** SharePoint Workforce item id — the strong matrix link key (defaults to `id`). */
+  workforceItemId?: string | number | null;
   candidateName: string;
   companyName?: string | null;
+  /** SharePoint Company item id (Company lookup id) — a link key. */
+  companyItemId?: string | number | null;
+  companyNumber?: string | null;
   workforceNumber?: string | null;
   dateOfBirth?: string | null;
   department?: string | null;
@@ -35,11 +40,28 @@ export interface WorkforceMatrixProfile {
   nporsNumbers?: string | null;
 }
 
+/** Typed link columns written onto a Training Matrix Update row. */
+export interface MatrixLinkFields {
+  /** Display name → numeric value (SharePoint Number columns). */
+  numbers: Record<string, number>;
+  /** Display name → text value (text or choice columns, e.g. MatrixLinkStatus). */
+  text: Record<string, string>;
+}
+
+export type MatrixLinkStatus = "Linked" | "Orphan" | "Needs Review";
+
+/** How a matrix row was matched to a workforce record. */
+export type MatrixMatchType = "id" | "legacy" | "name" | "none";
+
 /** Minimal existing-row reference used for matching. */
 export interface MatrixRowRef {
   id: string;
   candidateName: string;
   dateOfBirth?: string | null;
+  /** Link fields (present once a row has been linked to a workforce record). */
+  workforceItemId?: string | number | null;
+  workforceNumber?: string | null;
+  companyItemId?: string | number | null;
 }
 
 const SYNTHETIC_MATRIX_PREFIX = "workforce-only:";
@@ -53,6 +75,30 @@ function clean(value: string | null | undefined): string | null {
 
 function nameKey(value: string | null | undefined): string {
   return (value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/** Normalize an item id (number or string) to a comparable trimmed string. */
+function idKey(value: string | number | null | undefined): string {
+  if (value == null) return "";
+  return String(value).trim();
+}
+
+/** Coerce an id-ish value to a finite number, or null when not numeric. */
+function toNumericId(value: string | number | null | undefined): number | null {
+  const key = idKey(value);
+  if (!key) return null;
+  const n = Number(key);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * The dedupe unit findMatrixRowForCandidate matches on (normalized candidate
+ * name). Exposed so bulk import can group candidates by it — same-key
+ * candidates must sync sequentially (they share one matrix row) while distinct
+ * names can sync in parallel without ever creating a duplicate row.
+ */
+export function candidateNameKey(value: string | null | undefined): string {
+  return nameKey(value);
 }
 
 /** A matrix id the admin UI fabricates for a candidate that has no real row. */
@@ -115,6 +161,7 @@ export function findMatrixRowForCandidate<T extends MatrixRowRef>(
 export function buildWorkforceMatrixSource(profile: WorkforceMatrixProfile): {
   source: Record<string, string | null>;
   profileFields: Record<string, string | null>;
+  linkFields: MatrixLinkFields;
 } {
   const source: Record<string, string | null> = {
     Name: profile.candidateName.trim(),
@@ -148,5 +195,106 @@ export function buildWorkforceMatrixSource(profile: WorkforceMatrixProfile): {
   add("SWQR Number", profile.swqrNumber);
   add("CSCS Number", profile.cscsNumber);
 
-  return { source, profileFields };
+  // Strong link columns (created by scripts/ensure-matrix-link-columns.mjs).
+  // Numbers vs text are kept apart so the upsert can honor each column's
+  // storage type; every write is still optional (skipped if the column is
+  // absent), so nothing breaks before the columns exist.
+  const numbers: Record<string, number> = {};
+  const workforceItemId = toNumericId(profile.workforceItemId ?? profile.id);
+  if (workforceItemId != null) numbers.WorkforceItemId = workforceItemId;
+  const companyItemId = toNumericId(profile.companyItemId);
+  if (companyItemId != null) numbers.CompanyItemId = companyItemId;
+
+  const text: Record<string, string> = { MatrixLinkStatus: "Linked" };
+  const workforceNumber = clean(profile.workforceNumber);
+  if (workforceNumber) text.WorkforceNumber = workforceNumber;
+  const companyNumber = clean(profile.companyNumber);
+  if (companyNumber) text.CompanyNumber = companyNumber;
+  const candidateName = clean(profile.candidateName);
+  if (candidateName) text.CandidateName = candidateName;
+
+  return { source, profileFields, linkFields: { numbers, text } };
+}
+
+/**
+ * Find the matrix row for a workforce record using the STRONG link keys, in
+ * priority order — this is what makes create/update/delete target the right row
+ * even when two candidates share a name:
+ *   1. `id`     — exact WorkforceItemId match (authoritative once linked).
+ *   2. `legacy` — WorkforceNumber + CompanyItemId (a row linked before the id
+ *                 was stored, or from a differently-shaped import).
+ *   3. `name`   — only an UNAMBIGUOUS, still-unlinked same-name row (exactly one
+ *                 row carries the name and it has no WorkforceItemId yet). Never
+ *                 adopt when the name is ambiguous or the match already belongs
+ *                 to another workforce — the caller then creates a fresh linked
+ *                 row (or flags Needs Review) instead of hijacking someone
+ *                 else's row.
+ * Returns `{ row: null, matchType: "none" }` when nothing safe matches.
+ */
+export function findMatrixRowByWorkforce<T extends MatrixRowRef>(
+  rows: T[],
+  profile: Pick<
+    WorkforceMatrixProfile,
+    | "candidateName"
+    | "dateOfBirth"
+    | "id"
+    | "workforceItemId"
+    | "workforceNumber"
+    | "companyItemId"
+  >,
+): { row: T | null; matchType: MatrixMatchType } {
+  const wfId = idKey(profile.workforceItemId ?? profile.id);
+  if (wfId) {
+    const byId = rows.find((row) => idKey(row.workforceItemId) === wfId);
+    if (byId) return { row: byId, matchType: "id" };
+  }
+
+  const wfNumber = idKey(profile.workforceNumber);
+  const companyId = idKey(profile.companyItemId);
+  if (wfNumber && companyId) {
+    const byLegacy = rows.find(
+      (row) =>
+        idKey(row.workforceNumber) === wfNumber &&
+        idKey(row.companyItemId) === companyId,
+    );
+    if (byLegacy) return { row: byLegacy, matchType: "legacy" };
+  }
+
+  const key = nameKey(profile.candidateName);
+  if (key) {
+    const nameMatches = rows.filter((row) => nameKey(row.candidateName) === key);
+    const unlinked = nameMatches.filter((row) => !idKey(row.workforceItemId));
+    // Only adopt a same-name row when there is exactly one row with that name
+    // AND it is still unlinked. Multiple same-name rows, or a lone row already
+    // linked to a different workforce, are left untouched (ambiguous).
+    if (nameMatches.length === 1 && unlinked.length === 1) {
+      return { row: unlinked[0]!, matchType: "name" };
+    }
+  }
+
+  return { row: null, matchType: "none" };
+}
+
+/**
+ * Classify a matrix row for display (Admin Matrix badge + hide-orphans filter):
+ *  - stored WorkforceItemId resolves to a live workforce row → `Linked`
+ *  - stored WorkforceItemId no longer resolves (workforce deleted/recreated):
+ *    name still matches ≥1 live record → `Needs Review` (re-linkable), else `Orphan`
+ *  - no stored id, exactly one live workforce shares the name → `Linked`
+ *    (a safe implicit/legacy link — keeps the pre-migration matrix working)
+ *  - no stored id, ≥2 live workforce share the name → `Needs Review` (ambiguous)
+ *  - no stored id and no name match → `Orphan` (stale row, hidden by default)
+ */
+export function deriveMatrixLinkStatus(input: {
+  hasWorkforceItemId: boolean;
+  workforceResolved: boolean;
+  nameMatchCount: number;
+}): MatrixLinkStatus {
+  if (input.hasWorkforceItemId) {
+    if (input.workforceResolved) return "Linked";
+    return input.nameMatchCount >= 1 ? "Needs Review" : "Orphan";
+  }
+  if (input.nameMatchCount === 0) return "Orphan";
+  if (input.nameMatchCount === 1) return "Linked";
+  return "Needs Review";
 }

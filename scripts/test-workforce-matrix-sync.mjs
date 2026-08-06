@@ -20,7 +20,10 @@ const {
   isSyntheticMatrixId,
   realMatrixItemId,
   findMatrixRowForCandidate,
+  findMatrixRowByWorkforce,
+  deriveMatrixLinkStatus,
   buildWorkforceMatrixSource,
+  candidateNameKey,
 } = await import(BASE + "services/bulkUpload/workforceMatrixSync.ts");
 
 // --- Fake-id guard (requirement 2) ---------------------------------------
@@ -154,4 +157,279 @@ test("non-blank profile fields are offered for write; blanks are omitted", () =>
 test("source always carries the candidate name (Title on create)", () => {
   const { source } = buildWorkforceMatrixSource({ candidateName: "  Solo Name " });
   assert.equal(source.Name, "Solo Name");
+});
+
+// --- Parallel matrix sync: grouping key + no-duplicate invariant ----------
+// Bulk import now groups imported candidates by candidateNameKey and runs the
+// groups in parallel. These lock the two properties that make that safe.
+
+test("candidateNameKey trims, lowercases, and collapses inner whitespace", () => {
+  assert.equal(candidateNameKey("  John   Doe "), "john doe");
+  assert.equal(candidateNameKey("JOHN DOE"), "john doe");
+  // Same key ⇒ same group ⇒ never synced in parallel against each other.
+  assert.equal(
+    candidateNameKey("Jane  Smith"),
+    candidateNameKey("jane smith"),
+  );
+  // Different names ⇒ different keys ⇒ safe to run concurrently.
+  assert.notEqual(candidateNameKey("John Doe"), candidateNameKey("Jane Doe"));
+  assert.equal(candidateNameKey(null), "");
+});
+
+/**
+ * Simulate the importer's per-group sequential sync using the REAL matching
+ * function, to prove that grouping by candidateNameKey reproduces the old
+ * sequential result: within a name group the first candidate creates the row
+ * and the rest update it — never a second create (no duplicate row).
+ */
+function simulateGroupSync(groupProfiles, snapshotRows) {
+  const groupKey = candidateNameKey(groupProfiles[0].candidateName);
+  const localRows = snapshotRows.filter(
+    (row) => candidateNameKey(row.candidateName) === groupKey,
+  );
+  const actions = [];
+  let nextId = 900;
+  for (const profile of groupProfiles) {
+    const existing = findMatrixRowForCandidate(localRows, profile);
+    if (existing) {
+      actions.push({ action: "update", id: existing.id });
+    } else {
+      const created = {
+        id: String(nextId++),
+        candidateName: profile.candidateName.trim(),
+        dateOfBirth: profile.dateOfBirth ?? null,
+      };
+      localRows.push(created); // mirrors `if (sync.created) localRows.push(sync.row)`
+      actions.push({ action: "create", id: created.id });
+    }
+  }
+  return actions;
+}
+
+test("same-name group with no existing row: first creates, rest update (no dupe)", () => {
+  const actions = simulateGroupSync(
+    [
+      { candidateName: "New Guy", dateOfBirth: null },
+      { candidateName: "new  guy", dateOfBirth: null },
+      { candidateName: "NEW GUY", dateOfBirth: null },
+    ],
+    [], // empty snapshot — nobody exists yet
+  );
+  assert.deepEqual(
+    actions.map((a) => a.action),
+    ["create", "update", "update"],
+  );
+  // All three resolve to the SAME row id — exactly one row was created.
+  assert.equal(actions[1].id, actions[0].id);
+  assert.equal(actions[2].id, actions[0].id);
+});
+
+test("same-name group with an existing snapshot row: all update, none create", () => {
+  const actions = simulateGroupSync(
+    [
+      { candidateName: "Jane Smith", dateOfBirth: "1990-01-01" },
+      { candidateName: "jane smith", dateOfBirth: "1990-01-01" },
+    ],
+    ROWS,
+  );
+  assert.deepEqual(
+    actions.map((a) => a.action),
+    ["update", "update"],
+  );
+  assert.equal(actions[0].id, "100");
+  assert.equal(actions[1].id, "100");
+});
+
+// --- Strong link fields on the source payload (Phase 4) -------------------
+// buildWorkforceMatrixSource now also emits a typed linkFields bucket so the
+// upsert can write Number (ids) and text/choice (numbers/name/status) columns.
+
+test("linkFields emits numeric ids and text link columns + MatrixLinkStatus=Linked", () => {
+  const { linkFields } = buildWorkforceMatrixSource({
+    id: "12",
+    candidateName: "Jane Smith",
+    workforceNumber: "W00042",
+    companyItemId: 7,
+    companyNumber: "C00002",
+  });
+  // Numbers → Number columns.
+  assert.equal(linkFields.numbers.WorkforceItemId, 12);
+  assert.equal(linkFields.numbers.CompanyItemId, 7);
+  // Text/choice → text columns; status is always Linked on a live sync.
+  assert.equal(linkFields.text.WorkforceNumber, "W00042");
+  assert.equal(linkFields.text.CompanyNumber, "C00002");
+  assert.equal(linkFields.text.CandidateName, "Jane Smith");
+  assert.equal(linkFields.text.MatrixLinkStatus, "Linked");
+});
+
+test("WorkforceItemId falls back to `id`; explicit workforceItemId wins", () => {
+  const fallback = buildWorkforceMatrixSource({
+    id: "99",
+    candidateName: "A",
+  }).linkFields;
+  assert.equal(fallback.numbers.WorkforceItemId, 99);
+
+  const explicit = buildWorkforceMatrixSource({
+    id: "99",
+    workforceItemId: 5,
+    candidateName: "A",
+  }).linkFields;
+  assert.equal(explicit.numbers.WorkforceItemId, 5);
+});
+
+test("non-numeric / missing ids are omitted from linkFields.numbers (no bad writes)", () => {
+  const { linkFields } = buildWorkforceMatrixSource({
+    id: "not-a-number",
+    candidateName: "A",
+    // no companyItemId
+  });
+  assert.equal("WorkforceItemId" in linkFields.numbers, false);
+  assert.equal("CompanyItemId" in linkFields.numbers, false);
+  // Blank numbers/name still omit their text keys, but status is always set.
+  assert.equal("WorkforceNumber" in linkFields.text, false);
+  assert.equal("CompanyNumber" in linkFields.text, false);
+  assert.equal(linkFields.text.MatrixLinkStatus, "Linked");
+});
+
+// --- findMatrixRowByWorkforce: id > legacy > unambiguous name --------------
+
+const LINK_ROWS = [
+  // Row linked by id to workforce 500.
+  {
+    id: "200",
+    candidateName: "Linked Larry",
+    workforceItemId: 500,
+    workforceNumber: "W00500",
+    companyItemId: 9,
+  },
+  // Legacy row: no id, but WorkforceNumber + CompanyItemId identify it.
+  {
+    id: "201",
+    candidateName: "Legacy Lou",
+    workforceNumber: "W00600",
+    companyItemId: 3,
+  },
+  // A single UNLINKED row for a unique name.
+  { id: "202", candidateName: "Fresh Fiona" },
+  // Two rows share a name — ambiguous, must never be adopted by name.
+  { id: "203", candidateName: "Ambi Twin" },
+  { id: "204", candidateName: "Ambi Twin" },
+  // A lone same-name row already linked to ANOTHER workforce (999).
+  { id: "205", candidateName: "Taken Tom", workforceItemId: 999 },
+];
+
+test("matches by WorkforceItemId first (strongest key)", () => {
+  const { row, matchType } = findMatrixRowByWorkforce(LINK_ROWS, {
+    candidateName: "Different Name Now", // renamed — name must not matter
+    workforceItemId: 500,
+  });
+  assert.equal(matchType, "id");
+  assert.equal(row.id, "200");
+});
+
+test("falls back to WorkforceNumber + CompanyItemId for legacy rows", () => {
+  const { row, matchType } = findMatrixRowByWorkforce(LINK_ROWS, {
+    candidateName: "Legacy Lou",
+    workforceNumber: "W00600",
+    companyItemId: 3,
+  });
+  assert.equal(matchType, "legacy");
+  assert.equal(row.id, "201");
+});
+
+test("adopts an unambiguous, still-unlinked same-name row", () => {
+  const { row, matchType } = findMatrixRowByWorkforce(LINK_ROWS, {
+    candidateName: "  fresh   fiona ",
+    workforceItemId: 700,
+  });
+  assert.equal(matchType, "name");
+  assert.equal(row.id, "202");
+});
+
+test("never adopts an ambiguous same-name row (caller creates a fresh row)", () => {
+  const { row, matchType } = findMatrixRowByWorkforce(LINK_ROWS, {
+    candidateName: "Ambi Twin",
+    workforceItemId: 800,
+  });
+  assert.equal(matchType, "none");
+  assert.equal(row, null);
+});
+
+test("never hijacks a lone same-name row already linked to another workforce", () => {
+  const { row, matchType } = findMatrixRowByWorkforce(LINK_ROWS, {
+    candidateName: "Taken Tom",
+    workforceItemId: 801,
+  });
+  assert.equal(matchType, "none");
+  assert.equal(row, null);
+});
+
+test("legacy fallback requires BOTH number and company id", () => {
+  // WorkforceNumber matches but company id differs → no legacy match, and the
+  // name is unique+unlinked so it adopts by name instead of mis-linking.
+  const { matchType } = findMatrixRowByWorkforce(LINK_ROWS, {
+    candidateName: "Legacy Lou",
+    workforceNumber: "W00600",
+    companyItemId: 999, // wrong company
+  });
+  assert.equal(matchType, "name");
+});
+
+// --- deriveMatrixLinkStatus (display badges + hide-orphans filter) ---------
+
+test("deriveMatrixLinkStatus classifies every link state", () => {
+  // Resolved id → Linked.
+  assert.equal(
+    deriveMatrixLinkStatus({
+      hasWorkforceItemId: true,
+      workforceResolved: true,
+      nameMatchCount: 1,
+    }),
+    "Linked",
+  );
+  // Stored id no longer resolves, name still matches → Needs Review.
+  assert.equal(
+    deriveMatrixLinkStatus({
+      hasWorkforceItemId: true,
+      workforceResolved: false,
+      nameMatchCount: 1,
+    }),
+    "Needs Review",
+  );
+  // Stored id gone and no name match → Orphan.
+  assert.equal(
+    deriveMatrixLinkStatus({
+      hasWorkforceItemId: true,
+      workforceResolved: false,
+      nameMatchCount: 0,
+    }),
+    "Orphan",
+  );
+  // Legacy (no id): unique name → Linked (keeps pre-migration matrix working).
+  assert.equal(
+    deriveMatrixLinkStatus({
+      hasWorkforceItemId: false,
+      workforceResolved: false,
+      nameMatchCount: 1,
+    }),
+    "Linked",
+  );
+  // Legacy: ambiguous same-name → Needs Review.
+  assert.equal(
+    deriveMatrixLinkStatus({
+      hasWorkforceItemId: false,
+      workforceResolved: false,
+      nameMatchCount: 2,
+    }),
+    "Needs Review",
+  );
+  // Legacy: no workforce at all → Orphan (hidden by default in the admin UI).
+  assert.equal(
+    deriveMatrixLinkStatus({
+      hasWorkforceItemId: false,
+      workforceResolved: false,
+      nameMatchCount: 0,
+    }),
+    "Orphan",
+  );
 });

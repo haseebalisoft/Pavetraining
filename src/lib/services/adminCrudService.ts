@@ -51,6 +51,12 @@ import {
   syncWorkforceToTrainingMatrix,
   upsertTrainingMatrixExampleRow,
 } from "@/lib/services/bulkUpload/trainingMatrixExampleService";
+import {
+  deriveMatrixLinkStatus,
+  findMatrixRowByWorkforce,
+  type MatrixLinkStatus,
+  type WorkforceMatrixProfile,
+} from "@/lib/services/bulkUpload/workforceMatrixSync";
 
 import { stripSharePointHtml } from "@/lib/text/stripSharePointHtml";
 import type { Company, CustomerRoleType, RoleType } from "@/types/models";
@@ -801,6 +807,15 @@ async function applyWorkforceDepartmentLookup(
   return { departments, departmentName, departmentRecords };
 }
 
+/**
+ * Shown when a Workforce row's Company lookup can't be resolved to a known
+ * company. The row is kept VISIBLE (a real candidate is never silently hidden)
+ * and the missing link is flagged so it can be fixed — previously such rows
+ * vanished from the admin Workforce and Matrix entirely, which read as
+ * "the import created nothing".
+ */
+const UNLINKED_COMPANY_LABEL = "(Company link missing)";
+
 function mapWorkforce(
   item: SharePointListItem,
   companyNameById?: Map<string, string>,
@@ -816,13 +831,19 @@ function mapWorkforce(
     item.fields,
     workforceFields.companyName,
   );
-  const companyName =
+  const resolvedCompanyName =
     asLookupOrString(item.fields[workforceFields.companyName]) ??
     asString(item.fields[workforceFields.companyName]) ??
     (companyLookupId && companyNameById
       ? (companyNameById.get(companyLookupId) ?? null)
       : null);
-  if (!candidateName || !companyName) return null;
+  // Only a row with no candidate at all is unusable. Do NOT drop a candidate
+  // just because the Company lookup didn't resolve — that hid real, freshly
+  // imported Workforce records from the admin (client-blocking). Keep the row
+  // visible with an explicit marker; companyId below still carries the raw
+  // lookup so the link remains traceable/fixable.
+  if (!candidateName) return null;
+  const companyName = resolvedCompanyName ?? UNLINKED_COMPANY_LABEL;
 
   const companyNumber =
     asNullableString(item.fields.Company_x0020_Name_x003a__x0020_) ??
@@ -938,6 +959,22 @@ export async function listAdminWorkforce(
       return matchesCompany(row.companyName, companyName);
     })
     .sort((a, b) => a.candidateName.localeCompare(b.candidateName));
+}
+
+/**
+ * A mapped Workforce record → the profile the matrix sync links by. Threads the
+ * STRONG link keys the matrix row is matched on: the Workforce item id
+ * (`workforceItemId`) and the Company lookup item id (`companyItemId`), plus the
+ * human-facing numbers already carried on the record.
+ */
+export function toMatrixProfile(
+  record: AdminWorkforceRecord,
+): WorkforceMatrixProfile {
+  return {
+    ...record,
+    workforceItemId: record.id,
+    companyItemId: record.companyId,
+  };
 }
 
 export async function createAdminWorkforce(input: Record<string, unknown>) {
@@ -1206,7 +1243,7 @@ export async function createAdminWorkforce(input: Record<string, unknown>) {
   let matrixSeedWarning: string | undefined;
   if (!skipMatrix) {
     try {
-      await syncWorkforceToTrainingMatrix(mapped);
+      await syncWorkforceToTrainingMatrix(toMatrixProfile(mapped));
     } catch (error) {
       console.error(
         "[workforce] matrix sync failed (candidate still created):",
@@ -1372,7 +1409,7 @@ export async function updateAdminWorkforce(
     input.bulkMode === true || input.bulkMode === "true";
   if (!isBulkUpdate) {
     try {
-      await syncWorkforceToTrainingMatrix(mapped);
+      await syncWorkforceToTrainingMatrix(toMatrixProfile(mapped));
     } catch (error) {
       console.error("[workforce] matrix sync on update failed:", error);
     }
@@ -1406,25 +1443,44 @@ export async function deleteAdminWorkforce(id: string): Promise<void> {
   );
   await clearInboundLookupsToWorkforce(trimmed);
 
-  // Training Matrix Update is Title=Name (often not a lookup) — remove matching seeds first.
-  if (candidateName?.trim()) {
-    try {
-      const exampleRows = await listTrainingMatrixExampleRows();
-      const key = candidateName.trim().toLowerCase();
-      const matches = exampleRows.filter(
-        (row) => row.candidateName.trim().toLowerCase() === key,
+  // Training Matrix Update rows are linked by WorkforceItemId (strong) →
+  // WorkforceNumber + CompanyItemId (legacy) → an unambiguous UNLINKED same-name
+  // row. Delete ONLY the matched row, so a second candidate who happens to share
+  // a name keeps theirs. When nothing matches safely (ambiguous name, or the
+  // lone same-name row belongs to another workforce), skip + log rather than
+  // deleting the wrong person's row. The Company row is never touched here.
+  try {
+    const exampleRows = await listTrainingMatrixExampleRows();
+    const workforceNumber =
+      asString(existing.fields[workforceFields.workforceNumber]) ?? null;
+    const companyItemId =
+      extractLookupId(existing.fields, workforceFields.companyName) ?? null;
+    const { row: match, matchType } = findMatrixRowByWorkforce(exampleRows, {
+      candidateName: candidateName ?? "",
+      workforceItemId: trimmed,
+      workforceNumber,
+      companyItemId,
+    });
+    if (match) {
+      await deleteListItemByKey("trainingMatrixExample", match.id).catch(
+        () => null,
       );
-      await Promise.all(
-        matches.map((row) =>
-          deleteListItemByKey("trainingMatrixExample", row.id).catch(() => null),
-        ),
-      );
-    } catch (error) {
+    } else {
+      const nameKey = (candidateName ?? "").trim().toLowerCase();
+      const sameNameCount = nameKey
+        ? exampleRows.filter(
+            (row) => row.candidateName.trim().toLowerCase() === nameKey,
+          ).length
+        : 0;
       console.warn(
-        "[workforce] pre-delete matrix seed cleanup failed:",
-        error instanceof Error ? error.message : error,
+        `[workforce] matrix delete skipped — no safe link match for workforce ${trimmed} (matchType=${matchType}, sameNameRows=${sameNameCount}); left matrix rows intact to avoid deleting another candidate's row.`,
       );
     }
+  } catch (error) {
+    console.warn(
+      "[workforce] pre-delete matrix cleanup failed:",
+      error instanceof Error ? error.message : error,
+    );
   }
 
   try {
@@ -1481,8 +1537,12 @@ export interface AdminMatrixRecord {
   n031Expiry?: string | null;
   /** SharePoint column is still "Face ift" — UI label is Face Fit. */
   faceFitExpiry?: string | null;
-  /** Workforce List item id when the matrix Name matches a candidate. */
+  /** Workforce List item id when the matrix row links to a candidate. */
   workforceId?: string | null;
+  /** Workforce Number of the linked candidate (for display + audit). */
+  workforceNumber?: string | null;
+  /** Link health: Linked (default view), or Orphan / Needs Review (hidden by default). */
+  matrixLinkStatus?: MatrixLinkStatus;
 }
 
 function mapMatrix(
@@ -1696,7 +1756,10 @@ function buildMatrixColumnValues(
   return values;
 }
 
-export async function listAdminMatrix(companyName?: string | null) {
+export async function listAdminMatrix(
+  companyName?: string | null,
+  options: { includeUnlinked?: boolean } = {},
+) {
   // Portal matrix UI + register sync both use SharePoint "Training Matrix Update".
   const [workforce, exampleRows] = await Promise.all([
     listAdminWorkforce(),
@@ -1710,27 +1773,49 @@ export async function listAdminMatrix(companyName?: string | null) {
       )
     : workforce;
 
+  // Index Workforce three ways so a matrix row can be linked by the STRONG key
+  // (WorkforceItemId) and, failing that, by name: `byId` for id resolution,
+  // `byName` for the legacy/display link, and `nameCounts` so a unique legacy
+  // name link is told apart from a same-name collision that needs review.
+  const workforceById = new Map<string, AdminWorkforceRecord>();
   const workforceByName = new Map<string, AdminWorkforceRecord>();
+  const workforceNameCounts = new Map<string, number>();
   for (const row of workforceForCompany) {
+    workforceById.set(row.id, row);
     const key = row.candidateName.trim().toLowerCase();
-    if (key && !workforceByName.has(key)) workforceByName.set(key, row);
+    if (!key) continue;
+    workforceNameCounts.set(key, (workforceNameCounts.get(key) ?? 0) + 1);
+    if (!workforceByName.has(key)) workforceByName.set(key, row);
   }
 
-  // When scoping to a company, only keep matrix rows whose candidate is in
-  // that company's workforce (Training Matrix Update has no company column).
-  const companyNameKeys = companyKey
-    ? new Set(workforceByName.keys())
-    : null;
+  // Link each row to Workforce by WorkforceItemId first, then name, and tag it
+  // with a MatrixLinkStatus. Orphans (candidate not in Workforce — the
+  // client-blocking "people who aren't in Workforce" rows) are dropped by
+  // default; the admin view opts in with `includeUnlinked` to audit them behind
+  // a "Show all" toggle. Filtering on `status !== "Orphan"` is equivalent to the
+  // previous workforce-membership filter, so customer/default callers are
+  // unchanged, but rows genuinely linked by id (e.g. a renamed candidate) are
+  // now kept.
+  const linkedWorkforceIds = new Set<string>();
 
-  return exampleRows
-    .filter((example) => {
-      if (!companyNameKeys) return true;
-      const key = example.candidateName.trim().toLowerCase();
-      return Boolean(key && companyNameKeys.has(key));
-    })
+  const exampleRecords = exampleRows
     .map((example) => {
-      const wf =
-        workforceByName.get(example.candidateName.trim().toLowerCase()) ?? null;
+      const nameKey = example.candidateName.trim().toLowerCase();
+      const hasWorkforceItemId = Boolean(
+        example.workforceItemId && String(example.workforceItemId).trim(),
+      );
+      const linkedById = hasWorkforceItemId
+        ? (workforceById.get(String(example.workforceItemId).trim()) ?? null)
+        : null;
+      const wf = linkedById ?? workforceByName.get(nameKey) ?? null;
+      if (wf) linkedWorkforceIds.add(wf.id);
+
+      const matrixLinkStatus = deriveMatrixLinkStatus({
+        hasWorkforceItemId,
+        workforceResolved: Boolean(linkedById),
+        nameMatchCount: workforceNameCounts.get(nameKey) ?? 0,
+      });
+
       const columnValues = { ...example.columnValues };
       // Prefer Workforce card expiries when matrix cell is blank.
       if (!columnValues["CSCS Expiry"]?.trim() && wf?.cscsExpiry) {
@@ -1777,63 +1862,74 @@ export async function listAdminMatrix(companyName?: string | null) {
         columnValues,
         manualOverrideHeaders: example.manualOverrides ?? [],
         workforceId: wf?.id ?? null,
+        workforceNumber: wf?.workforceNumber ?? example.workforceNumber ?? null,
+        matrixLinkStatus,
       };
       return record;
     })
-    .concat(
-      // Workforce candidates with no matrix row yet still appear (seed may have failed).
-      workforceForCompany
-        .filter((wf) => {
-          const key = wf.candidateName.trim().toLowerCase();
-          return (
-            Boolean(key) &&
-            !exampleRows.some(
-              (example) =>
-                example.candidateName.trim().toLowerCase() === key,
-            )
-          );
-        })
-        .map((wf) => {
-          const columnValues: Record<string, string | null> = {
-            Name: wf.candidateName,
-            DOB: wf.dateOfBirth,
-            "CSCS Expiry": wf.cscsExpiry,
-            "EUSR Expiry": wf.eusrExpiry,
-            "NRSWA Expiry": wf.swqrExpiry,
-          };
-          const nextExpiryDate = earliestDateFromColumns(columnValues);
-          const record: AdminMatrixRecord = {
-            id: `workforce-only:${wf.id}`,
-            candidateName: wf.candidateName,
-            companyName: wf.companyName,
-            department: wf.department,
-            dateOfBirth: wf.dateOfBirth,
-            overallStatus: null,
-            needsReview: true,
-            matrixNotes: null,
-            nextExpiryDate,
-            cscsExpiry: wf.cscsExpiry,
-            ssstsExpiry: null,
-            smstsExpiry: null,
-            nrswaExpiry: wf.swqrExpiry,
-            eusrExpiry: wf.eusrExpiry,
-            n001Expiry: null,
-            n003Expiry: null,
-            n004Expiry: null,
-            n010Expiry: null,
-            n020Expiry: null,
-            n021Expiry: null,
-            n027Expiry: null,
-            n100Expiry: null,
-            n031Expiry: null,
-            faceFitExpiry: null,
-            columnValues,
-            manualOverrideHeaders: [],
-            workforceId: wf.id,
-          };
-          return record;
-        }),
+    .filter(
+      (record) =>
+        options.includeUnlinked || record.matrixLinkStatus !== "Orphan",
     );
+
+  return exampleRecords.concat(
+    // Workforce candidates with no matrix row yet still appear (seed may have
+    // failed). They are Linked by construction; exclude any workforce already
+    // linked to an example row above so a renamed candidate isn't shown twice.
+    workforceForCompany
+      .filter((wf) => {
+        if (linkedWorkforceIds.has(wf.id)) return false;
+        const key = wf.candidateName.trim().toLowerCase();
+        return (
+          Boolean(key) &&
+          !exampleRows.some(
+            (example) => example.candidateName.trim().toLowerCase() === key,
+          )
+        );
+      })
+      .map((wf) => {
+        const columnValues: Record<string, string | null> = {
+          Name: wf.candidateName,
+          DOB: wf.dateOfBirth,
+          "CSCS Expiry": wf.cscsExpiry,
+          "EUSR Expiry": wf.eusrExpiry,
+          "NRSWA Expiry": wf.swqrExpiry,
+        };
+        const nextExpiryDate = earliestDateFromColumns(columnValues);
+        const record: AdminMatrixRecord = {
+          id: `workforce-only:${wf.id}`,
+          candidateName: wf.candidateName,
+          companyName: wf.companyName,
+          department: wf.department,
+          dateOfBirth: wf.dateOfBirth,
+          overallStatus: null,
+          needsReview: true,
+          matrixNotes: null,
+          nextExpiryDate,
+          cscsExpiry: wf.cscsExpiry,
+          ssstsExpiry: null,
+          smstsExpiry: null,
+          nrswaExpiry: wf.swqrExpiry,
+          eusrExpiry: wf.eusrExpiry,
+          n001Expiry: null,
+          n003Expiry: null,
+          n004Expiry: null,
+          n010Expiry: null,
+          n020Expiry: null,
+          n021Expiry: null,
+          n027Expiry: null,
+          n100Expiry: null,
+          n031Expiry: null,
+          faceFitExpiry: null,
+          columnValues,
+          manualOverrideHeaders: [],
+          workforceId: wf.id,
+          workforceNumber: wf.workforceNumber,
+          matrixLinkStatus: "Linked",
+        };
+        return record;
+      }),
+  );
 }
 
 export async function createAdminMatrix(input: Record<string, unknown>) {

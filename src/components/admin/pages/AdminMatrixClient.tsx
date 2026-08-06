@@ -38,17 +38,33 @@ function matrixCell(
 ): ReactNode {
   if (header === "Name") {
     const name = row.candidateName?.trim() || "—";
-    if (row.workforceId) {
-      return (
-        <Link
-          className={styles.matrixNameLink}
-          href={`/admin/workforce/${row.workforceId}`}
-        >
-          {name}
-        </Link>
-      );
-    }
-    return <span className={styles.matrixNameCell}>{name}</span>;
+    const nameNode = row.workforceId ? (
+      <Link
+        className={styles.matrixNameLink}
+        href={`/admin/workforce/${row.workforceId}`}
+      >
+        {name}
+      </Link>
+    ) : (
+      <span className={styles.matrixNameCell}>{name}</span>
+    );
+    // Link-health badge: Linked is the healthy default (no badge). Orphan (no
+    // Workforce record) / Needs Review (ambiguous same-name) are flagged so an
+    // admin can act. Orphans are hidden unless "Show all" is on.
+    const status = row.matrixLinkStatus;
+    const badge =
+      status === "Orphan" || status === "Needs Review" ? (
+        <StatusBadge
+          label={status}
+          tone={status === "Orphan" ? "missing" : "warn"}
+        />
+      ) : null;
+    return (
+      <span className={styles.matrixNameWrap}>
+        {nameNode}
+        {badge}
+      </span>
+    );
   }
   if (header === "DOB") {
     const dob = row.columnValues?.DOB ?? row.dateOfBirth;
@@ -90,6 +106,15 @@ const columns: AdminColumn<AdminMatrixRecord>[] = [
     render: (row) => (
       <span className={styles.matrixTextCell}>
         {row.companyName?.trim() || "—"}
+      </span>
+    ),
+  },
+  {
+    key: "workforceNumber",
+    header: "Workforce #",
+    render: (row) => (
+      <span className={styles.matrixTextCell}>
+        {row.workforceNumber?.trim() || "—"}
       </span>
     ),
   },
@@ -251,7 +276,12 @@ const fields: AdminFieldConfig[] = [
 function matchesFilter(
   row: AdminMatrixRecord,
   filter: string | null,
+  showAll: boolean,
 ): boolean {
+  // Orphan rows (candidate not in Workforce) are hidden by default so the
+  // matrix only shows people who exist in Workforce; "Show all" reveals them
+  // for auditing. Needs Review / Linked always pass this gate.
+  if (!showAll && row.matrixLinkStatus === "Orphan") return false;
   if (!filter || filter === "all") return true;
   if (filter === "review" || filter === "missing") return row.needsReview;
   if (filter === "expiring") {
@@ -345,6 +375,12 @@ export function AdminMatrixClient({
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<MatrixSyncResult | null>(null);
   const [syncCompanyId, setSyncCompanyId] = useState("");
+  // Orphan rows (matrix rows with no Workforce candidate) are hidden by default;
+  // this toggle reveals them for auditing/cleanup.
+  const [showAll, setShowAll] = useState(false);
+  const orphanCount = initialRows.filter(
+    (row) => row.matrixLinkStatus === "Orphan",
+  ).length;
 
   function setExpiryFilter(next: string) {
     const params = new URLSearchParams(searchParams.toString());
@@ -426,7 +462,7 @@ export function AdminMatrixClient({
         mapResponse={(payload) =>
           ((payload as { records?: AdminMatrixRecord[] }).records ?? [])
         }
-        rowFilter={(row) => matchesFilter(row, filter)}
+        rowFilter={(row) => matchesFilter(row, filter, showAll)}
         rowClassName={(row) => (row.needsReview ? styles.reviewRow : undefined)}
         searchKeys={[
           (row) => row.candidateName,
@@ -450,6 +486,22 @@ export function AdminMatrixClient({
                 <option value="6m-plus">6 months or more / in date (181+ days, green)</option>
                 <option value="review">Records to Review (missing dates)</option>
               </select>
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Link status</span>
+              <span className={styles.checkboxRow}>
+                <input
+                  type="checkbox"
+                  checked={showAll}
+                  onChange={(event) => setShowAll(event.target.checked)}
+                />
+                <span>
+                  Show all
+                  {orphanCount > 0
+                    ? ` (incl. ${orphanCount} orphan${orphanCount === 1 ? "" : "s"})`
+                    : " (incl. orphans)"}
+                </span>
+              </span>
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Sync company</span>
