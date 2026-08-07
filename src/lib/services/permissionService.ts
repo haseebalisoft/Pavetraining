@@ -2,6 +2,7 @@ import "server-only";
 
 import { cache } from "react";
 
+import { isAlwaysAdminEmail } from "@/lib/auth/protectedAdmins";
 import { getSharePointFields } from "@/lib/schema/sharepointSchema";
 import { getSharePointListId } from "@/lib/config/sharepoint";
 import {
@@ -325,9 +326,37 @@ function preferenceOrDefault(
   return asBoolean(fields[internal]);
 }
 
+/** Synthetic Admin profile when SharePoint row is missing for a hardcoded email. */
+function alwaysAdminPermissionProfile(email: string): PermissionProfile {
+  return {
+    id: "always-admin",
+    userEmail: email,
+    status: "Active",
+    roleType: "Admin",
+    sharePointRoleType: "Admin",
+    customerRole: null,
+    roleLabel: "Admin",
+    companyId: "0",
+    companyDisplayName: "All companies",
+    accessScope: "All",
+    normalizedAccessScope: "All",
+    departmentScopes: [],
+    candidateScopeName: null,
+    canView: true,
+    canDownload: true,
+    canEdit: true,
+    canAccessAdmin: true,
+    canAccessCustomer: false,
+    receiveDocumentNotifications: true,
+    receiveExpiryNotifications: true,
+    customerNotificationsEnabled: true,
+  };
+}
+
 /**
  * Reads the SharePoint Permissions List for the signed-in user.
  * Company is always taken from this list — never from client input.
+ * Hardcoded always-admin emails still reach /admin if their SP row is gone.
  */
 export const getActivePermissionByEmail = cache(
   async (email: string): Promise<PermissionProfile | null> => {
@@ -362,15 +391,21 @@ export const getActivePermissionByEmail = cache(
       }
     }
 
-    if (matches.length === 0) {
-      return null;
+    // Prefer Admin (Training Manager) when both roles exist for one email.
+    const chosen =
+      matches.find((permission) => permission.roleType === "Admin") ??
+      matches[0] ??
+      null;
+
+    if (chosen?.canAccessAdmin) {
+      return chosen;
     }
 
-    // Prefer Admin (Training Manager) when both roles exist for one email.
-    return (
-      matches.find((permission) => permission.roleType === "Admin") ??
-      matches[0]
-    );
+    if (isAlwaysAdminEmail(normalizedEmail)) {
+      return alwaysAdminPermissionProfile(normalizedEmail);
+    }
+
+    return chosen;
   },
 );
 
