@@ -2,6 +2,7 @@ import "server-only";
 
 import { createHmac, randomInt, timingSafeEqual } from "crypto";
 
+import { getPortalPublicUrl } from "@/lib/portalUrl";
 import {
   emailLogoHtml,
   loadPaveLogoAttachment,
@@ -116,12 +117,7 @@ export async function requestEmailOtp(input: {
     hash: codeHash(email, salt, code),
   });
 
-  const portalBase = (
-    process.env.AUTH_URL?.trim() ||
-    process.env.NEXT_PUBLIC_APP_URL?.trim() ||
-    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "") ||
-    "https://pave-training-portal-nu.vercel.app"
-  ).replace(/\/$/, "");
+  const portalBase = getPortalPublicUrl();
 
   // Keep the login URL credential-free. Embedding OTP/challenge/query tokens
   // looks like phishing to junk filters (esp. Outlook).
