@@ -2,7 +2,7 @@ export type DateValue = string | Date | null | undefined;
 
 const ISO_DATE_ONLY =
   /^(\d{4})-(\d{2})-(\d{2})(?:T00:00(?::00(?:\.0+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
-const UK_DATE_ONLY = /^(\d{2})\/(\d{2})\/(\d{4})$/;
+const UK_DATE_ONLY = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
 
 const UK_DATE_FORMATTER = new Intl.DateTimeFormat("en-GB", {
   day: "2-digit",
@@ -65,10 +65,13 @@ export function formatDate(value: DateValue, fallback = "—"): string {
 
     const ukMatch = UK_DATE_ONLY.exec(trimmed);
     if (ukMatch) {
-      const [, day, month, year] = ukMatch;
-      return isValidCalendarDate(Number(year), Number(month), Number(day))
-        ? trimmed
-        : value;
+      const [, dayRaw, monthRaw, year] = ukMatch;
+      const day = Number(dayRaw);
+      const month = Number(monthRaw);
+      if (isValidCalendarDate(Number(year), month, day)) {
+        return `${String(day).padStart(2, "0")}/${String(month).padStart(2, "0")}/${year}`;
+      }
+      return value;
     }
 
     const match = ISO_DATE_ONLY.exec(trimmed);

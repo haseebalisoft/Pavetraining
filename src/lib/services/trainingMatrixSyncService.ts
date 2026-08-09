@@ -128,11 +128,17 @@ function exampleRowToMatrix(
   example: Awaited<ReturnType<typeof listTrainingMatrixExampleRows>>[number],
   workforce: AdminWorkforceRecord | null,
   companyByName: Map<string, Company>,
+  companyById: Map<string, Company>,
 ): MatrixRowWithLookups {
+  const companyFromId = example.companyItemId
+    ? (companyById.get(String(example.companyItemId)) ?? null)
+    : null;
   const company =
+    companyFromId ??
     (workforce?.companyName
       ? companyByName.get(nameKey(workforce.companyName))
-      : null) ?? null;
+      : null) ??
+    null;
 
   return {
     id: `example:${example.id}`,
@@ -156,10 +162,11 @@ function exampleRowToMatrix(
     n031Expiry: example.columnValues[ASBESTOS_MATRIX_HEADER] ?? null,
     columnValues: { ...example.columnValues },
     manualOverrideHeaders: example.manualOverrides ?? [],
-    workforceId: workforce?.id ?? null,
-    candidateLookupId: workforce?.id ?? null,
-    companyLookupId: company?.id ?? null,
-    workforceNumber: workforce?.workforceNumber ?? null,
+    workforceId: example.workforceItemId ?? workforce?.id ?? null,
+    candidateLookupId: example.workforceItemId ?? workforce?.id ?? null,
+    companyLookupId: example.companyItemId ?? company?.id ?? null,
+    workforceNumber:
+      example.workforceNumber ?? workforce?.workforceNumber ?? null,
     exampleItemId: example.id,
   };
 }
@@ -169,6 +176,7 @@ async function loadMatrixRowsWithLookups(
   companies: Company[],
 ): Promise<MatrixRowWithLookups[]> {
   const exampleRows = await listTrainingMatrixExampleRows();
+  const workforceById = new Map(workforce.map((row) => [row.id, row] as const));
   const workforceByName = new Map<string, AdminWorkforceRecord>();
   for (const row of workforce) {
     const key = nameKey(row.candidateName);
@@ -177,14 +185,17 @@ async function loadMatrixRowsWithLookups(
   const companyByName = new Map(
     companies.map((c) => [nameKey(c.companyName), c] as const),
   );
+  const companyById = new Map(companies.map((c) => [c.id, c] as const));
 
-  return exampleRows.map((example) =>
-    exampleRowToMatrix(
-      example,
-      workforceByName.get(nameKey(example.candidateName)) ?? null,
-      companyByName,
-    ),
-  );
+  return exampleRows.map((example) => {
+    const linked =
+      (example.workforceItemId
+        ? workforceById.get(String(example.workforceItemId))
+        : null) ??
+      workforceByName.get(nameKey(example.candidateName)) ??
+      null;
+    return exampleRowToMatrix(example, linked, companyByName, companyById);
+  });
 }
 
 type ResolvedCandidate = {
@@ -281,26 +292,11 @@ function findMatrixRow(
   workforce: AdminWorkforceRecord,
   company: Company,
 ) {
-  // Example list is keyed by candidate Title/Name — prefer exact name match first
-  // to avoid creating duplicates when lookup IDs are absent on Excel imports.
-  const byName = rows.filter(
-    (row) => nameKey(row.candidateName) === nameKey(workforce.candidateName),
-  );
-  if (byName.length === 1) return byName[0]!;
-  if (byName.length > 1) {
-    const forCompany = byName.filter(
-      (row) =>
-        row.companyLookupId === company.id ||
-        nameKey(row.companyName) === nameKey(company.companyName) ||
-        normalizeCompanyKey(row.companyName) ===
-          normalizeCompanyKey(company.companyName),
-    );
-    if (forCompany.length >= 1) return forCompany[0]!;
-    return byName[0]!;
-  }
-
+  // Prefer strong link keys so same-name candidates never collide.
   const byCandidateId = rows.filter(
-    (row) => row.candidateLookupId && row.candidateLookupId === workforce.id,
+    (row) =>
+      (row.candidateLookupId && row.candidateLookupId === workforce.id) ||
+      (row.workforceId && row.workforceId === workforce.id),
   );
   if (byCandidateId.length === 1) return byCandidateId[0]!;
   if (byCandidateId.length > 1) {
@@ -327,6 +323,23 @@ function findMatrixRow(
       );
       if (forCompany) return forCompany;
     }
+  }
+
+  const byName = rows.filter(
+    (row) => nameKey(row.candidateName) === nameKey(workforce.candidateName),
+  );
+  if (byName.length === 1) return byName[0]!;
+  if (byName.length > 1) {
+    const forCompany = byName.filter(
+      (row) =>
+        row.companyLookupId === company.id ||
+        nameKey(row.companyName) === nameKey(company.companyName) ||
+        normalizeCompanyKey(row.companyName) ===
+          normalizeCompanyKey(company.companyName),
+    );
+    if (forCompany.length >= 1) return forCompany[0]!;
+    // Ambiguous same-name rows without company/link — do not guess.
+    return null;
   }
 
   return null;
@@ -1127,7 +1140,8 @@ export async function syncAfterRegisterSave(
     companyName: focus.companyName,
   });
   const workforce = findWorkforce(ctx.workforce, {
-    candidateLookupId: focus.candidateLookupId,
+    candidateLookupId: focus.candidateLookupId ?? record.workforceId,
+    workforceNumber: record.workforceNumber,
     candidateName: focus.candidateName,
     companyName: company?.companyName ?? focus.companyName,
   });

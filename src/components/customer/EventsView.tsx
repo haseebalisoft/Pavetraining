@@ -9,6 +9,7 @@ import {
 } from "@/components/calendar/CalendarGrid";
 import { CustomerPageHeader } from "@/components/customer/CustomerPageHeader";
 import { formatDate, formatTime } from "@/lib/utils/formatDate";
+import { formatEventDuration } from "@/lib/utils/eventDuration";
 import type { CustomerEventRecord } from "@/types/models";
 
 import styles from "./customer.module.css";
@@ -73,6 +74,13 @@ export function EventsView({ companyName, records }: Props) {
           <div>
             <dt>Time</dt>
             <dd>{formatTimeRange(row)}</dd>
+          </div>
+          <div>
+            <dt>Duration</dt>
+            <dd>
+              {formatEventDuration(row.eventDate, row.endDate) ??
+                "Duration not set"}
+            </dd>
           </div>
           <div>
             <dt>Training address</dt>

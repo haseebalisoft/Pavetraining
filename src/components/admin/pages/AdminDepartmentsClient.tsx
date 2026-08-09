@@ -46,7 +46,7 @@ export function AdminDepartmentsClient({
   return (
     <AdminCrudPage<AdminDepartmentRecord>
       title="Departments"
-      description={`For Enterprise companies: add up to ${MAX_DEPARTMENTS_PER_COMPANY} departments (Civils, Rail, Gas, etc.). Assign candidates to one department on Workforce, and give Training Managers coverage of one or more departments under Permissions. Changing department or TM never deletes training history.`}
+      description={`For Enterprise companies: add up to ${MAX_DEPARTMENTS_PER_COMPANY} departments (Civils, Rail, Gas, etc.). Assign candidates to one department on Workforce, and give Training Managers coverage of one or more departments under Permissions. Changing department or TM never deletes training history. Use Admin → Companies filter here, or open Workforce/Permissions to assign.`}
       columns={columns}
       fields={fields}
       companies={companies}

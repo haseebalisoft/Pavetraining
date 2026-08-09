@@ -3,11 +3,14 @@ import "server-only";
 import * as XLSX from "xlsx";
 
 import { ValidationError } from "@/lib/services/validationService";
+import { normalizeDateValue } from "@/lib/utils/ukDate";
 
 export type ParsedSpreadsheet = {
   headers: string[];
   rows: Array<Record<string, string | null>>;
 };
+
+export { normalizeDateValue };
 
 function cellToString(value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -118,71 +121,4 @@ export function pickField(
     if (hit) return hit;
   }
   return null;
-}
-
-/** Normalize common date cell values to YYYY-MM-DD when possible. */
-export function normalizeDateValue(value: string | null): string | null {
-  if (!value?.trim()) return null;
-  const text = value.trim();
-  if (/^(—|–|-|n\/?a|null|none)$/i.test(text)) return null;
-
-  // Already ISO-ish
-  if (/^\d{4}-\d{2}-\d{2}/.test(text)) {
-    return text.slice(0, 10);
-  }
-
-  // DD/MM/YYYY or DD-MM-YYYY (4-digit year — treat as UK day/month)
-  const uk = text.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
-  if (uk) {
-    const day = uk[1]!.padStart(2, "0");
-    const month = uk[2]!.padStart(2, "0");
-    const year = uk[3]!;
-    return `${year}-${month}-${day}`;
-  }
-
-  // M/D/YY or D/M/YY (Excel display strings from Workforce list.xlsx)
-  const short = text.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2})$/);
-  if (short) {
-    const first = Number(short[1]);
-    const second = Number(short[2]);
-    let year = Number(short[3]);
-    year += year >= 70 ? 1900 : 2000;
-    let month: number;
-    let day: number;
-    if (first > 12 && second <= 12) {
-      day = first;
-      month = second;
-    } else {
-      // Default to US M/D/YY (matches Excel serials in the client template).
-      month = first;
-      day = second;
-    }
-    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-      return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    }
-  }
-
-  // Excel serial as string number
-  if (/^\d+(\.\d+)?$/.test(text)) {
-    const serial = Number(text);
-    if (serial > 20000 && serial < 60000) {
-      const parsed = XLSX.SSF.parse_date_code(serial);
-      if (parsed) {
-        const month = String(parsed.m).padStart(2, "0");
-        const day = String(parsed.d).padStart(2, "0");
-        return `${parsed.y}-${month}-${day}`;
-      }
-    }
-  }
-
-  const ms = Date.parse(text);
-  if (!Number.isNaN(ms)) {
-    const parsed = new Date(ms);
-    const year = parsed.getFullYear();
-    const month = String(parsed.getMonth() + 1).padStart(2, "0");
-    const day = String(parsed.getDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
-  }
-
-  return text;
 }

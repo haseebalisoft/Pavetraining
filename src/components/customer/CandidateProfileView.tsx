@@ -13,6 +13,8 @@ import {
   type TrainingRecordColumn,
 } from "@/components/customer/TrainingRecordsTable";
 import { formatDate } from "@/lib/utils/formatDate";
+import { daysUntilExpiry, getExpiryStatus } from "@/lib/training/expiryFilters";
+import { toneForExpiryStatus } from "@/lib/ui/status";
 import type {
   CustomerDocumentRecord,
   CustomerEusrRecord,
@@ -25,6 +27,7 @@ import type {
 } from "@/types/models";
 
 import styles from "./customer.module.css";
+import { useMemo } from "react";
 
 interface Props {
   candidate: WorkforceCandidate;
@@ -73,6 +76,34 @@ function ExpiryItem({
       </div>
     </div>
   );
+}
+
+type ProfileTrainingCategory = {
+  key: string;
+  category: string;
+  source: string;
+  trainingDate: string | null;
+  expiry: string | null;
+  outcome: string | null;
+};
+
+function sortTrainingCategories(rows: ProfileTrainingCategory[]) {
+  const rank = (expiry: string | null) => {
+    const status = getExpiryStatus(expiry).status;
+    if (status === "expired") return 0;
+    if (status === "urgent") return 1;
+    if (status === "upcoming") return 2;
+    if (status === "valid") return 3;
+    return 4;
+  };
+  return [...rows].sort((a, b) => {
+    const byRank = rank(a.expiry) - rank(b.expiry);
+    if (byRank !== 0) return byRank;
+    const aDays = daysUntilExpiry(a.expiry);
+    const bDays = daysUntilExpiry(b.expiry);
+    if (aDays != null && bDays != null) return aDays - bDays;
+    return a.category.localeCompare(b.category);
+  });
 }
 
 function safeReturnHref(
@@ -384,6 +415,70 @@ export function CandidateProfileView({
   );
   const companyName = candidate.companyName;
 
+  const allTrainingCategories = useMemo(() => {
+    const rows: ProfileTrainingCategory[] = [];
+    for (const row of nporsRecords) {
+      rows.push({
+        key: `npors-${row.id}`,
+        category: row.nporsCategory?.trim() || "NPORS",
+        source: "NPORS",
+        trainingDate: row.trainingDate,
+        expiry: row.expiry,
+        outcome: row.outcome,
+      });
+    }
+    for (const row of eusrRecords) {
+      rows.push({
+        key: `eusr-${row.id}`,
+        category: row.eusrCategory?.trim() || "EUSR",
+        source: "EUSR",
+        trainingDate: row.trainingDate,
+        expiry: row.expiry,
+        outcome: row.outcome,
+      });
+    }
+    for (const row of streetworksRecords) {
+      rows.push({
+        key: `sw-${row.id}`,
+        category:
+          row.streetworksCategory?.trim() ||
+          row.course?.trim() ||
+          "Streetworks",
+        source: "Streetworks",
+        trainingDate: row.trainingDate,
+        expiry: row.expiry,
+        outcome: row.outcome,
+      });
+    }
+    for (const row of inHouseRecords) {
+      rows.push({
+        key: `ih-${row.id}`,
+        category: row.course?.trim() || "In-House",
+        source: "In-House",
+        trainingDate: row.trainingDate,
+        expiry: row.expiry,
+        outcome: row.outcome,
+      });
+    }
+    for (const row of nvqRecords) {
+      rows.push({
+        key: `nvq-${row.id}`,
+        category: row.nvqTitle?.trim() || "NVQ",
+        source: "NVQ",
+        trainingDate: row.dateRegistered,
+        expiry: row.completedDate,
+        outcome: row.status,
+      });
+    }
+    return sortTrainingCategories(rows);
+  }, [
+    eusrRecords,
+    inHouseRecords,
+    nporsRecords,
+    nvqRecords,
+    streetworksRecords,
+  ]);
+
   return (
     <div>
       <header className={styles.pageHeader}>
@@ -505,6 +600,53 @@ export function CandidateProfileView({
           label="Next expiry"
           date={matrixRow?.nextExpiryDate ?? null}
         />
+      </section>
+
+      <section className={styles.profileSection} aria-label="All training categories">
+        <h2 className={styles.profileSectionTitle}>All training categories</h2>
+        <p className={styles.profileSectionMeta}>
+          Every register category for this candidate with UK dates and expiry
+          status. Sorted expired → expiring soon → active.
+        </p>
+        {allTrainingCategories.length === 0 ? (
+          <p className={styles.muted}>No training categories recorded yet.</p>
+        ) : (
+          <div className={styles.tableWrap}>
+            <table className={styles.dataTable}>
+              <thead>
+                <tr>
+                  <th>Category</th>
+                  <th>Source</th>
+                  <th>Training date</th>
+                  <th>Expiry</th>
+                  <th>Outcome</th>
+                </tr>
+              </thead>
+              <tbody>
+                {allTrainingCategories.map((row) => {
+                  const status = getExpiryStatus(row.expiry);
+                  return (
+                    <tr key={row.key}>
+                      <td>{row.category}</td>
+                      <td>{row.source}</td>
+                      <td>
+                        {row.trainingDate ? formatDate(row.trainingDate) : "—"}
+                      </td>
+                      <td>
+                        <StatusBadge
+                          label={status.label}
+                          tone={toneForExpiryStatus(status.status)}
+                        />{" "}
+                        {row.expiry ? formatDate(row.expiry) : ""}
+                      </td>
+                      <td>{row.outcome?.trim() || "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
 
       <div className={styles.profileSection}>

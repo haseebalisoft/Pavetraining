@@ -651,16 +651,30 @@ export function AdminBulkUploadClient() {
       const firstError = result.rows.find(
         (row) => row.status === "Error" && row.messages.length,
       );
+      const warningN =
+        result.summary.warningRows ??
+        result.rows.filter((row) => row.status === "Warning").length;
       if (result.summary.importedRows === 0 && result.summary.errorRows > 0) {
         pushToast(
           firstError?.messages.slice(-1)[0] ??
             `Import failed for ${result.summary.errorRows} row(s). Check Messages in the table.`,
           "error",
         );
+      } else if (result.summary.errorRows > 0) {
+        pushToast(
+          `Import finished with errors: ${result.summary.importedRows} imported, ${result.summary.skippedRows} skipped, ${result.summary.errorRows} failed` +
+            (warningN ? `, ${warningN} warning(s)` : "") +
+            `. Review row Messages.`,
+          "error",
+        );
       } else {
         pushToast(
-          `Import finished: ${result.summary.importedRows} imported, ${result.summary.skippedRows} skipped, ${result.summary.errorRows} errors.`,
-          result.summary.errorRows > 0 ? "error" : "success",
+          `Import finished: ${result.summary.importedRows} imported, ${result.summary.skippedRows} skipped` +
+            (warningN
+              ? `, ${warningN} warning(s) — see row messages for exact reasons`
+              : "") +
+            ".",
+          warningN > 0 ? "error" : "success",
         );
       }
     } catch (error) {

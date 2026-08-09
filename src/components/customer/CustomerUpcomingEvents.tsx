@@ -6,6 +6,7 @@ import {
   formatShortMonth,
   formatTime,
 } from "@/lib/utils/formatDate";
+import { formatEventDuration } from "@/lib/utils/eventDuration";
 import type { CustomerEventRecord } from "@/types/models";
 
 import styles from "./customerDashboard.module.css";
@@ -33,6 +34,12 @@ function timeRange(event: CustomerEventRecord): string {
   const end = formatTime(event.endDate);
   if (start && end) return `${start} – ${end}`;
   return start ?? end ?? "Time TBC";
+}
+
+function durationLabel(event: CustomerEventRecord): string {
+  return (
+    formatEventDuration(event.eventDate, event.endDate) ?? "Duration not set"
+  );
 }
 
 function eventStatusLabel(event: CustomerEventRecord): string {
@@ -85,6 +92,9 @@ export function CustomerUpcomingEvents({
                   <p className={`${styles.eventMeta} ${styles.eventMetaTime}`}>
                     <ClockIcon />
                     <span>{timeRange(event)}</span>
+                  </p>
+                  <p className={`${styles.eventMeta} ${styles.eventMetaTime}`}>
+                    <span>Duration: {durationLabel(event)}</span>
                   </p>
                   <span
                     className={

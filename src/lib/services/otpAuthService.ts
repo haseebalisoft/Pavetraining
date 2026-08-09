@@ -34,7 +34,13 @@ function normalizeEmail(value: string): string {
 }
 
 function isValidEmail(value: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+  // Imported-style check inlined to keep otpAuth free of relative cycles;
+  // mirrors src/lib/utils/email.ts
+  const email = value.trim().toLowerCase();
+  if (!email || email.length > 254 || email.includes("..")) return false;
+  return /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/i.test(
+    email,
+  );
 }
 
 function sha256Hmac(value: string): string {

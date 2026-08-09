@@ -1,6 +1,7 @@
 import "server-only";
 
 import { ValidationError } from "@/lib/services/errorHandler";
+import { isValidEmail, normalizeEmail } from "@/lib/utils/email";
 
 /**
  * Input validation helpers for admin/customer APIs.
@@ -52,11 +53,24 @@ export function assertPassFailOutcome(value: unknown): "Pass" | "Fail" | null {
 }
 
 export function assertEmail(value: unknown, label = "Email"): string {
-  const email = requireNonEmptyString(value, label).toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    throw new ValidationError(`${label} must be a valid email address.`);
+  const email = normalizeEmail(requireNonEmptyString(value, label));
+  if (!isValidEmail(email)) {
+    throw new ValidationError(
+      `${label} must be a valid email address (e.g. name@company.org).`,
+    );
   }
   return email;
+}
+
+/** Blank / missing → null. Invalid non-blank → ValidationError. */
+export function assertOptionalEmail(
+  value: unknown,
+  label = "Email",
+): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  return assertEmail(text, label);
 }
 
 export { ValidationError };

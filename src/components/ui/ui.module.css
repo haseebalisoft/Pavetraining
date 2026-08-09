@@ -19,28 +19,32 @@
 }
 
 .badgeOk {
-  color: var(--matrix-compliant-text);
-  background: var(--matrix-compliant-bg);
+  color: #14360a;
+  background: #d8f5c2;
+  border: 1px solid #6bb536;
 }
 
 .badgeWarn {
-  color: var(--matrix-expiring-text);
-  background: var(--matrix-expiring-bg);
+  color: #5c3b00;
+  background: #ffe08a;
+  border: 1px solid #d97706;
 }
 
 .badgeDanger {
-  color: var(--matrix-expired-text);
-  background: var(--matrix-expired-bg);
+  color: #7f1d1d;
+  background: #ffc9c9;
+  border: 1px solid #dc2626;
 }
 
 .badgeInfo {
-  color: var(--pave-charcoal);
+  color: #1a1a1a;
   background: rgba(var(--pave-charcoal-rgb), 0.1);
 }
 
 .badgeMissing {
-  color: var(--matrix-na-text);
-  background: var(--matrix-na-bg);
+  color: #1f2937;
+  background: #e5e7eb;
+  border: 1px solid #9ca3af;
 }
 
 .breadcrumbs {

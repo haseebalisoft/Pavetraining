@@ -446,7 +446,11 @@ export async function listAuditLogs(
     return rows.slice(0, top);
   } catch (error) {
     console.error("[audit] Failed to list logs", error);
-    return [];
+    throw new Error(
+      error instanceof Error
+        ? `Failed to load audit logs from SharePoint: ${error.message}`
+        : "Failed to load audit logs from SharePoint.",
+    );
   }
 }
 

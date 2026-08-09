@@ -2380,6 +2380,8 @@ export interface AdminTrainingRecord {
   id: string;
   candidateName: string;
   companyName: string;
+  /** SharePoint Workforce item id when candidate lookup resolves. */
+  workforceId?: string | null;
   /** From Workforce when candidate lookup resolves. */
   workforceNumber?: string | null;
   trainingDate: string | null;
@@ -2457,6 +2459,7 @@ function resolveRegisterPeople(
 ): {
   candidateName: string;
   companyName: string;
+  workforceId: string | null;
   workforceNumber: string | null;
 } | null {
   const candidateLookupId = extractLookupId(fields, candidateField);
@@ -2485,7 +2488,12 @@ function resolveRegisterPeople(
   const workforceNumber = candidateLookupId
     ? (lookups.workforceNumberById.get(candidateLookupId) ?? null)
     : null;
-  return { candidateName, companyName, workforceNumber };
+  return {
+    candidateName,
+    companyName,
+    workforceId: candidateLookupId,
+    workforceNumber,
+  };
 }
 
 /** Split admin form multi-choice text into a SharePoint MultiChoice array. */
