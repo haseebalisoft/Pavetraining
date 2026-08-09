@@ -425,7 +425,33 @@ export function AdminBulkUploadClient() {
     !rowLimitError &&
     (preview.summary.readyRows > 0 ||
       preview.summary.warningRows > 0 ||
-      (duplicateMode !== "skip" && preview.summary.duplicateRows > 0));
+      preview.summary.duplicateRows > 0);
+
+  /** Explains why Confirm import is greyed out (client-blocking clarity). */
+  const commitBlockedReason = useMemo(() => {
+    if (!preview?.implemented || commitResult) return null;
+    if (!preview.rows.length) return "No preview rows to import.";
+    if (rowLimitError) return rowLimitError;
+    if (
+      preview.summary.readyRows === 0 &&
+      preview.summary.warningRows === 0 &&
+      preview.summary.duplicateRows === 0
+    ) {
+      if (preview.summary.errorRows > 0) {
+        return "All rows are Errors (often: candidate not found in Workforce). Fix Errors or import Workforce first, then Preview again.";
+      }
+      return "No importable rows after validation.";
+    }
+    if (
+      preview.summary.duplicateRows > 0 &&
+      duplicateMode === "skip" &&
+      preview.summary.readyRows === 0 &&
+      preview.summary.warningRows === 0
+    ) {
+      return "All matched rows are Duplicates. Change “If duplicate found” to “Update existing” to refresh Training Matrix, or keep Skip (Confirm will only skip).";
+    }
+    return null;
+  }, [commitResult, duplicateMode, preview, rowLimitError]);
 
   const onFileChosen = (next: File | null) => {
     setFile(next);
@@ -468,6 +494,18 @@ export function AdminBulkUploadClient() {
       if (!response.ok) throw new Error(await readPublicApiError(response));
       const data = (await response.json()) as BulkPreviewResult;
       setPreview(data);
+      // Training Matrix re-uploads usually match existing rows as Duplicate.
+      // Skip mode leaves Confirm disabled/useless — switch to Update so admin
+      // can refresh expiry columns in one click.
+      if (
+        data.implemented &&
+        data.importType === "trainingMatrix" &&
+        data.summary.duplicateRows > 0 &&
+        data.summary.readyRows === 0 &&
+        data.summary.warningRows === 0
+      ) {
+        setDuplicateMode("update");
+      }
       if (!data.implemented) {
         pushToast(data.message ?? "This import type is not ready yet.", "error");
       } else {
@@ -1029,12 +1067,34 @@ export function AdminBulkUploadClient() {
                     type="button"
                     className={styles.primaryButton}
                     disabled={!canCommit || committing}
+                    title={
+                      !canCommit
+                        ? (commitBlockedReason ?? "Nothing to import")
+                        : undefined
+                    }
                     onClick={() => void runCommit()}
                   >
                     {committing ? "Importing…" : "Confirm import"}
                   </button>
                 ) : null}
               </div>
+              {commitBlockedReason && !commitResult ? (
+                <p className={styles.bulkHint} role="status">
+                  {commitBlockedReason}
+                </p>
+              ) : null}
+              {canCommit &&
+              !commitResult &&
+              preview.summary.duplicateRows > 0 &&
+              duplicateMode === "skip" &&
+              preview.summary.readyRows === 0 &&
+              preview.summary.warningRows === 0 ? (
+                <p className={styles.bulkHint} role="status">
+                  Tip: for Training Matrix re-upload, set{" "}
+                  <strong>If duplicate found</strong> to{" "}
+                  <strong>Update existing</strong>, then Confirm import.
+                </p>
+              ) : null}
 
               <PreviewTable
                 rows={displayRows}
