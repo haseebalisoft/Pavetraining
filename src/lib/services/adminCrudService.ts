@@ -2422,6 +2422,8 @@ export interface AdminTrainingRecord {
   id: string;
   candidateName: string;
   companyName: string;
+  /** SharePoint Workforce item id when candidate lookup resolves. */
+  workforceId?: string | null;
   /** From Workforce when candidate lookup resolves. */
   workforceNumber?: string | null;
   trainingDate: string | null;
@@ -2502,6 +2504,7 @@ function resolveRegisterPeople(
 ): {
   candidateName: string;
   companyName: string;
+  workforceId: string | null;
   workforceNumber: string | null;
   candidateLookupId: string | null;
   companyLookupId: string | null;
@@ -2535,6 +2538,7 @@ function resolveRegisterPeople(
   return {
     candidateName,
     companyName,
+    workforceId: candidateLookupId,
     workforceNumber,
     candidateLookupId,
     companyLookupId,

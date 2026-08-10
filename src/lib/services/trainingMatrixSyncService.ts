@@ -1070,7 +1070,8 @@ export async function syncAfterRegisterSave(
     companyName: focus.companyName,
   });
   const workforce = findWorkforce(ctx.workforce, {
-    candidateLookupId: focus.candidateLookupId,
+    candidateLookupId: focus.candidateLookupId ?? record.workforceId,
+    workforceNumber: record.workforceNumber,
     candidateName: focus.candidateName,
     companyName: company?.companyName ?? focus.companyName,
   });

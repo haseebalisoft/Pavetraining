@@ -610,7 +610,7 @@ export function AdminCrudPage<T extends { id: string }>({
         value.trim() &&
         !isValidEmail(value)
       ) {
-        return `${field.label} must be a valid email address.`;
+        return `${field.label} must be a valid email address (e.g. name@company.org).`;
       }
     }
     return null;
@@ -659,20 +659,43 @@ export function AdminCrudPage<T extends { id: string }>({
             created?: number;
             skipped?: number;
             errors?: number;
+            warnings?: number;
           };
-          items?: Array<{ skipReason?: string }>;
+          items?: Array<{
+            warnings?: string[];
+            errors?: string[];
+            skipped?: boolean;
+            skipReason?: string;
+            fieldsUpdated?: string[];
+          }>;
         };
       } | null;
       const sync = payload?.matrixSync?.summary;
+      const syncItem = payload?.matrixSync?.items?.[0];
+      const syncWarnings = [
+        ...(syncItem?.warnings ?? []),
+        ...(syncItem?.errors ?? []),
+        syncItem?.skipped && syncItem.skipReason ? syncItem.skipReason : "",
+      ].filter(Boolean);
+      const matrixTouched =
+        (sync?.updated ?? 0) + (sync?.created ?? 0) > 0 ||
+        (syncItem?.fieldsUpdated?.length ?? 0) > 0;
       // Errors get their own red toast below — never folded into the green
       // save toast, so a Matrix sync failure can't hide behind "success".
       const syncNote = sync
-        ? ` Matrix sync: ${sync.updated ?? 0} updated, ${sync.created ?? 0} created` +
-          (sync.skipped ? `, ${sync.skipped} skipped` : "") +
-          "."
+        ? matrixTouched
+          ? ` Matrix sync: ${sync.updated ?? 0} updated, ${sync.created ?? 0} created.`
+          : syncWarnings.length
+            ? ` Matrix sync did not update the profile/matrix.`
+            : ` Matrix sync: no field changes.`
         : "";
+      const toastTone =
+        (sync?.errors ?? 0) > 0 || syncWarnings.length > 0
+          ? "error"
+          : "success";
       pushToast(
         (isCreate ? "Record created." : "Record updated.") + syncNote,
+        toastTone,
       );
       if (sync?.errors) {
         pushToast(
@@ -689,6 +712,7 @@ export function AdminCrudPage<T extends { id: string }>({
         payload?.warning?.trim(),
         payload?.matrixSeedWarning?.trim(),
         ...(payload?.choiceWarnings ?? []).map((part) => part.trim()),
+        ...syncWarnings.slice(0, 4),
       ].filter(Boolean) as string[];
       for (const warning of warnings) {
         pushToast(warning, "error");

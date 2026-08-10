@@ -460,8 +460,10 @@ function validateCandidateRow(
     };
   }
 
+  // Informative notes (not blockers): keep status Ready unless a real risk
+  // was already flagged above (soft name match / company create).
   if (!autoAssignedWorkforceNumber && !workforceNumber) {
-    messages.push("Workforce Number is missing (optional).");
+    messages.push("Workforce Number is missing (optional) — can be auto-assigned.");
   }
   if (!fields.dateOfBirth) {
     messages.push("DOB is missing (optional).");
@@ -469,7 +471,7 @@ function validateCandidateRow(
 
   return {
     rowNumber,
-    status: messages.length ? "Warning" : "Ready",
+    status: "Ready",
     messages,
     fields: fieldsWithNumber,
     resolvedCompanyName,

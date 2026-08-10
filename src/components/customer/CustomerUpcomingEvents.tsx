@@ -3,10 +3,10 @@ import Link from "next/link";
 import {
   formatDate,
   formatDay,
-  formatDuration,
   formatShortMonth,
   formatTime,
 } from "@/lib/utils/formatDate";
+import { formatEventDuration } from "@/lib/utils/eventDuration";
 import type { CustomerEventRecord } from "@/types/models";
 
 import styles from "./customerDashboard.module.css";
@@ -87,7 +87,7 @@ export function CustomerUpcomingEvents({
                     <ClockIcon />
                     <span>
                       {timeRange(event)} ·{" "}
-                      {formatDuration(event.eventDate, event.endDate) ??
+                      {formatEventDuration(event.eventDate, event.endDate) ??
                         "Duration not set"}
                     </span>
                   </p>

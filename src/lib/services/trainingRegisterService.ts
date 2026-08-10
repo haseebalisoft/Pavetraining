@@ -320,6 +320,7 @@ export function normalizeRegisterFromAdminRecord(
     id: string;
     candidateName: string;
     companyName: string;
+    workforceId?: string | null;
     trainingOutcome?: string | null;
     expiry?: string | null;
     nporsCategory?: string | null;
@@ -341,7 +342,8 @@ export function normalizeRegisterFromAdminRecord(
     registerKey: key,
     candidateName: record.candidateName,
     companyName: record.companyName,
-    candidateLookupId: lookupHints?.candidateLookupId ?? null,
+    candidateLookupId:
+      lookupHints?.candidateLookupId ?? record.workforceId ?? null,
     companyLookupId: lookupHints?.companyLookupId ?? null,
     trainingOutcome: normalizeTrainingOutcome(record.trainingOutcome),
     expiry: record.expiry ?? null,

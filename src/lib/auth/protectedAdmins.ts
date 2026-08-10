@@ -1,26 +1,40 @@
 import "server-only";
 
 /**
- * Comma/semicolon-separated emails that cannot be deleted or deactivated
- * via the admin Permissions UI/API. Set in `.env.local` and Vercel:
- *
- *   PROTECTED_ADMIN_EMAILS=wayne@example.com,you@example.com
- *
- * Login is NOT hardcoded — these emails still need an Active SharePoint
- * Permissions row. This only prevents the app from removing that row.
+ * Hardcoded emails that always retain Admin portal access, even if their
+ * SharePoint Permissions row is missing or deleted.
+ */
+const ALWAYS_ADMIN_EMAILS = [
+  "wayne.curry@pavetraining.co.uk",
+] as const;
+
+/**
+ * Extra protect list via env (cannot delete/deactivate from app).
+ * Set in `.env.local` / Vercel:
+ *   PROTECTED_ADMIN_EMAILS=you@example.com,other@example.com
  */
 export function getProtectedAdminEmails(): Set<string> {
-  const raw = process.env.PROTECTED_ADMIN_EMAILS?.trim() ?? "";
-  if (!raw) return new Set();
-  return new Set(
-    raw
-      .split(/[,:;]+/)
-      .map((part) => part.trim().toLowerCase())
-      .filter(Boolean),
-  );
+  const fromEnv = (process.env.PROTECTED_ADMIN_EMAILS?.trim() ?? "")
+    .split(/[,:;]+/)
+    .map((part) => part.trim().toLowerCase())
+    .filter(Boolean);
+
+  return new Set([...ALWAYS_ADMIN_EMAILS, ...fromEnv]);
 }
 
-export function isProtectedAdminEmail(email: string | null | undefined): boolean {
+export function isAlwaysAdminEmail(
+  email: string | null | undefined,
+): boolean {
+  const normalized = String(email ?? "")
+    .trim()
+    .toLowerCase();
+  if (!normalized) return false;
+  return (ALWAYS_ADMIN_EMAILS as readonly string[]).includes(normalized);
+}
+
+export function isProtectedAdminEmail(
+  email: string | null | undefined,
+): boolean {
   const normalized = String(email ?? "")
     .trim()
     .toLowerCase();

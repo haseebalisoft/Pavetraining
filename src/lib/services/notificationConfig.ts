@@ -1,5 +1,6 @@
 import "server-only";
 
+import { getPortalPublicUrl } from "@/lib/portalUrl";
 import { getSettings, getDefaultSettings } from "@/lib/services/settingsService";
 import type { PortalSettings } from "@/types/portalSettings";
 import type { NotificationSettingsSummary } from "@/types/notifications";
@@ -27,10 +28,7 @@ export async function getNotificationSettings(): Promise<NotificationSettingsSum
   const portal = await getSettings();
   const settings = portal.settings;
   const fromEmail = process.env.NOTIFICATION_FROM_EMAIL?.trim() || null;
-  const portalUrl =
-    process.env.AUTH_URL?.trim() ||
-    process.env.NEXT_PUBLIC_APP_URL?.trim() ||
-    null;
+  const portalUrl = getPortalPublicUrl();
 
   // Env kill-switches still apply if explicitly set false.
   const envNotifications = envFlag("NOTIFICATIONS_ENABLED", true);
@@ -57,10 +55,7 @@ export async function getNotificationSettings(): Promise<NotificationSettingsSum
 export function getNotificationSettingsSync(): NotificationSettingsSummary {
   const defaults = getDefaultSettings();
   const fromEmail = process.env.NOTIFICATION_FROM_EMAIL?.trim() || null;
-  const portalUrl =
-    process.env.AUTH_URL?.trim() ||
-    process.env.NEXT_PUBLIC_APP_URL?.trim() ||
-    null;
+  const portalUrl = getPortalPublicUrl();
   return {
     notificationsEnabled: envFlag("NOTIFICATIONS_ENABLED", true),
     expiryRemindersEnabled: envFlag("EXPIRY_REMINDERS_ENABLED", true),

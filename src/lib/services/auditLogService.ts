@@ -455,58 +455,67 @@ export async function listAuditLogs(
     return [];
   }
 
-  const top = Math.min(Math.max(query.top ?? 200, 1), 500);
-  const items = await getListItemsByKey("trainingManagerLogs", { top: 500 });
-  let rows = items
-    .map((item) =>
-      mapSharePointItemToRecord({
-        id: item.id,
-        fields: item.fields,
-        createdDateTime: item.createdDateTime,
-      }),
-    )
-    .filter((row): row is AuditLogRecord => Boolean(row));
+  try {
+    const top = Math.min(Math.max(query.top ?? 200, 1), 500);
+    const items = await getListItemsByKey("trainingManagerLogs", { top: 500 });
+    let rows = items
+      .map((item) =>
+        mapSharePointItemToRecord({
+          id: item.id,
+          fields: item.fields,
+          createdDateTime: item.createdDateTime,
+        }),
+      )
+      .filter((row): row is AuditLogRecord => Boolean(row));
 
-  // Prefer structured audit + compatible legacy rows; keep notification logs too.
-  const search = query.search?.trim().toLowerCase();
-  if (search) {
-    rows = rows.filter((row) => row.userEmail.includes(search));
-  }
-  if (query.action?.trim()) {
-    const action = query.action.trim().toLowerCase();
-    rows = rows.filter((row) => row.action.toLowerCase().includes(action));
-  }
-  if (query.entityType?.trim()) {
-    const entityType = query.entityType.trim().toLowerCase();
-    rows = rows.filter((row) =>
-      row.entityType.toLowerCase().includes(entityType),
+    // Prefer structured audit + compatible legacy rows; keep notification logs too.
+    const search = query.search?.trim().toLowerCase();
+    if (search) {
+      rows = rows.filter((row) => row.userEmail.includes(search));
+    }
+    if (query.action?.trim()) {
+      const action = query.action.trim().toLowerCase();
+      rows = rows.filter((row) => row.action.toLowerCase().includes(action));
+    }
+    if (query.entityType?.trim()) {
+      const entityType = query.entityType.trim().toLowerCase();
+      rows = rows.filter((row) =>
+        row.entityType.toLowerCase().includes(entityType),
+      );
+    }
+    if (query.success === "true") {
+      rows = rows.filter((row) => row.success);
+    } else if (query.success === "false") {
+      rows = rows.filter((row) => !row.success);
+    }
+    if (query.from) {
+      const fromMs = new Date(query.from).getTime();
+      if (!Number.isNaN(fromMs)) {
+        rows = rows.filter((row) => new Date(row.timestamp).getTime() >= fromMs);
+      }
+    }
+    if (query.to) {
+      const toDate = new Date(query.to);
+      if (!Number.isNaN(toDate.getTime())) {
+        toDate.setHours(23, 59, 59, 999);
+        const toMs = toDate.getTime();
+        rows = rows.filter((row) => new Date(row.timestamp).getTime() <= toMs);
+      }
+    }
+
+    rows.sort(
+      (a, b) =>
+        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+    );
+    return rows.slice(0, top);
+  } catch (error) {
+    console.error("[audit] Failed to list logs", error);
+    throw new Error(
+      error instanceof Error
+        ? `Failed to load audit logs from SharePoint: ${error.message}`
+        : "Failed to load audit logs from SharePoint.",
     );
   }
-  if (query.success === "true") {
-    rows = rows.filter((row) => row.success);
-  } else if (query.success === "false") {
-    rows = rows.filter((row) => !row.success);
-  }
-  if (query.from) {
-    const fromMs = new Date(query.from).getTime();
-    if (!Number.isNaN(fromMs)) {
-      rows = rows.filter((row) => new Date(row.timestamp).getTime() >= fromMs);
-    }
-  }
-  if (query.to) {
-    const toDate = new Date(query.to);
-    if (!Number.isNaN(toDate.getTime())) {
-      toDate.setHours(23, 59, 59, 999);
-      const toMs = toDate.getTime();
-      rows = rows.filter((row) => new Date(row.timestamp).getTime() <= toMs);
-    }
-  }
-
-  rows.sort(
-    (a, b) =>
-      new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
-  );
-  return rows.slice(0, top);
 }
 
 export async function getAuditLogById(

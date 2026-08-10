@@ -2,7 +2,7 @@ export type DateValue = string | Date | null | undefined;
 
 const ISO_DATE_ONLY =
   /^(\d{4})-(\d{2})-(\d{2})(?:T00:00(?::00(?:\.0+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
-const UK_DATE_ONLY = /^(\d{2})\/(\d{2})\/(\d{4})$/;
+const UK_DATE_ONLY = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
 
 const UK_DATE_FORMATTER = new Intl.DateTimeFormat("en-GB", {
   day: "2-digit",
@@ -65,10 +65,13 @@ export function formatDate(value: DateValue, fallback = "—"): string {
 
     const ukMatch = UK_DATE_ONLY.exec(trimmed);
     if (ukMatch) {
-      const [, day, month, year] = ukMatch;
-      return isValidCalendarDate(Number(year), Number(month), Number(day))
-        ? trimmed
-        : value;
+      const [, dayRaw, monthRaw, year] = ukMatch;
+      const day = Number(dayRaw);
+      const month = Number(monthRaw);
+      if (isValidCalendarDate(Number(year), month, day)) {
+        return `${String(day).padStart(2, "0")}/${String(month).padStart(2, "0")}/${year}`;
+      }
+      return value;
     }
 
     const match = ISO_DATE_ONLY.exec(trimmed);
@@ -130,34 +133,4 @@ export function formatShortMonth(
   return parsed
     ? UK_SHORT_MONTH_FORMATTER.format(parsed)
     : invalidValueFallback(value, fallback);
-}
-
-/**
- * Duration between a start and end date/time — hours/minutes when both fall
- * on the same UK calendar day, whole days otherwise. Returns null when either
- * side is missing/invalid or the range isn't positive, so callers can show a
- * "Duration not set" fallback instead of a bogus value.
- */
-export function formatDuration(start: DateValue, end: DateValue): string | null {
-  const startDate = parseDateValue(start);
-  const endDate = parseDateValue(end);
-  if (!startDate || !endDate) return null;
-
-  const diffMs = endDate.getTime() - startDate.getTime();
-  if (diffMs <= 0) return null;
-
-  const sameDay =
-    UK_DATE_FORMATTER.format(startDate) === UK_DATE_FORMATTER.format(endDate);
-
-  if (sameDay) {
-    const totalMinutes = Math.round(diffMs / 60_000);
-    const hours = Math.floor(totalMinutes / 60);
-    const minutes = totalMinutes % 60;
-    if (hours === 0) return `${minutes} min${minutes === 1 ? "" : "s"}`;
-    if (minutes === 0) return `${hours} hour${hours === 1 ? "" : "s"}`;
-    return `${hours}h ${minutes}m`;
-  }
-
-  const days = Math.ceil(diffMs / (24 * 60 * 60 * 1000));
-  return `${days} day${days === 1 ? "" : "s"}`;
 }

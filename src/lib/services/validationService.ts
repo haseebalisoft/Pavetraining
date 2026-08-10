@@ -74,4 +74,15 @@ export function normalizeOptionalEmail(
   return result.email;
 }
 
+/** Blank / missing → null. Invalid non-blank → ValidationError. */
+export function assertOptionalEmail(
+  value: unknown,
+  label = "Email",
+): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  return assertEmail(text, label);
+}
+
 export { ValidationError };
