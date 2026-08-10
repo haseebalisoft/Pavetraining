@@ -93,7 +93,11 @@ export function LoginClient({
           const meRes = await fetch("/api/me");
           if (meRes.ok) {
             const me = (await meRes.json()) as { redirectTo?: string };
-            if (me.redirectTo === "/admin" || me.redirectTo === "/customer") {
+            if (
+              me.redirectTo === "/admin" ||
+              me.redirectTo === "/customer" ||
+              me.redirectTo === "/customer/dashboard"
+            ) {
               destination = me.redirectTo;
             }
           }
@@ -202,7 +206,11 @@ export function LoginClient({
         const meRes = await fetch("/api/me");
         if (meRes.ok) {
           const me = (await meRes.json()) as { redirectTo?: string };
-          if (me.redirectTo === "/admin" || me.redirectTo === "/customer") {
+          if (
+            me.redirectTo === "/admin" ||
+            me.redirectTo === "/customer" ||
+            me.redirectTo === "/customer/dashboard"
+          ) {
             destination = me.redirectTo;
           }
         }

@@ -23,7 +23,12 @@ const {
   findMatrixRowByWorkforce,
   deriveMatrixLinkStatus,
   buildWorkforceMatrixSource,
+  buildUnlinkedMatrixSource,
+  mergeUploadedCells,
+  stripBlankCells,
+  isoDateKey,
   candidateNameKey,
+  AMBIGUOUS_MATRIX_MATCH_WARNING,
 } = await import(BASE + "services/bulkUpload/workforceMatrixSync.ts");
 
 // --- Fake-id guard (requirement 2) ---------------------------------------
@@ -376,6 +381,347 @@ test("legacy fallback requires BOTH number and company id", () => {
 });
 
 // --- deriveMatrixLinkStatus (display badges + hide-orphans filter) ---------
+
+// --- Two-way sync: DOB/company-aware ladder on the REAL client data ----------
+// Workforce list.xlsx has 5 same-name pairs, each in a DIFFERENT company with a
+// DIFFERENT DOB. Training matrix example.xlsx has the same 5 duplicate names
+// with the matching DOB pairs and NO Company / Workforce Number column at all.
+// Before the ladder consulted DOB, each of these 10 candidates matched "none"
+// and the importer created a duplicate row.
+
+/** The 5 real twin pairs: [name, dobA, companyA, coNumA, dobB, companyB, coNumB]. */
+const TWINS = [
+  ["Aiden Mercer", "1981-07-13", 7, "COMP-007", "1983-08-14", 12, "COMP-012"],
+  ["Callum Reeves", "1988-12-24", 8, "COMP-008", "1990-01-25", 13, "COMP-013"],
+  ["Jamie Prescott", "1995-05-08", 9, "COMP-009", "2004-11-20", 15, "COMP-015"],
+  ["Morgan Talbot", "2002-10-19", 10, "COMP-010", "1978-04-04", 16, "COMP-016"],
+  ["Hayden Clarke", "1976-03-03", 11, "COMP-011", "1985-09-15", 17, "COMP-017"],
+];
+
+/** Matrix rows exactly as the client's template imports them: Name + DOB only. */
+function twinMatrixRows() {
+  const rows = [];
+  let next = 1;
+  for (const [name, dobA, , , dobB] of TWINS) {
+    rows.push({ id: `M-${next++}`, candidateName: name, dateOfBirth: dobA });
+    rows.push({ id: `M-${next++}`, candidateName: name, dateOfBirth: dobB });
+  }
+  return rows;
+}
+
+test("DOB disambiguates all 5 same-name pairs — the duplicate-row bug", () => {
+  const rows = twinMatrixRows();
+  const claimed = [];
+  TWINS.forEach(([name, dobA, coA, coNumA, dobB, coB, coNumB], i) => {
+    // Workforce ids are distinct SharePoint item ids per candidate.
+    const a = findMatrixRowByWorkforce(rows, {
+      workforceItemId: 100 + i * 2,
+      candidateName: name,
+      dateOfBirth: dobA,
+      companyItemId: coA,
+      companyNumber: coNumA,
+    });
+    const b = findMatrixRowByWorkforce(rows, {
+      workforceItemId: 101 + i * 2,
+      candidateName: name,
+      dateOfBirth: dobB,
+      companyItemId: coB,
+      companyNumber: coNumB,
+    });
+    assert.equal(a.matchType, "nameDob", `${name} A should match by name+DOB`);
+    assert.equal(b.matchType, "nameDob", `${name} B should match by name+DOB`);
+    assert.equal(a.ambiguous, false);
+    assert.equal(b.ambiguous, false);
+    // Each twin resolves to the row carrying ITS OWN date of birth.
+    assert.equal(a.row.dateOfBirth, dobA);
+    assert.equal(b.row.dateOfBirth, dobB);
+    assert.notEqual(a.row.id, b.row.id);
+    claimed.push(a.row.id, b.row.id);
+  });
+  // 10 candidates → 10 distinct rows. No row serves two people, nothing created.
+  assert.equal(new Set(claimed).size, 10);
+});
+
+test("sequential same-name sync links both twins and creates nothing", () => {
+  // Mirrors the importer: same-name candidates run sequentially in one group and
+  // the first candidate's link is stamped onto the local cache before the next.
+  const rows = twinMatrixRows();
+  const first = findMatrixRowByWorkforce(rows, {
+    workforceItemId: 12,
+    candidateName: "Aiden Mercer",
+    dateOfBirth: "1981-07-13",
+  });
+  assert.equal(first.matchType, "nameDob");
+  first.row.workforceItemId = 12; // now owned
+
+  const second = findMatrixRowByWorkforce(rows, {
+    workforceItemId: 18,
+    candidateName: "Aiden Mercer",
+    dateOfBirth: "1983-08-14",
+  });
+  assert.equal(second.matchType, "nameDob");
+  assert.notEqual(second.row.id, first.row.id);
+
+  // Re-syncing the first candidate now resolves by id — still no new row.
+  const again = findMatrixRowByWorkforce(rows, {
+    workforceItemId: 12,
+    candidateName: "Aiden Mercer",
+    dateOfBirth: "1981-07-13",
+  });
+  assert.equal(again.matchType, "id");
+  assert.equal(again.row.id, first.row.id);
+});
+
+test("a DOB that contradicts the only same-name row never adopts it", () => {
+  const rows = [
+    { id: "M-1", candidateName: "Aiden Mercer", dateOfBirth: "1981-07-13" },
+  ];
+  const hit = findMatrixRowByWorkforce(rows, {
+    workforceItemId: 18,
+    candidateName: "Aiden Mercer",
+    dateOfBirth: "1983-08-14",
+  });
+  assert.equal(hit.row, null);
+  assert.equal(hit.matchType, "none");
+  // Not ambiguous — the caller should confidently create this candidate's row.
+  assert.equal(hit.ambiguous, false);
+});
+
+test("CompanyNumber + name + DOB links a matrix-first row (no CompanyItemId)", () => {
+  // buildUnlinkedMatrixSource writes CompanyNumber but never CompanyItemId, so
+  // this is the shape a matrix-first upload leaves behind.
+  const rows = [
+    {
+      id: "M-1",
+      candidateName: "Aiden Mercer",
+      dateOfBirth: "1981-07-13",
+      companyNumber: "COMP-007",
+    },
+    { id: "M-2", candidateName: "Aiden Mercer", dateOfBirth: "1983-08-14" },
+  ];
+  const hit = findMatrixRowByWorkforce(rows, {
+    workforceItemId: 12,
+    candidateName: "Aiden Mercer",
+    dateOfBirth: "1981-07-13",
+    companyItemId: 7,
+    companyNumber: "COMP-007",
+  });
+  assert.equal(hit.matchType, "companyNameDob");
+  assert.equal(hit.row.id, "M-1");
+});
+
+test("same name AND same DOB on two unlinked rows is ambiguous, never linked", () => {
+  const rows = [
+    { id: "M-1", candidateName: "Sam Same", dateOfBirth: "1990-01-01" },
+    { id: "M-2", candidateName: "Sam Same", dateOfBirth: "1990-01-01" },
+  ];
+  const hit = findMatrixRowByWorkforce(rows, {
+    workforceItemId: 55,
+    candidateName: "Sam Same",
+    dateOfBirth: "1990-01-01",
+  });
+  assert.equal(hit.row, null);
+  assert.equal(hit.ambiguous, true);
+  assert.equal(hit.ambiguousAt, "nameDob");
+  assert.equal(hit.candidates.length, 2);
+});
+
+test("same name + same DOB across two companies needs Company to link safely", () => {
+  // One matrix row, but two Workforce people share name AND DOB.
+  const rows = [
+    { id: "M-1", candidateName: "Sam Same", dateOfBirth: "1990-01-01" },
+  ];
+  const hit = findMatrixRowByWorkforce(
+    rows,
+    {
+      workforceItemId: 55,
+      candidateName: "Sam Same",
+      dateOfBirth: "1990-01-01",
+    },
+    { workforceNameDobPeers: 2 },
+  );
+  assert.equal(hit.row, null);
+  assert.equal(hit.ambiguous, true);
+});
+
+test("name alone never auto-links when another Workforce record shares the name", () => {
+  const rows = [{ id: "M-1", candidateName: "Lone Name" }];
+  const hit = findMatrixRowByWorkforce(
+    rows,
+    { workforceItemId: 60, candidateName: "Lone Name" },
+    { workforceNamePeers: 2 },
+  );
+  assert.equal(hit.row, null);
+  assert.equal(hit.matchType, "none");
+});
+
+test("duplicate rows sharing one WorkforceItemId resolve deterministically", () => {
+  // Pre-fix data already contains these; going ambiguous here would freeze sync.
+  const rows = [
+    { id: "9", candidateName: "Dup Row", workforceItemId: 12, dateOfBirth: null },
+    { id: "4", candidateName: "Dup Row", workforceItemId: 12, dateOfBirth: "1981-07-13" },
+  ];
+  const hit = findMatrixRowByWorkforce(rows, {
+    workforceItemId: 12,
+    candidateName: "Dup Row",
+    dateOfBirth: "1981-07-13",
+  });
+  assert.equal(hit.matchType, "id");
+  assert.equal(hit.ambiguous, false);
+  // The DOB-matching row wins over the lower id.
+  assert.equal(hit.row.id, "4");
+  assert.equal(hit.candidates.length, 2);
+});
+
+test("the ambiguity warning is exactly the client-agreed string", () => {
+  assert.equal(
+    AMBIGUOUS_MATRIX_MATCH_WARNING,
+    "Multiple unlinked Matrix rows match this Workforce record.",
+  );
+});
+
+// --- DOB normalization: workforce DOB is raw, matrix DOB is ISO -------------
+
+test("isoDateKey normalizes ISO, ISO+time and DD/MM/YYYY; rejects ambiguity", () => {
+  assert.equal(isoDateKey("1981-07-13"), "1981-07-13");
+  assert.equal(isoDateKey("1981-07-13T00:00:00Z"), "1981-07-13");
+  assert.equal(isoDateKey("13/07/1981"), "1981-07-13");
+  assert.equal(isoDateKey("13-07-1981"), "1981-07-13");
+  assert.equal(isoDateKey("3/7/1981"), "1981-07-03");
+  // Unparseable / 2-digit years are "unknown" — never a false match.
+  assert.equal(isoDateKey("7/13/81"), "");
+  assert.equal(isoDateKey("not a date"), "");
+  assert.equal(isoDateKey(null), "");
+  assert.equal(isoDateKey("—"), "");
+});
+
+test("a UK-formatted Workforce DOB still matches an ISO matrix DOB", () => {
+  // Workforce.dateOfBirth is the RAW SharePoint string; a naive slice(0,10)
+  // compares "13/07/1981" to "1981-07-13", silently never matches, and produces
+  // a duplicate row per candidate with no error anywhere.
+  const rows = [
+    { id: "M-1", candidateName: "Aiden Mercer", dateOfBirth: "1981-07-13" },
+    { id: "M-2", candidateName: "Aiden Mercer", dateOfBirth: "1983-08-14" },
+  ];
+  const hit = findMatrixRowByWorkforce(rows, {
+    workforceItemId: 12,
+    candidateName: "Aiden Mercer",
+    dateOfBirth: "13/07/1981",
+  });
+  assert.equal(hit.matchType, "nameDob");
+  assert.equal(hit.row.id, "M-1");
+});
+
+// --- Blank preservation: an empty cell must never erase a live expiry --------
+
+test("stripBlankCells drops nulls, blanks and dash/N-A sentinels", () => {
+  const cleaned = stripBlankCells({
+    "CSCS Expiry": "2027-03-01",
+    "EUSR Expiry": null,
+    "NRSWA Expiry": "",
+    "SSSTS Expiry": "   ",
+    "SMSTS Expiry": "—",
+    "N001 - Ind FLT": "N/A",
+    "N003 - Reach Lift Truck": " 2028-06-30 ",
+  });
+  assert.deepEqual(cleaned, {
+    "CSCS Expiry": "2027-03-01",
+    "N003 - Reach Lift Truck": "2028-06-30",
+  });
+});
+
+test("mergeUploadedCells: blanks never introduce a key, uploaded wins otherwise", () => {
+  const built = {
+    Name: "Aiden Mercer",
+    DOB: "1981-07-13",
+    "CSCS Expiry": "2026-01-01",
+    "EUSR Expiry": "2026-02-02",
+  };
+  const merged = mergeUploadedCells(built, {
+    "CSCS Expiry": "2029-09-09",
+    "EUSR Expiry": null,
+    "N001 - Ind FLT": "",
+    "N003 - Reach Lift Truck": "2030-05-05",
+    Name: "Sheet Typo",
+    DOB: "1999-12-31",
+  });
+  // Uploaded non-blank wins for expiries.
+  assert.equal(merged["CSCS Expiry"], "2029-09-09");
+  assert.equal(merged["N003 - Reach Lift Truck"], "2030-05-05");
+  // A blank uploaded cell leaves the existing value untouched...
+  assert.equal(merged["EUSR Expiry"], "2026-02-02");
+  // ...and never creates the key at all (absent key = column untouched).
+  assert.equal("N001 - Ind FLT" in merged, false);
+  // Identity stays with the matched Workforce record.
+  assert.equal(merged.Name, "Aiden Mercer");
+  assert.equal(merged.DOB, "1981-07-13");
+});
+
+test("mergeUploadedCells fills DOB only when the workforce record has none", () => {
+  const merged = mergeUploadedCells(
+    { Name: "No Dob Person" },
+    { DOB: "1975-04-04" },
+  );
+  assert.equal(merged.DOB, "1975-04-04");
+});
+
+// --- Unlinked (Needs Review) rows: matrix uploaded before Workforce ---------
+
+test("buildUnlinkedMatrixSource writes Needs Review and claims no ownership", () => {
+  const { source, profileFields, linkFields } = buildUnlinkedMatrixSource({
+    candidateName: "  Zaid  ",
+    dateOfBirth: "1972-01-15",
+    companyName: "Alder & Finch Supplies Ltd",
+    companyNumber: "COMP-001",
+    uploadedCells: {
+      "CSCS Expiry": "2027-03-01",
+      "EUSR Expiry": null,
+      "N001 - Ind FLT": "2028-06-30",
+    },
+  });
+
+  assert.equal(source.Name, "Zaid");
+  assert.equal(source.DOB, "1972-01-15");
+  assert.equal(source["CSCS Expiry"], "2027-03-01");
+  assert.equal(source["N001 - Ind FLT"], "2028-06-30");
+  // Blank uploaded cells are omitted, so nothing is erased.
+  assert.equal("EUSR Expiry" in source, false);
+
+  assert.equal(profileFields.Company, "Alder & Finch Supplies Ltd");
+  assert.equal(linkFields.text.MatrixLinkStatus, "Needs Review");
+  assert.equal(linkFields.text.CandidateName, "Zaid");
+  assert.equal(linkFields.text.CompanyNumber, "COMP-001");
+  // CRITICAL: an unlinked row must claim no workforce/company item id, or a
+  // later sync would treat it as owned and refuse to adopt it.
+  assert.deepEqual(linkFields.numbers, {});
+});
+
+test("an unlinked row is adoptable by name+DOB; a linked one is invisible", () => {
+  const unlinkedRow = {
+    id: "M-9",
+    candidateName: "Morgan Talbot",
+    dateOfBirth: "1978-04-04",
+  };
+  const adopt = findMatrixRowByWorkforce([unlinkedRow], {
+    workforceItemId: 22,
+    candidateName: "Morgan Talbot",
+    dateOfBirth: "1978-04-04",
+  });
+  assert.equal(adopt.matchType, "nameDob");
+  assert.equal(adopt.row.id, "M-9");
+
+  // The same row, already owned by a DIFFERENT workforce record, is untouchable.
+  const owned = findMatrixRowByWorkforce(
+    [{ ...unlinkedRow, workforceItemId: 999 }],
+    {
+      workforceItemId: 22,
+      candidateName: "Morgan Talbot",
+      dateOfBirth: "1978-04-04",
+    },
+  );
+  assert.equal(owned.row, null);
+  assert.equal(owned.matchType, "none");
+});
 
 test("deriveMatrixLinkStatus classifies every link state", () => {
   // Resolved id → Linked.

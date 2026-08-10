@@ -1,18 +1,22 @@
 :root {
   /* ── PAVE Training brand tokens (website + portals) ───── */
-  --pave-charcoal: #333333;
-  --pave-charcoal-light: #555555;
-  --pave-charcoal-muted: #767876;
-  --pave-charcoal-deep: #1f1f1f;
+  /* Primary ink is near-black for strong, readable body/table/form text. */
+  --pave-charcoal: #1b1e1b;
+  /* Secondary text — still darker-than-mid so it never reads as pale. */
+  --pave-charcoal-light: #434643;
+  /* Muted text — readable (~6.5:1 on white), not the old faint grey. */
+  --pave-charcoal-muted: #565955;
+  --pave-charcoal-deep: #0f110f;
 
   --pave-lime: #81cf43;
   --pave-lime-hover: #6bb536;
   --pave-lime-tint: #eef9e4;
-  --pave-lime-dark: #4f8f22;
+  /* Dark lime — AA as link/accent text on white. */
+  --pave-lime-dark: #3f7a1a;
 
   /* RGB channels for alpha composites */
   --pave-lime-rgb: 129, 207, 67;
-  --pave-charcoal-rgb: 51, 51, 51;
+  --pave-charcoal-rgb: 27, 30, 27;
   --pave-amber-rgb: 240, 168, 40;
   --pave-red-rgb: 225, 75, 75;
 
@@ -21,20 +25,30 @@
   --pave-red: #e14b4b;
   --pave-red-tint: #fce8e8;
 
+  /* Accessible status TEXT colours — dark enough to read on white AND on the
+     pale status tints (all ≥ 4.5:1 both ways). Use these for coloured text
+     (badges, matrix cells, stat values); the bright tokens above stay for
+     fills / borders / dots. */
+  --status-green-text: #2f6a17;
+  --status-amber-text: #8a5300;
+  --status-red-text: #b52121;
+  --status-grey-text: var(--pave-charcoal);
+
   --pave-bg: #fafaf9;
   --pave-surface: #ffffff;
   --pave-border: #e5e7e5;
   --pave-border-strong: #c8c8c8;
 
-  /* Matrix status (shared by admin + customer grids) */
+  /* Matrix status (shared by admin + customer grids) — coloured dark text on a
+     pale tint: clear status hue AND readable contrast. */
   --matrix-compliant-bg: var(--pave-lime-tint);
-  --matrix-compliant-text: var(--pave-charcoal);
+  --matrix-compliant-text: var(--status-green-text);
   --matrix-expiring-bg: var(--pave-amber-tint);
-  --matrix-expiring-text: var(--pave-charcoal);
+  --matrix-expiring-text: var(--status-amber-text);
   --matrix-expired-bg: var(--pave-red-tint);
-  --matrix-expired-text: var(--pave-charcoal);
+  --matrix-expired-text: var(--status-red-text);
   --matrix-na-bg: var(--pave-border);
-  --matrix-na-text: var(--pave-charcoal-muted);
+  --matrix-na-text: var(--status-grey-text);
   --matrix-cell-min-width: 7.5rem;
   --matrix-name-col-width: 11.25rem;
   --matrix-company-col-width: 10rem;
@@ -141,6 +155,8 @@ input,
 select,
 textarea {
   font: inherit;
+  /* Inherit the near-black body ink so field text is never pale. */
+  color: inherit;
 }
 
 :focus-visible {

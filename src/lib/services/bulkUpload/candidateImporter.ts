@@ -31,6 +31,11 @@ import {
   pickField,
   type ParsedSpreadsheet,
 } from "@/lib/services/bulkUpload/parseSpreadsheet";
+import type { TrainingMatrixExampleRow } from "@/lib/services/bulkUpload/trainingMatrixExampleService";
+import {
+  isDepartmentActive,
+  type DepartmentStatus,
+} from "@/lib/services/departmentTypes";
 import type {
   BulkCommitRowInput,
   BulkDuplicateMode,
@@ -52,6 +57,16 @@ const COMPANY_NUMBER_ALIASES = [
   "Company No",
 ];
 const DEPT_ALIASES = ["Department", "Dept", " Department"];
+
+type DepartmentLookupRef = {
+  name: string;
+  companyId: string | null;
+  status?: DepartmentStatus;
+};
+
+function deptKey(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
 const DOB_ALIASES = [
   "DOB",
   "Date of Birth",
@@ -219,8 +234,12 @@ function validateCandidateRow(
   companies: Company[],
   workforce: AdminWorkforceRecord[],
   people: PermissionPersonRef[],
+  departments: DepartmentLookupRef[],
   allocatedWorkforceNumbers: string[] = [],
-  options: { autoCreateMissing: boolean } = { autoCreateMissing: false },
+  options: {
+    autoCreateMissing: boolean;
+    autoCreateMissingDepartments?: boolean;
+  } = { autoCreateMissing: false },
 ): BulkPreviewRow {
   const messages: string[] = [];
   const candidateName = fields.candidateName?.trim() ?? "";
@@ -267,11 +286,6 @@ function validateCandidateRow(
   if (report.warning) messages.push(report.warning);
 
   const department = fields.department?.trim();
-  if (department) {
-    messages.push(
-      `Department "${department}" will be linked (created for the company if missing).`,
-    );
-  }
 
   const tm = fields.trainingManager?.trim();
   if (tm && !findPermissionPerson(people, tm)) {
@@ -326,6 +340,54 @@ function validateCandidateRow(
       duplicateMatch: null,
       ...reportFields,
     };
+  }
+
+  if (department) {
+    if (match.kind === "create") {
+      messages.push(
+        `Department "${department}" will be created for the new company.`,
+      );
+    } else if (matchedCompany) {
+      const key = deptKey(department);
+      const sameCompanyMatches = departments.filter(
+        (row) =>
+          deptKey(row.name) === key &&
+          (!row.companyId || row.companyId === matchedCompany.id),
+      );
+      // Only an Active department counts as a real match — an Inactive one
+      // is treated the same as "not found" unless auto-create is enabled.
+      const sameCompanyHit = sameCompanyMatches.find(isDepartmentActive);
+      if (sameCompanyHit) {
+        messages.push(`Department "${department}" matched.`);
+      } else if (options.autoCreateMissingDepartments) {
+        messages.push(
+          `Department "${department}" will be created for this company.`,
+        );
+      } else {
+        const inactiveSameCompanyHit = sameCompanyMatches.find(
+          (row) => !isDepartmentActive(row),
+        );
+        const otherCompanyHit = departments.find(
+          (row) => deptKey(row.name) === key && row.companyId,
+        );
+        const departmentError = inactiveSameCompanyHit
+          ? `Department "${department}" exists for this company but is Inactive — reactivate it under Admin → Departments, or enable auto-create.`
+          : otherCompanyHit
+            ? `Department "${department}" exists under a different company — not linked (company mismatch).`
+            : `Department "${department}" does not exist for this company.`;
+        return {
+          rowNumber,
+          status: "Error",
+          messages: [...messages, departmentError],
+          fields: fieldsWithNumber,
+          resolvedCompanyName,
+          matchedEntityId: null,
+          matchedEntityName: null,
+          duplicateMatch: null,
+          ...reportFields,
+        };
+      }
+    }
   }
 
   const duplicate = findCandidateDuplicate(workforce, {
@@ -498,14 +560,30 @@ async function mapPool<T, R>(
 
 export async function previewCandidateImport(
   spreadsheet: ParsedSpreadsheet,
-  options: { autoCreateMissingCompanies?: boolean } = {},
+  options: {
+    autoCreateMissingCompanies?: boolean;
+    autoCreateMissingDepartments?: boolean;
+  } = {},
 ): Promise<BulkPreviewRow[]> {
   const autoCreateMissing = options.autoCreateMissingCompanies ?? false;
-  const [companies, workforce, people] = await Promise.all([
+  const autoCreateMissingDepartments =
+    options.autoCreateMissingDepartments ?? false;
+  const [companies, workforce, people, departmentRows] = await Promise.all([
     listAdminCompanies(),
     listAdminWorkforce(),
     loadPermissionPeople(),
+    // Inactive rows are loaded on purpose: matching still requires Active (see
+    // validateCandidateRow), but the preview can only say "exists but is
+    // Inactive — reactivate it" if it can actually see that row.
+    import("@/lib/services/departmentService").then((mod) =>
+      mod.listAdminDepartments(null, { includeInactive: true }),
+    ),
   ]);
+  const departments: DepartmentLookupRef[] = departmentRows.map((row) => ({
+    name: row.name,
+    companyId: row.companyId,
+    status: row.status,
+  }));
   const allocatedWorkforceNumbers: string[] = [];
 
   return spreadsheet.rows.map((raw, index) => {
@@ -516,8 +594,9 @@ export async function previewCandidateImport(
       companies,
       workforce,
       people,
+      departments,
       allocatedWorkforceNumbers,
-      { autoCreateMissing },
+      { autoCreateMissing, autoCreateMissingDepartments },
     );
     return {
       ...validated,
@@ -530,9 +609,12 @@ export async function commitCandidateImport(input: {
   rows: BulkCommitRowInput[];
   duplicateMode: BulkDuplicateMode;
   autoCreateMissingCompanies?: boolean;
+  autoCreateMissingDepartments?: boolean;
   log?: BulkLogger;
 }): Promise<BulkPreviewRow[]> {
   const autoCreateMissing = input.autoCreateMissingCompanies ?? false;
+  const autoCreateMissingDepartments =
+    input.autoCreateMissingDepartments ?? false;
   const log = input.log ?? createBulkLogger("commit:workforce");
   // Load all reference data in one parallel round-trip (companies used to be a
   // separate serial read before this Promise.all).
@@ -542,8 +624,11 @@ export async function commitCandidateImport(input: {
       listAdminCompanies(),
       listAdminWorkforce(),
       loadPermissionPeople(),
+      // Includes Inactive: matching filters to Active, but auto-create has to
+      // see an Inactive same-named row so it reactivates it instead of adding a
+      // duplicate (two departments with one name breaks the picker + scopes).
       import("@/lib/services/departmentService").then((mod) =>
-        mod.listAdminDepartments(),
+        mod.listAdminDepartments(null, { includeInactive: true }),
       ),
     ]);
   let companies = companiesInitial;
@@ -559,6 +644,7 @@ export async function commitCandidateImport(input: {
     name: row.name,
     companyId: row.companyId,
     companyName: row.companyName,
+    status: row.status,
   }));
   const liveWorkforce = [...workforce];
   const knownWorkforceNumbers = new Set(
@@ -616,8 +702,9 @@ export async function commitCandidateImport(input: {
       companies,
       liveWorkforce,
       people,
+      departmentRecords,
       allocatedWorkforceNumbers,
-      { autoCreateMissing },
+      { autoCreateMissing, autoCreateMissingDepartments },
     );
 
     if (validated.status === "Error") {
@@ -753,11 +840,9 @@ export async function commitCandidateImport(input: {
   await withBulkSharePointWrites(async () => {
     // Phase 2: pre-create unique TMs / supervisors / departments (serial).
     const phase2 = log.phase("phase2:permissions+departments");
-    const { createAdminDepartment } = await import(
+    const { createAdminDepartment, updateAdminDepartment } = await import(
       "@/lib/services/departmentService"
     );
-    const deptKey = (value: string) =>
-      value.trim().toLowerCase().replace(/\s+/g, " ");
 
     for (const job of [...pendingCreates, ...pendingUpdates]) {
       const tm = job.validated.fields.trainingManager?.trim();
@@ -785,22 +870,36 @@ export async function commitCandidateImport(input: {
         const hit = departmentRecords.find(
           (row) =>
             deptKey(row.name) === deptKey(department) &&
-            (!row.companyId || row.companyId === job.company.id),
+            (!row.companyId || row.companyId === job.company.id) &&
+            isDepartmentActive(row),
         );
-        if (!hit) {
-          const created = await createAdminDepartment({
-            name: department,
-            companyId: job.company.id,
-            companyName: job.companyName,
-            skipDuplicateScan: true,
-          });
+        if (!hit && autoCreateMissingDepartments) {
+          // Reactivate before creating: the company may already own this
+          // department as Inactive, and skipDuplicateScan means SharePoint
+          // would happily accept a second row with the same name.
+          const inactive = departmentRecords.find(
+            (row) =>
+              deptKey(row.name) === deptKey(department) &&
+              (!row.companyId || row.companyId === job.company.id) &&
+              !isDepartmentActive(row),
+          );
+          const resolved = inactive
+            ? (await updateAdminDepartment(inactive.id, { status: "Active" }))
+                .record
+            : await createAdminDepartment({
+                name: department,
+                companyId: job.company.id,
+                companyName: job.companyName,
+                skipDuplicateScan: true,
+              });
           departmentRecords = [
-            ...departmentRecords,
+            ...departmentRecords.filter((row) => row.id !== resolved.id),
             {
-              id: created.id,
-              name: created.name,
-              companyId: created.companyId,
-              companyName: created.companyName,
+              id: resolved.id,
+              name: resolved.name,
+              companyId: resolved.companyId,
+              companyName: resolved.companyName,
+              status: resolved.status,
             },
           ];
         }
@@ -933,92 +1032,191 @@ export async function commitCandidateImport(input: {
     // cache consistent and never wipe existing expiry data with blanks.
     if (importedTargets.length) {
       const phase3c = log.phase("phase3c:trainingMatrix");
-      const { listTrainingMatrixExampleRows, syncWorkforceToTrainingMatrix } =
-        await import(
-          "@/lib/services/bulkUpload/trainingMatrixExampleService"
-        );
-      const { candidateNameKey } = await import(
-        "@/lib/services/bulkUpload/workforceMatrixSync"
-      );
-      const matrixRows = await listTrainingMatrixExampleRows();
-      log.info("matrix read", { rows: matrixRows.length });
-
-      // Group by the dedupe key (candidate name). Distinct names never share a
-      // matrix row, so groups run in parallel; same-name candidates stay
-      // sequential inside a group so the first creates the row and the rest
-      // update it — identical to the old sequential result, still no duplicates.
-      const groups = new Map<
-        string,
-        Array<{ index: number; wf: AdminWorkforceRecord }>
-      >();
-      for (const target of importedTargets) {
-        const key = candidateNameKey(target.wf.candidateName);
-        const bucket = groups.get(key);
-        if (bucket) bucket.push(target);
-        else groups.set(key, [target]);
-      }
-
+      // Best-effort tail step: the candidates are already created (phase 3b). A
+      // failure here — e.g. a transient error loading the matrix list — must
+      // NEVER abort the commit or surface as an import "error" (that showed the
+      // admin a red error even though every candidate imported, then the records
+      // appeared on refresh). Mirror phase 3d: annotate the rows and carry on.
       let synced = 0;
-      await mapPool(
-        [...groups.entries()],
-        BULK_CREATE_CONCURRENCY,
-        async ([groupKey, group]) => {
-          // Seed a local rows view from the up-front snapshot for this name, so
-          // a create by the first same-name candidate is visible to the rest.
-          const localRows = matrixRows.filter(
-            (row) => candidateNameKey(row.candidateName) === groupKey,
+      try {
+        const { listTrainingMatrixExampleRows, syncWorkforceToTrainingMatrix } =
+          await import(
+            "@/lib/services/bulkUpload/trainingMatrixExampleService"
           );
-          for (const { index, wf } of group) {
-            const current = results[index];
-            if (!current) continue;
-            try {
-              // Thread the strong link keys (WorkforceItemId, CompanyItemId) so
-              // bulk-created rows link by id like the manual create/update path.
-              const sync = await syncWorkforceToTrainingMatrix(
-                toMatrixProfile(wf),
-                { existingRows: localRows },
-              );
-              if (sync.created) localRows.push(sync.row);
-              results[index] = {
-                ...current,
-                messages: [
-                  ...current.messages,
-                  sync.created
-                    ? `Training Matrix row created (#${sync.id}).`
-                    : `Training Matrix row updated (#${sync.id}).`,
-                ],
-              };
-              synced += 1;
-              log.debug("matrix synced", {
-                row: current.rowNumber,
-                id: sync.id,
-                created: sync.created,
-              });
-              if (synced % 10 === 0) {
-                log.info("progress", {
-                  done: synced,
-                  total: importedTargets.length,
+        const { candidateNameKey, isoDateKey } = await import(
+          "@/lib/services/bulkUpload/workforceMatrixSync"
+        );
+        const matrixRows = await listTrainingMatrixExampleRows();
+        log.info("matrix read", { rows: matrixRows.length });
+
+        // Peer counts over the LIVE workforce (existing + just-created): the
+        // Name+DOB and Name-only match steps only fire when this candidate is
+        // the sole workforce record with that name / name+DOB, otherwise a
+        // matrix row could be attached to the wrong same-name person.
+        const namePeers = new Map<string, number>();
+        const nameDobPeers = new Map<string, number>();
+        for (const wf of liveWorkforce) {
+          const nameKey = candidateNameKey(wf.candidateName);
+          if (!nameKey) continue;
+          namePeers.set(nameKey, (namePeers.get(nameKey) ?? 0) + 1);
+          const dob = isoDateKey(wf.dateOfBirth);
+          if (!dob) continue;
+          const key = `${nameKey}|${dob}`;
+          nameDobPeers.set(key, (nameDobPeers.get(key) ?? 0) + 1);
+        }
+
+        // Group by the dedupe key (candidate name). Distinct names never share a
+        // matrix row, so groups run in parallel; same-name candidates stay
+        // sequential inside a group so the first creates the row and the rest
+        // update it — identical to the old sequential result, still no duplicates.
+        const groups = new Map<
+          string,
+          Array<{ index: number; wf: AdminWorkforceRecord }>
+        >();
+        for (const target of importedTargets) {
+          const key = candidateNameKey(target.wf.candidateName);
+          const bucket = groups.get(key);
+          if (bucket) bucket.push(target);
+          else groups.set(key, [target]);
+        }
+
+        await mapPool(
+          [...groups.entries()],
+          BULK_CREATE_CONCURRENCY,
+          async ([groupKey, group]) => {
+            // Seed a local rows view from the up-front snapshot, so a create by
+            // the first same-name candidate is visible to the rest. Rows already
+            // OWNED by a candidate in this group are included even when the name
+            // differs (renamed candidate), otherwise the rename would duplicate.
+            const ownedIds = new Set(
+              group.map(({ wf }) => String(wf.id).trim()).filter(Boolean),
+            );
+            const ownedNumbers = new Set(
+              group
+                .map(({ wf }) => wf.workforceNumber?.trim().toLowerCase())
+                .filter((value): value is string => Boolean(value)),
+            );
+            const localRows = matrixRows.filter(
+              (row) =>
+                candidateNameKey(row.candidateName) === groupKey ||
+                ownedIds.has(String(row.workforceItemId ?? "").trim()) ||
+                ownedNumbers.has(
+                  row.workforceNumber?.trim().toLowerCase() ?? "",
+                ),
+            );
+            const replaceLocal = (row: TrainingMatrixExampleRow) => {
+              const at = localRows.findIndex((existing) => existing.id === row.id);
+              if (at >= 0) localRows[at] = row;
+              else localRows.push(row);
+            };
+            for (const { index, wf } of group) {
+              const current = results[index];
+              if (!current) continue;
+              try {
+                const nameKey = candidateNameKey(wf.candidateName);
+                const dobKey = isoDateKey(wf.dateOfBirth);
+                // Thread the strong link keys (WorkforceItemId, CompanyItemId) so
+                // bulk-created rows link by id like the manual create/update path.
+                const sync = await syncWorkforceToTrainingMatrix(
+                  toMatrixProfile(wf),
+                  {
+                    existingRows: localRows,
+                    workforceNamePeers: namePeers.get(nameKey) ?? 1,
+                    workforceNameDobPeers: dobKey
+                      ? (nameDobPeers.get(`${nameKey}|${dobKey}`) ?? 1)
+                      : 1,
+                  },
+                );
+
+                // Ambiguous: several unlinked rows tied on Name+DOB. Nothing was
+                // written — flag it so an admin resolves it in Admin Matrix.
+                if (sync.skipped) {
+                  results[index] = {
+                    ...current,
+                    linkOutcome: "skippedAmbiguous",
+                    messages: [
+                      ...current.messages,
+                      ...sync.warnings,
+                      "Training Matrix row left as Needs Review — resolve it in Admin Matrix.",
+                    ],
+                  };
+                  log.warn("matrix sync ambiguous", {
+                    row: current.rowNumber,
+                    candidate: wf.candidateName,
+                  });
+                  continue;
+                }
+
+                if (sync.row) replaceLocal(sync.row);
+                results[index] = {
+                  ...current,
+                  matrixRowId: sync.matrixId,
+                  linkOutcome: sync.created
+                    ? "createdLinked"
+                    : sync.matchType === "companyNameDob"
+                      ? "linkedCompanyNameDob"
+                      : sync.matchType === "nameDob" || sync.matchType === "name"
+                        ? "linkedNameDob"
+                        : "linkedExistingNeedsReview",
+                  messages: [
+                    ...current.messages,
+                    ...sync.warnings,
+                    sync.created
+                      ? `Training Matrix row created (#${sync.id}).`
+                      : `Training Matrix row updated (#${sync.id}).`,
+                  ],
+                };
+                synced += 1;
+                log.debug("matrix synced", {
+                  row: current.rowNumber,
+                  id: sync.id,
+                  created: sync.created,
+                  matchType: sync.matchType,
                 });
+                if (synced % 10 === 0) {
+                  log.info("progress", {
+                    done: synced,
+                    total: importedTargets.length,
+                  });
+                }
+              } catch (error) {
+                log.warn("matrix sync failed", {
+                  row: current.rowNumber,
+                  error:
+                    error instanceof Error ? error.message : String(error),
+                });
+                results[index] = {
+                  ...current,
+                  messages: [
+                    ...current.messages,
+                    `Candidate imported, but Training Matrix row sync failed: ${
+                      error instanceof Error ? error.message : "unknown error"
+                    }.`,
+                  ],
+                };
               }
-            } catch (error) {
-              log.warn("matrix sync failed", {
-                row: current.rowNumber,
-                error:
-                  error instanceof Error ? error.message : String(error),
-              });
-              results[index] = {
-                ...current,
-                messages: [
-                  ...current.messages,
-                  `Candidate imported, but Training Matrix row sync failed: ${
-                    error instanceof Error ? error.message : "unknown error"
-                  }.`,
-                ],
-              };
             }
-          }
-        },
-      );
+          },
+        );
+      } catch (error) {
+        // Setup failed (matrix list read / dynamic import). The candidates are
+        // still imported — record it per row and continue; never fail the commit.
+        const message = error instanceof Error ? error.message : String(error);
+        log.warn("phase3c skipped (candidates already imported)", {
+          error: message,
+        });
+        for (const { index } of importedTargets) {
+          const current = results[index];
+          if (!current) continue;
+          results[index] = {
+            ...current,
+            messages: [
+              ...current.messages,
+              `Candidate imported, but Training Matrix sync was skipped: ${message}.`,
+            ],
+          };
+        }
+      }
       phase3c.end({ synced, targets: importedTargets.length });
     }
 
@@ -1056,10 +1254,17 @@ export async function commitCandidateImport(input: {
             );
             results[index] = {
               ...current,
+              folderOutcome: folders.ok
+                ? folders.status === "created"
+                  ? "folderCreated"
+                  : "folderExisted"
+                : "folderFailed",
               messages: [
                 ...current.messages,
                 folders.ok
-                  ? "Document folders ensured (created or already existed)."
+                  ? folders.status === "created"
+                    ? "Document folders created."
+                    : "Document folders already existed."
                   : folders.warning,
               ],
             };
@@ -1072,6 +1277,7 @@ export async function commitCandidateImport(input: {
               log.debug("folders ensured", {
                 row: current.rowNumber,
                 name: wf.candidateName,
+                status: folders.status,
               });
             }
           } catch (error) {
@@ -1081,6 +1287,7 @@ export async function commitCandidateImport(input: {
             });
             results[index] = {
               ...current,
+              folderOutcome: "folderFailed",
               messages: [
                 ...current.messages,
                 `Candidate imported, but document folders were not created: ${

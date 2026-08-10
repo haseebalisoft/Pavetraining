@@ -12,6 +12,7 @@ type TopLink = { href: string; label: string; exact?: boolean };
 const PRIMARY_LINKS: TopLink[] = [
   { href: "/admin", label: "Home", exact: true },
   { href: "/admin/companies", label: "Companies" },
+  { href: "/admin/departments", label: "Departments" },
   { href: "/admin/workforce", label: "Workforce" },
   { href: "/admin/training-matrix", label: "Matrix" },
   { href: "/admin/documents", label: "Documents" },

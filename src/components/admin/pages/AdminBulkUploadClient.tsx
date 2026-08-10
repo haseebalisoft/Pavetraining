@@ -18,14 +18,16 @@ import {
 } from "@/lib/services/bulkUpload/bulkUploadLimits";
 import { readPublicApiError } from "@/lib/errors/publicMessages";
 import type { StatusTone } from "@/lib/ui/status";
-import type {
-  BulkCommitResult,
-  BulkDuplicateMode,
-  BulkImportSummary,
-  BulkImportType,
-  BulkPreviewResult,
-  BulkPreviewRow,
-  BulkRowStatus,
+import {
+  BULK_FOLDER_OUTCOME_LABELS,
+  BULK_LINK_OUTCOME_LABELS,
+  type BulkCommitResult,
+  type BulkDuplicateMode,
+  type BulkImportSummary,
+  type BulkImportType,
+  type BulkPreviewResult,
+  type BulkPreviewRow,
+  type BulkRowStatus,
 } from "@/types/bulkUpload";
 
 import styles from "@/components/admin/admin.module.css";
@@ -176,6 +178,12 @@ function PreviewTable({
     return hit?.trim() ? hit : "—";
   };
 
+  // Only Workforce/Matrix imports resolve a link, so the column stays hidden for
+  // company/register imports instead of showing a column of dashes.
+  const showLink = rows.some((row) => row.linkOutcome);
+  // Only Workforce imports touch document folders.
+  const showFolder = rows.some((row) => row.folderOutcome);
+
   return (
     <div className={`${styles.tableWrap} ${styles.bulkPreviewTableWrap}`}>
       <table className={`${styles.dataTable} ${styles.bulkPreviewTable}`}>
@@ -183,6 +191,8 @@ function PreviewTable({
           <tr>
             <th>Row</th>
             <th>Status</th>
+            {showLink ? <th>Link</th> : null}
+            {showFolder ? <th>Folder</th> : null}
             {dataHeaders.map((header) => (
               <th key={header}>{header}</th>
             ))}
@@ -196,6 +206,20 @@ function PreviewTable({
               <td>
                 <StatusBadge label={row.status} tone={statusTone(row.status)} />
               </td>
+              {showLink ? (
+                <td>
+                  {row.linkOutcome
+                    ? BULK_LINK_OUTCOME_LABELS[row.linkOutcome]
+                    : "—"}
+                </td>
+              ) : null}
+              {showFolder ? (
+                <td>
+                  {row.folderOutcome
+                    ? BULK_FOLDER_OUTCOME_LABELS[row.folderOutcome]
+                    : "—"}
+                </td>
+              ) : null}
               {dataHeaders.map((header) => (
                 <td key={`${row.rowNumber}-${header}`}>
                   {cellValue(row, header)}
@@ -369,6 +393,8 @@ export function AdminBulkUploadClient() {
   const [file, setFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [suppressNotifications, setSuppressNotifications] = useState(true);
+  const [autoCreateMissingDepartments, setAutoCreateMissingDepartments] =
+    useState(false);
   const [duplicateMode, setDuplicateMode] =
     useState<BulkDuplicateMode>("skip");
   const [previewing, setPreviewing] = useState(false);
@@ -461,6 +487,12 @@ export function AdminBulkUploadClient() {
         "suppressNotifications",
         suppressNotifications ? "true" : "false",
       );
+      if (importType === "workforce") {
+        form.set(
+          "autoCreateMissingDepartments",
+          autoCreateMissingDepartments ? "true" : "false",
+        );
+      }
       const response = await fetch("/api/admin/bulk-upload/preview", {
         method: "POST",
         body: form,
@@ -484,7 +516,13 @@ export function AdminBulkUploadClient() {
     } finally {
       setPreviewing(false);
     }
-  }, [file, importType, pushToast, suppressNotifications]);
+  }, [
+    autoCreateMissingDepartments,
+    file,
+    importType,
+    pushToast,
+    suppressNotifications,
+  ]);
 
   const runCommit = useCallback(async () => {
     if (!preview?.implemented) return;
@@ -588,6 +626,10 @@ export function AdminBulkUploadClient() {
           fileName: preview.fileName,
           duplicateMode,
           suppressNotifications,
+          autoCreateMissingDepartments:
+            preview.importType === "workforce"
+              ? autoCreateMissingDepartments
+              : false,
           rows: preview.rows.map((row) => ({
             rowNumber: row.rowNumber,
             fields: row.fields,
@@ -672,7 +714,13 @@ export function AdminBulkUploadClient() {
       setCommitting(false);
       setCommitProgress(null);
     }
-  }, [duplicateMode, preview, pushToast, suppressNotifications]);
+  }, [
+    autoCreateMissingDepartments,
+    duplicateMode,
+    preview,
+    pushToast,
+    suppressNotifications,
+  ]);
 
   const downloadTemplate = useCallback(
     async (type: BulkImportType) => {
@@ -736,7 +784,16 @@ export function AdminBulkUploadClient() {
           "Date of birth",
           "Department",
         ];
-    const header = ["Row", "Status", ...dataHeaders, "Matched Id", "Messages"];
+    const header = [
+      "Row",
+      "Status",
+      "Link",
+      "Folder",
+      ...dataHeaders,
+      "Matched Id",
+      "Matrix Row Id",
+      "Messages",
+    ];
     const escape = (value: string) =>
       /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
     const lines = [header.map(escape).join(",")];
@@ -752,8 +809,11 @@ export function AdminBulkUploadClient() {
         [
           String(row.rowNumber),
           row.status,
+          row.linkOutcome ? BULK_LINK_OUTCOME_LABELS[row.linkOutcome] : "",
+          row.folderOutcome ? BULK_FOLDER_OUTCOME_LABELS[row.folderOutcome] : "",
           ...cells,
           row.matchedEntityId ?? "",
+          row.matrixRowId ?? "",
           row.messages.join("; "),
         ]
           .map(escape)
@@ -909,6 +969,22 @@ export function AdminBulkUploadClient() {
                 Suppress customer notifications during import (recommended)
               </span>
             </label>
+
+            {importType === "workforce" ? (
+              <label className={styles.bulkCheckRow}>
+                <input
+                  type="checkbox"
+                  checked={autoCreateMissingDepartments}
+                  onChange={(event) =>
+                    setAutoCreateMissingDepartments(event.target.checked)
+                  }
+                />
+                <span>
+                  Auto-create missing departments (off = rows with an unknown
+                  department for their company are rejected)
+                </span>
+              </label>
+            ) : null}
 
             <div className={styles.bulkActions}>
               <button

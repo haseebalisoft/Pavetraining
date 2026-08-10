@@ -3,7 +3,10 @@ import {
   deleteAdminRegister,
   updateAdminRegister,
 } from "@/lib/services/adminCrudService";
-import { triggerMatrixSyncAfterRegister } from "@/lib/services/matrixSyncHook";
+import {
+  triggerMatrixSyncAfterRegister,
+  triggerMatrixSyncAfterRegisterDelete,
+} from "@/lib/services/matrixSyncHook";
 
 export const dynamic = "force-dynamic";
 
@@ -40,9 +43,14 @@ export async function DELETE(
   const { id } = await context.params;
   return withAdminApi(
     "DELETE /api/admin/training-records/streetworks/[id]",
-    async () => {
-      await deleteAdminRegister("nrswaRegister", id);
-      return { ok: true };
+    async (adminContext) => {
+      const { deletedRecord } = await deleteAdminRegister("nrswaRegister", id);
+      const matrixSync = await triggerMatrixSyncAfterRegisterDelete(
+        "nrswaRegister",
+        deletedRecord,
+        adminContext.loggedInEmail,
+      );
+      return { ok: true, matrixSync, record: deletedRecord };
     },
     { errorMessage: "Failed to delete Streetworks record" },
     _request,

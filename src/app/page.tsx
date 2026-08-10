@@ -3,6 +3,7 @@ import { isRedirectError } from "next/dist/client/components/redirect-error";
 
 import { auth } from "@/auth";
 import { getMeContext } from "@/lib/services/customerContextService";
+import { getPermissionResolutionReason } from "@/lib/services/permissionService";
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +19,8 @@ export default async function HomePage() {
     const me = await getMeContext(email);
 
     if (!me) {
-      redirect("/access-denied");
+      const reason = await getPermissionResolutionReason(email);
+      redirect(`/access-denied?reason=${reason}`);
     }
 
     redirect(me.redirectTo);

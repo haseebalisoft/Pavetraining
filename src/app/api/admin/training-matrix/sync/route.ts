@@ -100,6 +100,9 @@ export async function POST(request: Request) {
     {
       errorMessage: "Failed to sync Training Matrix",
       entityName: "training-matrix-sync",
+      // trainingMatrixSyncService already writes MATRIX_SYNC_* audit rows —
+      // avoid a duplicate generic ADMIN_CREATE entry per sync call.
+      audit: false,
     },
     request,
   );

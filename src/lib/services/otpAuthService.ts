@@ -9,6 +9,7 @@ import {
 import { getActivePermissionByEmail } from "@/lib/services/permissionService";
 import { sendNotification } from "@/lib/services/notificationService";
 import { ValidationError } from "@/lib/services/validationService";
+import { isValidEmail, normalizeEmail } from "@/lib/validation/email";
 
 const OTP_TTL_MS = 10 * 60 * 1000;
 const OTP_LENGTH = 6;
@@ -26,14 +27,6 @@ function authSecret(): string {
     throw new Error("AUTH_SECRET is not configured.");
   }
   return secret;
-}
-
-function normalizeEmail(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-function isValidEmail(value: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
 function sha256Hmac(value: string): string {

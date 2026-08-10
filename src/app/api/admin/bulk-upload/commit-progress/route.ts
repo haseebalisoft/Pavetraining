@@ -1,6 +1,7 @@
 import { ValidationError } from "@/lib/api/adminApi";
 import { logBulkUpload } from "@/lib/services/auditLogService";
 import { commitBulkUpload } from "@/lib/services/bulkUpload/bulkUploadService";
+import { normalizeSourceRow } from "@/lib/services/bulkUpload/parseSpreadsheet";
 import { requireAdminAccess } from "@/lib/services/securityService";
 import { AccessDeniedError, UnauthorizedError } from "@/lib/services/errorHandler";
 import type { BulkCommitRowInput } from "@/types/bulkUpload";
@@ -67,6 +68,10 @@ export async function POST(request: Request): Promise<Response> {
     body.autoCreateMissingCompanies === undefined
       ? false
       : Boolean(body.autoCreateMissingCompanies);
+  const autoCreateMissingDepartments =
+    body.autoCreateMissingDepartments === undefined
+      ? false
+      : Boolean(body.autoCreateMissingDepartments);
 
   if (!Array.isArray(body.rows)) {
     return jsonError("rows must be an array.", 400);
@@ -97,7 +102,7 @@ export async function POST(request: Request): Promise<Response> {
           fields[key] = String(value);
         }
       }
-      return { rowNumber, fields };
+      return { rowNumber, fields, source: normalizeSourceRow(row.source) };
     });
   } catch (error) {
     return jsonError(
@@ -126,6 +131,7 @@ export async function POST(request: Request): Promise<Response> {
           duplicateMode,
           suppressNotifications,
           autoCreateMissingCompanies,
+          autoCreateMissingDepartments,
           rows,
           onEvent: (event) => send({ kind: "progress", event }),
         });

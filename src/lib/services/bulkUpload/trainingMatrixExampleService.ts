@@ -16,10 +16,14 @@ import {
 } from "@/lib/services/sharePointListService";
 import { normalizeDateValue } from "@/lib/services/bulkUpload/parseSpreadsheet";
 import {
+  AMBIGUOUS_MATRIX_MATCH_WARNING,
+  buildUnlinkedMatrixSource,
   buildWorkforceMatrixSource,
   findMatrixRowByWorkforce,
+  mergeUploadedCells,
   realMatrixItemId,
   type MatrixLinkFields,
+  type MatrixMatchType,
   type WorkforceMatrixProfile,
 } from "@/lib/services/bulkUpload/workforceMatrixSync";
 import {
@@ -447,8 +451,10 @@ export async function upsertTrainingMatrixExampleRow(input: {
     if (col.storage === "dateTime") {
       fields[col.name] = isoToSharePointDateTime(iso);
     } else {
-      // Excel-imported Number columns must receive serial day numbers.
-      fields[col.name] = isoToExcelSerial(iso) ?? 0;
+      // Excel-imported Number columns store serial day numbers; a null iso is
+      // an explicit clear (delete-recompute) and must stay null, not default
+      // to 0 — 0 would render as a bogus 1899-12-30 "expiry".
+      fields[col.name] = isoToExcelSerial(iso);
     }
   }
 
@@ -550,14 +556,33 @@ export function stripExampleMatrixId(id: string | null | undefined): string | nu
   return realMatrixItemId(id);
 }
 
+export interface WorkforceMatrixSyncOptions {
+  existingRows?: TrainingMatrixExampleRow[];
+  /**
+   * Uploaded matrix cells keyed by canonical display header. Blanks are stripped
+   * before merging, so an empty spreadsheet cell can never erase a live expiry.
+   */
+  uploadedCells?: Record<string, string | null>;
+  /** Live Workforce records sharing this candidate's name / name+DOB. */
+  workforceNamePeers?: number;
+  workforceNameDobPeers?: number;
+}
+
 export interface WorkforceMatrixSyncResult {
-  /** Real SharePoint item id of the Training Matrix Update row. */
-  id: string;
+  /** Real SharePoint item id of the row, or null when the sync was skipped. */
+  id: string | null;
   /** Id shape used by listAdminMatrix / the admin UI (`example:<id>`). */
-  matrixId: string;
+  matrixId: string | null;
   created: boolean;
   /** Lightweight row for callers to keep an in-memory cache consistent. */
-  row: TrainingMatrixExampleRow;
+  row: TrainingMatrixExampleRow | null;
+  /** Which link key resolved the row. */
+  matchType: MatrixMatchType;
+  /** True when several unlinked rows tied — nothing was written. */
+  ambiguous: boolean;
+  /** True when no Graph write happened. `id`/`row` are null. */
+  skipped: boolean;
+  warnings: string[];
 }
 
 /**
@@ -578,7 +603,7 @@ export interface WorkforceMatrixSyncResult {
  */
 export async function syncWorkforceToTrainingMatrix(
   profile: WorkforceMatrixProfile,
-  options: { existingRows?: TrainingMatrixExampleRow[] } = {},
+  options: WorkforceMatrixSyncOptions = {},
 ): Promise<WorkforceMatrixSyncResult> {
   const name = profile.candidateName?.trim();
   if (!name) {
@@ -588,11 +613,47 @@ export async function syncWorkforceToTrainingMatrix(
   const existingRows =
     options.existingRows ?? (await listTrainingMatrixExampleRows());
   // Match by the STRONG link keys (WorkforceItemId → WorkforceNumber+CompanyItemId
-  // → unambiguous unlinked name). An ambiguous same-name row is NOT adopted, so
-  // a distinct workforce gets its own fresh linked row instead of hijacking one.
-  const { row: existing } = findMatrixRowByWorkforce(existingRows, profile);
-  const { source, profileFields, linkFields } =
-    buildWorkforceMatrixSource(profile);
+  // → Company+Name+DOB → Name+DOB). Rows owned by another workforce record are
+  // invisible to the name/DOB steps, so a row is never hijacked.
+  const match = findMatrixRowByWorkforce(existingRows, profile, {
+    workforceNamePeers: options.workforceNamePeers,
+    workforceNameDobPeers: options.workforceNameDobPeers,
+  });
+  const warnings: string[] = [];
+
+  // Several unlinked rows tied: writing either one could attach this candidate's
+  // training to the wrong person, and creating a third would duplicate. Leave
+  // them Needs Review for an admin.
+  if (match.ambiguous) {
+    return {
+      id: null,
+      matrixId: null,
+      created: false,
+      row: null,
+      matchType: "none",
+      ambiguous: true,
+      skipped: true,
+      warnings: [AMBIGUOUS_MATRIX_MATCH_WARNING],
+    };
+  }
+
+  let existing = match.row;
+  // Guard a stale existingRows cache (parallel bulk import): if the matched row
+  // has since been claimed by someone else, create this candidate's own row.
+  if (existing) {
+    const owner = String(existing.workforceItemId ?? "").trim();
+    const self = String(profile.workforceItemId ?? profile.id ?? "").trim();
+    if (owner && self && owner !== self) {
+      warnings.push(
+        `Matrix row #${existing.id} is linked to another Workforce record — a new row was created instead.`,
+      );
+      existing = null;
+    }
+  }
+
+  const built = buildWorkforceMatrixSource(profile);
+  const source = mergeUploadedCells(built.source, options.uploadedCells);
+  const { profileFields, linkFields } = built;
 
   const result = await upsertTrainingMatrixExampleRow({
     candidateName: name,
@@ -618,14 +679,27 @@ export async function syncWorkforceToTrainingMatrix(
     matrixLinkStatus: linkFields.text.MatrixLinkStatus ?? "Linked",
   };
 
+  // Mirror what the upsert wrote so callers reusing this row as a cache entry
+  // (bulk import, matrix importer) see the post-write state without re-reading.
+  const columnValues = existing
+    ? { ...existing.columnValues, ...source }
+    : { ...source };
+
   const row: TrainingMatrixExampleRow = existing
-    ? { ...existing, ...linkFieldValues }
+    ? {
+        ...existing,
+        candidateName: name,
+        dateOfBirth: source.DOB ?? existing.dateOfBirth ?? null,
+        columnValues,
+        nextExpiryDate: earliestDateFromColumns(columnValues),
+        ...linkFieldValues,
+      }
     : {
         id: result.id,
         candidateName: name,
         dateOfBirth: source.DOB ?? null,
-        columnValues: { ...source },
-        nextExpiryDate: earliestDateFromColumns(source),
+        columnValues,
+        nextExpiryDate: earliestDateFromColumns(columnValues),
         manualOverrides: [],
         ...linkFieldValues,
       };
@@ -635,5 +709,65 @@ export async function syncWorkforceToTrainingMatrix(
     matrixId: `example:${result.id}`,
     created: result.created,
     row,
+    matchType: existing ? match.matchType : "none",
+    ambiguous: false,
+    skipped: false,
+    warnings,
+  };
+}
+
+/**
+ * Write a matrix row that has NO confirmed Workforce owner (Task C): the
+ * spreadsheet gave us a candidate we cannot resolve, so the training data is
+ * preserved but the row is flagged `Needs Review` and claims no WorkforceItemId.
+ * A later Workforce create/import can adopt it via `syncWorkforceToTrainingMatrix`.
+ */
+export async function upsertUnlinkedMatrixRow(input: {
+  candidateName: string;
+  dateOfBirth?: string | null;
+  companyName?: string | null;
+  companyNumber?: string | null;
+  uploadedCells?: Record<string, string | null>;
+  existingRow?: TrainingMatrixExampleRow | null;
+}): Promise<{ id: string; created: boolean; row: TrainingMatrixExampleRow }> {
+  const { source, profileFields, linkFields } = buildUnlinkedMatrixSource({
+    candidateName: input.candidateName,
+    dateOfBirth: input.dateOfBirth,
+    companyName: input.companyName,
+    companyNumber: input.companyNumber,
+    uploadedCells: input.uploadedCells,
+  });
+
+  const existing = input.existingRow ?? null;
+  const result = await upsertTrainingMatrixExampleRow({
+    candidateName: input.candidateName.trim(),
+    existingItemId: existing?.id ?? null,
+    source,
+    profileFields,
+    linkFields,
+  });
+
+  const columnValues = existing
+    ? { ...existing.columnValues, ...source }
+    : { ...source };
+
+  return {
+    id: result.id,
+    created: result.created,
+    row: {
+      id: result.id,
+      candidateName: input.candidateName.trim(),
+      dateOfBirth: source.DOB ?? existing?.dateOfBirth ?? null,
+      columnValues,
+      nextExpiryDate: earliestDateFromColumns(columnValues),
+      manualOverrides: existing?.manualOverrides ?? [],
+      // Deliberately keeps workforceItemId null so a future Workforce sync can
+      // still claim this row via the Company+Name+DOB step.
+      workforceItemId: null,
+      workforceNumber: null,
+      companyItemId: existing?.companyItemId ?? null,
+      companyNumber: linkFields.text.CompanyNumber ?? existing?.companyNumber ?? null,
+      matrixLinkStatus: linkFields.text.MatrixLinkStatus ?? "Needs Review",
+    },
   };
 }

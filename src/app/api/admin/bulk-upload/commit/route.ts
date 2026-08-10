@@ -1,6 +1,7 @@
 import { withAdminApi, ValidationError } from "@/lib/api/adminApi";
 import { logBulkUpload } from "@/lib/services/auditLogService";
 import { commitBulkUpload } from "@/lib/services/bulkUpload/bulkUploadService";
+import { normalizeSourceRow } from "@/lib/services/bulkUpload/parseSpreadsheet";
 import type { BulkCommitRowInput } from "@/types/bulkUpload";
 
 export const dynamic = "force-dynamic";
@@ -35,6 +36,10 @@ export async function POST(request: Request) {
         body.autoCreateMissingCompanies === undefined
           ? false
           : Boolean(body.autoCreateMissingCompanies);
+      const autoCreateMissingDepartments =
+        body.autoCreateMissingDepartments === undefined
+          ? false
+          : Boolean(body.autoCreateMissingDepartments);
 
       if (!Array.isArray(body.rows)) {
         throw new ValidationError("rows must be an array.");
@@ -63,7 +68,7 @@ export async function POST(request: Request) {
             fields[key] = String(value);
           }
         }
-        return { rowNumber, fields };
+        return { rowNumber, fields, source: normalizeSourceRow(row.source) };
       });
 
       try {
@@ -73,6 +78,7 @@ export async function POST(request: Request) {
           duplicateMode,
           suppressNotifications,
           autoCreateMissingCompanies,
+          autoCreateMissingDepartments,
           rows,
         });
 

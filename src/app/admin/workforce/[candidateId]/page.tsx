@@ -32,9 +32,15 @@ function nameKey(value: string | null | undefined): string {
 }
 
 function matchesCandidate(
-  row: { candidateName?: string | null; candidate?: string | null },
+  row: {
+    candidateName?: string | null;
+    candidate?: string | null;
+    candidateLookupId?: string | null;
+  },
   candidateName: string,
+  candidateId?: string,
 ): boolean {
+  if (candidateId && row.candidateLookupId === candidateId) return true;
   const key = nameKey(candidateName);
   if (!key) return false;
   return nameKey(row.candidateName) === key || nameKey(row.candidate) === key;
@@ -172,6 +178,9 @@ function mapNvq(row: AdminNvqRecord): CustomerNvqRecord {
     notes: row.notes,
     completedDate: row.completedDate,
     status: row.status,
+    ulnNumber: row.ulnNumber,
+    cardSchemeCategory: row.cardSchemeCategory,
+    cardExtensionDateNeeded: row.cardExtensionDateNeeded,
   };
 }
 
@@ -229,9 +238,18 @@ export default async function AdminCandidateProfilePage({
         nameKey(row.candidateName) === nameKey(candidate.candidateName),
     ) ?? null;
 
-  const filterRows = <T extends { candidateName?: string | null; candidate?: string | null }>(
+  const filterRows = <
+    T extends {
+      candidateName?: string | null;
+      candidate?: string | null;
+      candidateLookupId?: string | null;
+    },
+  >(
     rows: T[],
-  ) => rows.filter((row) => matchesCandidate(row, candidate.candidateName));
+  ) =>
+    rows.filter((row) =>
+      matchesCandidate(row, candidate.candidateName, candidateId),
+    );
 
   return (
     <CandidateProfileView

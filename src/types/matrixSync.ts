@@ -18,7 +18,7 @@ export interface MatrixSyncResultItem {
 
 export interface MatrixSyncResult {
   dryRun: boolean;
-  scope: "all" | "company" | "candidate" | "register";
+  scope: "all" | "company" | "candidate" | "register" | "register-delete";
   items: MatrixSyncResultItem[];
   summary: {
     processed: number;

@@ -3,6 +3,7 @@ import {
   deleteAdminNvq,
   updateAdminNvq,
 } from "@/lib/services/adminCrudService";
+import { triggerMatrixSyncAfterNvq } from "@/lib/services/matrixSyncHook";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +17,8 @@ export async function PATCH(
     async (_ctx, req) => {
       const body = (await req.json()) as Record<string, unknown>;
       const record = await updateAdminNvq(id, body);
-      return { record };
+      const matrixSync = triggerMatrixSyncAfterNvq(record);
+      return { record, matrixSync };
     },
     { errorMessage: "Failed to update NVQ record" },
     request,

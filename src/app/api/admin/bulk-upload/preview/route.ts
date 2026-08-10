@@ -29,6 +29,12 @@ export async function POST(request: Request) {
       const autoCreateMissingCompanies = ["true", "1", "yes"].includes(
         String(autoCreateRaw ?? "").toLowerCase(),
       );
+      const autoCreateDepartmentsRaw = form.get(
+        "autoCreateMissingDepartments",
+      );
+      const autoCreateMissingDepartments = ["true", "1", "yes"].includes(
+        String(autoCreateDepartmentsRaw ?? "").toLowerCase(),
+      );
 
       try {
         const result = await previewBulkUpload({
@@ -36,6 +42,7 @@ export async function POST(request: Request) {
           file,
           suppressNotifications,
           autoCreateMissingCompanies,
+          autoCreateMissingDepartments,
         });
 
         await logBulkUpload({

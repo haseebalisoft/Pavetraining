@@ -4,8 +4,10 @@ import { allocateNextCompanyNumber } from "@/lib/companyNumber";
 import { allocateNextWorkforceNumber } from "@/lib/workforceNumber";
 import { NotFoundError } from "@/lib/services/errorHandler";
 import { ValidationError } from "@/lib/services/validationService";
+import { validateEmailField } from "@/lib/validation/email";
 import { assertNotProtectedAdmin } from "@/lib/auth/protectedAdmins";
 import { getSharePointFields } from "@/lib/schema/sharepointSchema";
+import { isDepartmentActive } from "@/lib/services/departmentTypes";
 import {
   asBoolean,
   asLookupOrString,
@@ -136,13 +138,22 @@ function matchesCompany(
 
 /* ───────────────── Companies ───────────────── */
 
+/**
+ * Optional email → normalized (trim + lowercase) or null when blank. Throws
+ * only when a non-blank value is malformed, so blank optional emails save fine.
+ * The normalized return value is what callers persist.
+ */
 function optionalEmail(value: unknown, label: string): string | null {
-  const text = optionalText(value);
-  if (!text) return null;
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text)) {
-    throw new ValidationError(`${label} must be a valid email address.`);
-  }
-  return text;
+  const result = validateEmailField(value, { required: false, label });
+  if (!result.ok) throw new ValidationError(result.error);
+  return result.email;
+}
+
+/** Required email → normalized (trim + lowercase), or throws ValidationError. */
+function requiredEmail(value: unknown, label: string): string {
+  const result = validateEmailField(value, { required: true, label });
+  if (!result.ok) throw new ValidationError(result.error);
+  return result.email as string;
 }
 
 function companyWritePayload(input: Record<string, unknown>, partial: boolean) {
@@ -155,16 +166,15 @@ function companyWritePayload(input: Record<string, unknown>, partial: boolean) {
       : optionalText(input.companyNumber)
     : requireText(input.companyNumber, "Company number");
 
-  if (input.email !== undefined && input.email !== null && input.email !== "") {
-    optionalEmail(input.email, "Email");
-  }
-  if (
-    input.accountsEmail !== undefined &&
-    input.accountsEmail !== null &&
-    input.accountsEmail !== ""
-  ) {
-    optionalEmail(input.accountsEmail, "Accounts email");
-  }
+  // Validate AND normalize (trim + lowercase) so the cleaned value is what we
+  // persist. `undefined` leaves the field untouched on a partial update; a
+  // blank string clears it; a non-blank value must be a valid email.
+  const email =
+    input.email === undefined ? undefined : optionalEmail(input.email, "Email");
+  const accountsEmail =
+    input.accountsEmail === undefined
+      ? undefined
+      : optionalEmail(input.accountsEmail, "Accounts email");
 
   return toSharePointFields("company", {
     title: companyName ?? undefined,
@@ -184,7 +194,7 @@ function companyWritePayload(input: Record<string, unknown>, partial: boolean) {
         : optionalText(input.companyRegNumber),
     vatNo: input.vatNo === undefined ? undefined : optionalText(input.vatNo),
     telNo: input.telNo === undefined ? undefined : optionalText(input.telNo),
-    email: input.email === undefined ? undefined : optionalText(input.email),
+    email,
     mainContact:
       input.mainContact === undefined
         ? undefined
@@ -201,10 +211,7 @@ function companyWritePayload(input: Record<string, unknown>, partial: boolean) {
       input.accountsContactNumber === undefined
         ? undefined
         : optionalText(input.accountsContactNumber),
-    accountsEmail:
-      input.accountsEmail === undefined
-        ? undefined
-        : optionalText(input.accountsEmail),
+    accountsEmail,
     notesPricesAgreed:
       input.notesPricesAgreed === undefined
         ? undefined
@@ -703,6 +710,7 @@ async function applyWorkforceDepartmentLookup(
       name: string;
       companyId?: string | null;
       companyName?: string | null;
+      status?: string | null;
     }>;
   },
 ): Promise<{
@@ -713,6 +721,7 @@ async function applyWorkforceDepartmentLookup(
     name: string;
     companyId?: string | null;
     companyName?: string | null;
+    status?: string | null;
   }>;
 }> {
   // Never write free text into Lookup column Department0.
@@ -744,16 +753,21 @@ async function applyWorkforceDepartmentLookup(
 
   // Prefer company-scoped Departments list (Enterprise).
   if (options?.companyId) {
-    const { createAdminDepartment, listAdminDepartments } = await import(
+    const { listAdminDepartments, resolveCompanyDepartment } = await import(
       "@/lib/services/departmentService"
     );
+    // A deactivated department is never assigned to a candidate. The direct read
+    // is Active-only by default; prefetched records (bulk import) are filtered
+    // HERE rather than trusting the caller, because that list has to carry
+    // Inactive rows so auto-create can reactivate instead of duplicating.
     let companyDepts =
       options.departmentRecords !== undefined
         ? departmentRecords.filter(
             (row) =>
-              !row.companyId ||
-              row.companyId === options.companyId ||
-              !options.companyId,
+              isDepartmentActive(row) &&
+              (!row.companyId ||
+                row.companyId === options.companyId ||
+                !options.companyId),
           )
         : await listAdminDepartments(options.companyId);
 
@@ -766,14 +780,16 @@ async function applyWorkforceDepartmentLookup(
       null;
 
     if (!resolved && createIfMissing) {
-      resolved = await createAdminDepartment({
+      // Go through resolveCompanyDepartment (not createAdminDepartment): if the
+      // company already has this department but Inactive, it is reactivated
+      // instead of creating a second row with the same name.
+      resolved = await resolveCompanyDepartment({
         name: text,
         companyId: options.companyId,
         companyName: options.companyName,
-        // Caller already scanned the in-memory company dept list.
-        skipDuplicateScan: options.departmentRecords !== undefined,
+        createIfMissing: true,
       });
-      companyDepts = [...companyDepts, resolved];
+      if (resolved) companyDepts = [...companyDepts, resolved];
     }
 
     if (!resolved) {
@@ -1112,7 +1128,7 @@ export async function createAdminWorkforce(input: Record<string, unknown>) {
     workforceNumber,
     dateOfBirth: asDateInput(input.dateOfBirth),
     status: normalizeWorkforceStatus(input.status, "Active"),
-    email: optionalText(input.email),
+    email: optionalEmail(input.email, "Email"),
     candidateAddress: optionalText(input.candidateAddress),
     contactNumber: optionalText(input.contactNumber),
     niNumber: optionalText(input.niNumber),
@@ -1182,7 +1198,7 @@ export async function createAdminWorkforce(input: Record<string, unknown>) {
       supervisor:
         personLookups.supervisorName ?? optionalText(input.supervisor),
       candidateAddress: optionalText(input.candidateAddress),
-      email: optionalText(input.email),
+      email: optionalEmail(input.email, "Email"),
       contactNumber: optionalText(input.contactNumber),
       dateOfBirth: asNullableString(payload[workforceFields.dateOfBirth]),
       niNumber: optionalText(input.niNumber),
@@ -1285,7 +1301,10 @@ export async function updateAdminWorkforce(
       input.status === undefined
         ? undefined
         : normalizeWorkforceStatus(input.status, null),
-    email: input.email === undefined ? undefined : optionalText(input.email),
+    email:
+      input.email === undefined
+        ? undefined
+        : optionalEmail(input.email, "Email"),
     candidateAddress:
       input.candidateAddress === undefined
         ? undefined
@@ -1424,7 +1443,9 @@ export async function updateAdminWorkforce(
  * Restrict Delete will allow removing the Workforce item). Matrix seed rows
  * for the same name are removed best-effort.
  */
-export async function deleteAdminWorkforce(id: string): Promise<void> {
+export async function deleteAdminWorkforce(
+  id: string,
+): Promise<{ candidateId: string; candidateName: string | null }> {
   const trimmed = String(id ?? "").trim();
   if (!trimmed) {
     throw new ValidationError("Candidate id is required.");
@@ -1483,20 +1504,18 @@ export async function deleteAdminWorkforce(id: string): Promise<void> {
     );
   }
 
-  try {
-    await deleteListItemByKey("workforce", trimmed);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const related =
-      /related to another item|cannot be deleted because/i.test(message);
-    throw new ValidationError(
-      related
-        ? "SharePoint still blocks deleting this candidate because another list references them. Cleared Candidate lookups on registers, documents, and matrix rows — if it keeps failing, ask a Site Owner which list has a lookup to Workforce with “Restrict delete”."
-        : message.includes("SharePoint") || message.includes("delete")
-          ? message
-          : `Could not delete this candidate. ${message}`,
-    );
-  }
+  // safeDeleteListItem re-scans the inbound table on failure and names the exact
+  // list + rows still pointing at this candidate (e.g. "nporsRegister →
+  // CandidateName (1 row: #38)") instead of a generic "ask a Site Owner".
+  const { safeDeleteListItem, WORKFORCE_INBOUND_LOOKUPS } = await import(
+    "@/lib/services/adminSafeDelete"
+  );
+  await safeDeleteListItem("workforce", trimmed, {
+    label: "candidate",
+    inbound: WORKFORCE_INBOUND_LOOKUPS,
+  });
+
+  return { candidateId: trimmed, candidateName: candidateName ?? null };
 }
 
 /* ───────────────── Training Matrix ───────────────── */
@@ -2045,10 +2064,18 @@ export async function deleteAdminMatrix(id: string) {
 export async function deleteAdminRegister(
   key: AdminRegisterKey,
   id: string,
-): Promise<void> {
+): Promise<{ deletedRecord: AdminTrainingRecord }> {
   const existing = await getListItemByKey(key, id);
   if (!existing) throw new NotFoundError("Training record not found.");
+  // Snapshot before delete — matrix-delete-sync needs the candidate/company
+  // lookup ids and categories to recompute the right Matrix header(s).
+  const lookups = await loadRegisterLookupMaps();
+  const deletedRecord = mapRegister(key, existing, lookups);
   await deleteListItemByKey(key, id);
+  if (!deletedRecord) {
+    throw new NotFoundError("Training record not found.");
+  }
+  return { deletedRecord };
 }
 
 export async function deleteAdminNvq(id: string): Promise<void> {
@@ -2081,18 +2108,31 @@ export async function updateAdminMatrix(
     const wf = workforce.find((row) => row.id === workforceId);
     if (!wf) throw new NotFoundError("Candidate not found.");
 
-    const seedSource: Record<string, string | null> = {
-      Name: wf.candidateName,
-      DOB: wf.dateOfBirth,
-      "CSCS Expiry": wf.cscsExpiry,
-      "EUSR Expiry": wf.eusrExpiry,
-      "NRSWA Expiry": wf.swqrExpiry,
-    };
-    const created = await upsertTrainingMatrixExampleRow({
-      candidateName: wf.candidateName,
-      source: seedSource,
+    // Go through the shared sync path so this adopts an existing unlinked row
+    // (matrix uploaded before Workforce) instead of creating a duplicate.
+    const { candidateNameKey, isoDateKey } = await import(
+      "@/lib/services/bulkUpload/workforceMatrixSync"
+    );
+    const nameKeyValue = candidateNameKey(wf.candidateName);
+    const dobKeyValue = isoDateKey(wf.dateOfBirth);
+    const sync = await syncWorkforceToTrainingMatrix(toMatrixProfile(wf), {
+      workforceNamePeers: workforce.filter(
+        (row) => candidateNameKey(row.candidateName) === nameKeyValue,
+      ).length,
+      workforceNameDobPeers: dobKeyValue
+        ? workforce.filter(
+            (row) =>
+              candidateNameKey(row.candidateName) === nameKeyValue &&
+              isoDateKey(row.dateOfBirth) === dobKeyValue,
+          ).length
+        : 1,
     });
-    return updateAdminMatrix(`example:${created.id}`, input);
+    if (!sync.id) {
+      throw new ValidationError(
+        `${sync.warnings.join(" ")} Resolve the duplicate rows in the Training Matrix before editing.`.trim(),
+      );
+    }
+    return updateAdminMatrix(`example:${sync.id}`, input);
   }
 
   if (id.startsWith("example:")) {
@@ -2203,7 +2243,9 @@ export async function updateAdminMatrix(
       manualOverrides,
     });
 
-    const rows = await listAdminMatrix();
+    // includeUnlinked: an admin editing a Needs Review / Orphan row must get the
+    // saved row back, not a "not found" error for a row that was just written.
+    const rows = await listAdminMatrix(null, { includeUnlinked: true });
     const updated = rows.find((row) => row.id === `example:${exampleId}`);
     if (!updated) {
       throw new NotFoundError("Matrix record not found after update.");
@@ -2406,6 +2448,9 @@ export interface AdminTrainingRecord {
   certificateCategory?: string | null;
   courseCategory?: string | null;
   inHouseCertificationNumber?: string | null;
+  /** Strong link keys — used by matrix sync so it never matches on name alone. */
+  candidateLookupId?: string | null;
+  companyLookupId?: string | null;
 }
 
 type RegisterLookupMaps = {
@@ -2458,6 +2503,8 @@ function resolveRegisterPeople(
   candidateName: string;
   companyName: string;
   workforceNumber: string | null;
+  candidateLookupId: string | null;
+  companyLookupId: string | null;
 } | null {
   const candidateLookupId = extractLookupId(fields, candidateField);
   const companyLookupId = extractLookupId(fields, companyField);
@@ -2485,7 +2532,13 @@ function resolveRegisterPeople(
   const workforceNumber = candidateLookupId
     ? (lookups.workforceNumberById.get(candidateLookupId) ?? null)
     : null;
-  return { candidateName, companyName, workforceNumber };
+  return {
+    candidateName,
+    companyName,
+    workforceNumber,
+    candidateLookupId,
+    companyLookupId,
+  };
 }
 
 /** Split admin form multi-choice text into a SharePoint MultiChoice array. */
@@ -2674,6 +2727,25 @@ function mapRegister(
   };
 }
 
+/**
+ * Category is required on the form; block the save with a clear error
+ * instead of writing a record that a future sync can't attribute to any
+ * Matrix header. On update, only enforce when the field was actually
+ * submitted — a caller patching unrelated fields shouldn't be blocked by a
+ * category it never touched.
+ */
+function requireCategoryField(
+  input: Record<string, unknown>,
+  key: string,
+  label: string,
+  mode: "create" | "update",
+): void {
+  if (mode !== "create" && !(key in input)) return;
+  if (!optionalText(input[key])) {
+    throw new ValidationError(`${label} is required.`);
+  }
+}
+
 function registerWritePayload(
   key: AdminRegisterKey,
   input: Record<string, unknown>,
@@ -2685,6 +2757,20 @@ function registerWritePayload(
     !["Pass", "Fail", "pass", "fail"].includes(outcome)
   ) {
     throw new ValidationError("Training outcome must be Pass or Fail.");
+  }
+  if (key === "nporsRegister") {
+    requireCategoryField(input, "nporsCategory", "NPORS Category", mode);
+  }
+  if (key === "eusrRegister") {
+    requireCategoryField(input, "eusrCategory", "EUSR Category", mode);
+  }
+  if (key === "nrswaRegister") {
+    requireCategoryField(
+      input,
+      "streetworksCategory",
+      "Streetworks Category",
+      mode,
+    );
   }
   const normalizedOutcome = outcome
     ? outcome.toLowerCase().startsWith("p")
@@ -3181,6 +3267,9 @@ export interface AdminNvqRecord {
   outcomeNotes: string | null;
   customerVisible: boolean;
   status: "Active" | "Completed";
+  /** Strong link keys — used so same-name candidates never collide. */
+  candidateLookupId: string | null;
+  companyLookupId: string | null;
 }
 
 function mapNvq(
@@ -3223,7 +3312,9 @@ function mapNvq(
   return {
     id: item.id,
     candidateName,
+    candidateLookupId,
     companyName,
+    companyLookupId,
     companyNumber,
     workforceNumber,
     niNumber: asNullableString(item.fields[nvqFields.niNumber]),
@@ -4679,7 +4770,7 @@ function normalizeAccessScopeChoice(value: unknown): string | null {
 }
 
 export async function createAdminPermission(input: Record<string, unknown>) {
-  const userEmail = requireText(input.userEmail, "User email").toLowerCase();
+  const userEmail = requiredEmail(input.userEmail, "User email");
   // Accept legacy roleType values plus first-class Candidate.
   const permissionRole =
     normalizePermissionFormRole(input.permissionRole) ??
@@ -4783,7 +4874,7 @@ export async function updateAdminPermission(
   const nextEmail =
     input.userEmail === undefined
       ? undefined
-      : requireText(input.userEmail, "User email").toLowerCase();
+      : requiredEmail(input.userEmail, "User email");
   if (
     nextEmail &&
     previous?.userEmail &&
@@ -4853,7 +4944,7 @@ export async function updateAdminPermission(
     userEmail:
       input.userEmail === undefined
         ? undefined
-        : requireText(input.userEmail, "User email").toLowerCase(),
+        : requiredEmail(input.userEmail, "User email"),
     status: optionalText(input.status) ?? undefined,
     canView: optionalBool(input.canView),
     canDownload: optionalBool(input.canDownload),
@@ -4969,7 +5060,9 @@ export async function updateAdminPermission(
   return { record: mapped, choiceWarnings };
 }
 
-export async function deleteAdminPermission(id: string): Promise<void> {
+export async function deleteAdminPermission(
+  id: string,
+): Promise<AdminPermissionRecord | null> {
   const trimmed = String(id ?? "").trim();
   if (!trimmed) {
     throw new ValidationError("Permission id is required.");
@@ -4981,7 +5074,7 @@ export async function deleteAdminPermission(id: string): Promise<void> {
   const existing = await getListItemById(listId, trimmed);
   if (!existing) {
     revalidateSharePointList("permissions");
-    return;
+    return null;
   }
 
   const mapped = mapPermission(existing);
@@ -5024,6 +5117,7 @@ export async function deleteAdminPermission(id: string): Promise<void> {
   }
   revalidateSharePointList("permissions");
   revalidatePath("/admin/permissions");
+  return mapped;
 }
 
 /**
@@ -5064,7 +5158,13 @@ async function applyPermissionDepartmentCoverage(
     const { listAdminDepartments } = await import(
       "@/lib/services/departmentService"
     );
-    departments = await listAdminDepartments(companyId ?? null);
+    // includeInactive on the WRITE path: the Permissions picker only offers
+    // Active departments, but a permission saved earlier may still cover one
+    // that was since deactivated. Resolving Active-only here would reject the
+    // whole save when an admin edits an unrelated field on that permission.
+    departments = await listAdminDepartments(companyId ?? null, {
+      includeInactive: true,
+    });
   } catch (error) {
     console.error("[permissions] listAdminDepartments failed:", error);
     throw new ValidationError(

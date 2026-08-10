@@ -3,8 +3,10 @@ import Link from "next/link";
 import { CustomerCompanyProfileCard } from "@/components/customer/CustomerCompanyProfileCard";
 import { CustomerOfferSlider } from "@/components/customer/CustomerOfferSlider";
 import { CustomerUpcomingEvents } from "@/components/customer/CustomerUpcomingEvents";
+import { formatDate } from "@/lib/utils/formatDate";
 import type {
   CustomerCompanyProfile,
+  CustomerDocumentRecord,
   CustomerEventRecord,
   CustomerOfferRecord,
   DashboardStats,
@@ -67,6 +69,8 @@ interface CustomerDashboardViewProps {
   offers: CustomerOfferRecord[];
   upcomingEvents: CustomerEventRecord[];
   companyProfile?: CustomerCompanyProfile | null;
+  recentDocuments: CustomerDocumentRecord[];
+  profileShortcut: { href: string; label: string };
 }
 
 type StatTone = "danger" | "warn" | "ok" | undefined;
@@ -83,7 +87,14 @@ export function CustomerDashboardView({
   offers,
   upcomingEvents,
   companyProfile = null,
+  recentDocuments,
+  profileShortcut,
 }: CustomerDashboardViewProps) {
+  const sections = SECTIONS.map((section) =>
+    section.href === "/customer/candidates"
+      ? { ...section, href: profileShortcut.href, title: profileShortcut.label }
+      : section,
+  );
   const warningCards = [
     {
       href: "/customer?filter=expired",
@@ -198,6 +209,36 @@ export function CustomerDashboardView({
         </section>
       ) : null}
 
+      <section className={styles.panel} aria-label="Recent documents">
+        <div className={dashStyles.sectionHeader}>
+          <h2>Recent documents</h2>
+          <Link href="/customer/documents" className={dashStyles.viewAllLink}>
+            View all <span aria-hidden="true">→</span>
+          </Link>
+        </div>
+        {recentDocuments.length === 0 ? (
+          <p className={dashStyles.documentsEmpty}>
+            No documents have been shared with your company yet.
+          </p>
+        ) : (
+          <div className={dashStyles.documentsList}>
+            {recentDocuments.map((doc) => (
+              <Link
+                key={doc.id}
+                href={doc.viewPath ?? "/customer/documents"}
+                className={dashStyles.documentRow}
+              >
+                <span className={dashStyles.documentName}>{doc.name}</span>
+                <span className={dashStyles.documentMeta}>
+                  {doc.documentType ?? "Document"} ·{" "}
+                  {formatDate(doc.uploadedDate, "Date unknown")}
+                </span>
+              </Link>
+            ))}
+          </div>
+        )}
+      </section>
+
       <section
         className={styles.cardGridSection}
         aria-label="Customer portal sections"
@@ -206,7 +247,7 @@ export function CustomerDashboardView({
           <h2>Quick links</h2>
         </div>
         <div className={styles.cardGrid}>
-          {SECTIONS.map((section) => (
+          {sections.map((section) => (
             <Link
               key={section.href}
               href={section.href}

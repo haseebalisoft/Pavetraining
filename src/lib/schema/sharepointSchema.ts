@@ -106,6 +106,10 @@ const departmentsFields = {
   title: "Title",
   name: "Name",
   company: "Company",
+  /** Choice: Active | Inactive. Blank on legacy rows = treated as Active. */
+  status: "Status",
+  /** Multiple lines of text. */
+  notes: "Notes",
 } as const;
 
 const trainingMatrixFields = {
@@ -461,6 +465,8 @@ export const SHAREPOINT_LISTS = {
       title: "Title",
       name: "Name",
       company: "Company",
+      status: "Status",
+      notes: "Notes",
     },
   } satisfies SharePointListDefinition<typeof departmentsFields>,
 

@@ -1254,15 +1254,15 @@
 }
 
 .statWarn .statValue {
-  color: var(--warning);
+  color: var(--status-amber-text);
 }
 
 .statOk .statValue {
-  color: var(--success, var(--pave-lime-dark));
+  color: var(--status-green-text);
 }
 
 .statDanger .statValue {
-  color: var(--danger);
+  color: var(--status-red-text);
 }
 
 .sectionGrid {

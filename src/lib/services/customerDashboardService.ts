@@ -28,6 +28,7 @@ import {
 } from "@/lib/training/expiryFilters";
 import type {
   CustomerContext,
+  CustomerDocumentRecord,
   CustomerEventRecord,
   CustomerMatrixRecord,
   CustomerOfferRecord,
@@ -98,7 +99,9 @@ function exampleToMatrixSource(
 }
 
 function nameKey(value: string | null | undefined): string {
-  return (value ?? "").trim().toLowerCase();
+  // Collapses internal runs of whitespace so "John  Smith" and "John Smith"
+  // resolve to the same candidate (matches candidateNameKey in the sync core).
+  return (value ?? "").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
 function emptyMatrixDates(): Pick<
@@ -271,15 +274,40 @@ export async function getCustomerMatrixRecords(
           : Promise.resolve([]),
       ]);
 
-    const matrixByName = new Map<string, MatrixSourceRow>();
+    // Join by WorkforceItemId scoped to THIS company's allowed candidates. A
+    // name-only join over the whole list would show one company's training on a
+    // same-named candidate at another company.
+    const allowedIds = new Set(
+      workforce.map((row) => String(row.id).trim()).filter(Boolean),
+    );
+    const matrixById = new Map<string, MatrixSourceRow>();
+    // Legacy rows written before the link columns existed have no owner id.
+    // They are matched by name, but only when the name is unique across the
+    // ENTIRE list — a duplicate name disqualifies every row with that name.
+    const legacyByName = new Map<string, MatrixSourceRow | null>();
     for (const example of exampleRows) {
-      const key = nameKey(example.candidateName);
-      if (key && !matrixByName.has(key)) {
-        matrixByName.set(
-          key,
+      const status = example.matrixLinkStatus?.trim();
+      // Unresolved uploads never reach the customer portal (Task C).
+      if (status === "Orphan" || status === "Needs Review") continue;
+
+      const ownerId = String(example.workforceItemId ?? "").trim();
+      if (ownerId) {
+        if (!allowedIds.has(ownerId) || matrixById.has(ownerId)) continue;
+        matrixById.set(
+          ownerId,
           exampleToMatrixSource(example, context.companyName),
         );
+        continue;
       }
+
+      const key = nameKey(example.candidateName);
+      if (!key) continue;
+      legacyByName.set(
+        key,
+        legacyByName.has(key)
+          ? null
+          : exampleToMatrixSource(example, context.companyName),
+      );
     }
 
     const nporsCatsByName = new Map<string, Set<string>>();
@@ -337,9 +365,21 @@ export async function getCustomerMatrixRecords(
 
     const rows: CustomerMatrixRecord[] = [];
 
+    const workforceNameCounts = new Map<string, number>();
     for (const candidate of workforce) {
       const key = nameKey(candidate.candidateName);
-      const matrix = matrixByName.get(key) ?? null;
+      if (key) {
+        workforceNameCounts.set(key, (workforceNameCounts.get(key) ?? 0) + 1);
+      }
+    }
+
+    for (const candidate of workforce) {
+      const key = nameKey(candidate.candidateName);
+      const matrix =
+        matrixById.get(String(candidate.id).trim()) ??
+        ((workforceNameCounts.get(key) ?? 0) === 1
+          ? (legacyByName.get(key) ?? null)
+          : null);
 
       const matrixCats = nporsCategoriesFromMatrix(matrix);
       const registerCats = Array.from(nporsCatsByName.get(key) ?? []);
@@ -422,6 +462,10 @@ export interface CustomerDashboardContent {
   stats: DashboardStats;
   offers: CustomerOfferRecord[];
   upcomingEvents: CustomerEventRecord[];
+  /** Most recently uploaded documents, newest first — a slice of what's already fetched for documentsCount. */
+  recentDocuments: CustomerDocumentRecord[];
+  /** Candidates land on their own profile; everyone else lands on the candidate list. */
+  profileShortcut: { href: string; label: string };
 }
 
 export async function getCustomerDashboardContent(
@@ -485,7 +529,23 @@ export async function getCustomerDashboardContent(
     return !Number.isNaN(time) && time >= now;
   });
 
-  return { stats, offers, upcomingEvents };
+  const recentDocuments = [...documents]
+    .sort((a, b) => {
+      const timeA = a.uploadedDate ? new Date(a.uploadedDate).getTime() : NaN;
+      const timeB = b.uploadedDate ? new Date(b.uploadedDate).getTime() : NaN;
+      if (Number.isNaN(timeA) && Number.isNaN(timeB)) return 0;
+      if (Number.isNaN(timeA)) return 1;
+      if (Number.isNaN(timeB)) return -1;
+      return timeB - timeA;
+    })
+    .slice(0, 5);
+
+  const profileShortcut =
+    context.customerRole === "Candidate" && workforce.length === 1
+      ? { href: `/customer/candidates/${workforce[0].id}`, label: "View my profile" }
+      : { href: "/customer/candidates", label: "View candidates" };
+
+  return { stats, offers, upcomingEvents, recentDocuments, profileShortcut };
 }
 
 /** Backwards-compatible stats-only dashboard service. */

@@ -286,7 +286,7 @@ export interface TrainingCourseCategory {
 export interface MeResponse {
   loggedInEmail: string;
   role: RoleType;
-  redirectTo: "/admin" | "/customer";
+  redirectTo: "/admin" | "/customer/dashboard";
   companyId: string | null;
   companyName: string | null;
   canView: boolean;
@@ -506,6 +506,9 @@ export interface CustomerNvqRecord {
   notes: string | null;
   completedDate: string | null;
   status: CustomerNvqStatus;
+  ulnNumber: string | null;
+  cardSchemeCategory: string | null;
+  cardExtensionDateNeeded: string | null;
 }
 
 export interface CustomerDocumentRecord {

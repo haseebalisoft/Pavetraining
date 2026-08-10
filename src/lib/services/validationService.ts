@@ -1,6 +1,7 @@
 import "server-only";
 
 import { ValidationError } from "@/lib/services/errorHandler";
+import { validateEmailField } from "@/lib/validation/email";
 
 /**
  * Input validation helpers for admin/customer APIs.
@@ -51,12 +52,26 @@ export function assertPassFailOutcome(value: unknown): "Pass" | "Fail" | null {
   throw new ValidationError("Training outcome must be Pass or Fail.");
 }
 
+/** Required email → normalized (trim + lowercase), or throws ValidationError. */
 export function assertEmail(value: unknown, label = "Email"): string {
-  const email = requireNonEmptyString(value, label).toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    throw new ValidationError(`${label} must be a valid email address.`);
-  }
-  return email;
+  const result = validateEmailField(value, { required: true, label });
+  if (!result.ok) throw new ValidationError(result.error);
+  // required + ok ⇒ email is a non-null normalized string.
+  return result.email as string;
+}
+
+/**
+ * Optional email → normalized (trim + lowercase) or null when blank. Throws
+ * ValidationError only when a non-blank value is malformed, so blank optional
+ * email fields never block a save.
+ */
+export function normalizeOptionalEmail(
+  value: unknown,
+  label = "Email",
+): string | null {
+  const result = validateEmailField(value, { required: false, label });
+  if (!result.ok) throw new ValidationError(result.error);
+  return result.email;
 }
 
 export { ValidationError };

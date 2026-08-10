@@ -20,33 +20,11 @@ type LogsPayload = {
   exportEnabled: boolean;
 };
 
-const ACTION_OPTIONS = [
-  "",
-  "LOGIN_SUCCESS",
-  "LOGIN_DENIED",
-  "ACCESS_DENIED",
-  "ADMIN_CREATE",
-  "ADMIN_UPDATE",
-  "ADMIN_DELETE",
-  "DOCUMENT_VIEW",
-  "DOCUMENT_DOWNLOAD",
-  "DOCUMENT_UPLOAD",
-  "CANDIDATE_VIEW",
-  "BULK_UPLOAD_PREVIEW",
-  "BULK_UPLOAD_COMMIT",
-  "NOTIFICATION_SENT",
-  "NOTIFICATION_FAILED",
-  "MATRIX_SYNC_STARTED",
-  "MATRIX_SYNC_COMPLETED",
-  "MATRIX_SYNC_FAILED",
-  "SYSTEM_ERROR",
-  "SETTINGS_UPDATE",
-];
-
 export function AdminLogsClient() {
   const { pushToast } = useAdminToast();
   const [loading, setLoading] = useState(true);
   const [payload, setPayload] = useState<LogsPayload | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [action, setAction] = useState("");
   const [success, setSuccess] = useState<"all" | "true" | "false">("all");
@@ -72,11 +50,12 @@ export function AdminLogsClient() {
       if (!response.ok) throw new Error(await readPublicApiError(response));
       const data = (await response.json()) as LogsPayload;
       setPayload(data);
+      setLoadError(null);
     } catch (error) {
-      pushToast(
-        error instanceof Error ? error.message : "Failed to load logs",
-        "error",
-      );
+      const message =
+        error instanceof Error ? error.message : "Failed to load logs";
+      setLoadError(message);
+      pushToast(message, "error");
     } finally {
       setLoading(false);
     }
@@ -86,6 +65,9 @@ export function AdminLogsClient() {
     void load();
   }, [load]);
 
+  // Derived from whatever the current filtered page actually contains, so any
+  // new action/entity type introduced later shows up automatically with no
+  // hardcoded list to keep in sync.
   const entityTypes = useMemo(() => {
     const set = new Set<string>();
     for (const row of payload?.logs ?? []) {
@@ -93,6 +75,15 @@ export function AdminLogsClient() {
     }
     return [...set].sort((a, b) => a.localeCompare(b));
   }, [payload?.logs]);
+
+  const actionOptions = useMemo(() => {
+    const set = new Set<string>();
+    if (action) set.add(action);
+    for (const row of payload?.logs ?? []) {
+      if (row.action) set.add(row.action);
+    }
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [action, payload?.logs]);
 
   return (
     <div>
@@ -154,7 +145,7 @@ export function AdminLogsClient() {
             onChange={(event) => setAction(event.target.value)}
           >
             <option value="">All actions</option>
-            {ACTION_OPTIONS.filter(Boolean).map((value) => (
+            {actionOptions.map((value) => (
               <option key={value} value={value}>
                 {value}
               </option>
@@ -212,6 +203,13 @@ export function AdminLogsClient() {
 
       {loading ? (
         <LoadingState label="Loading audit logs…" />
+      ) : loadError ? (
+        <div
+          className={`${styles.settingsBanner} ${styles.settingsBannerWarn}`}
+          role="alert"
+        >
+          Failed to load audit logs: {loadError}
+        </div>
       ) : (payload?.logs.length ?? 0) === 0 ? (
         <div className={styles.emptyState}>
           <h2>No log entries</h2>

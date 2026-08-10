@@ -165,6 +165,7 @@ function fieldsFor(
         name: "nporsCategory",
         label: "NPORS category",
         type: "multiselect",
+        required: true,
         section: "Training",
         options: categoryOptions.length
           ? categoryOptions
@@ -187,6 +188,7 @@ function fieldsFor(
         name: "eusrCategory",
         label: "EUSR category",
         type: "multiselect",
+        required: true,
         section: "Training",
         options: getEusrCategoryOptions(),
       },
@@ -221,6 +223,7 @@ function fieldsFor(
         name: "streetworksCategory",
         label: "Streetworks category (units)",
         type: "multiselect",
+        required: true,
         section: "Training",
         options: getStreetworksCategoryOptions(),
       },

@@ -11,6 +11,7 @@ import { getCustomerDashboardContent } from "@/lib/services/customerDashboardSer
 import type {
   CustomerCompanyProfile,
   CustomerContext,
+  CustomerDocumentRecord,
   CustomerEventRecord,
   CustomerOfferRecord,
   DashboardStats,
@@ -18,7 +19,7 @@ import type {
 
 export const dynamic = "force-dynamic";
 
-/** Customer dashboard (stats / offers) — Training Matrix is the home at `/customer`. */
+/** Customer dashboard — first page after a Customer-side login. Training Matrix lives at `/customer`. */
 export default async function CustomerDashboardPage() {
   const session = await auth();
   const email = session?.user?.email?.trim().toLowerCase();
@@ -47,10 +48,14 @@ export default async function CustomerDashboardPage() {
   let stats: DashboardStats;
   let offers: CustomerOfferRecord[] = [];
   let upcomingEvents: CustomerEventRecord[] = [];
+  let recentDocuments: CustomerDocumentRecord[] = [];
+  let profileShortcut = { href: "/customer/candidates", label: "View candidates" };
   if (statsResult.status === "fulfilled") {
     stats = statsResult.value.stats;
     offers = statsResult.value.offers;
     upcomingEvents = statsResult.value.upcomingEvents;
+    recentDocuments = statsResult.value.recentDocuments;
+    profileShortcut = statsResult.value.profileShortcut;
   } else {
     stats = {
       workforceCount: 0,
@@ -77,6 +82,8 @@ export default async function CustomerDashboardPage() {
       offers={offers}
       upcomingEvents={upcomingEvents}
       companyProfile={companyProfile}
+      recentDocuments={recentDocuments}
+      profileShortcut={profileShortcut}
     />
   );
 }

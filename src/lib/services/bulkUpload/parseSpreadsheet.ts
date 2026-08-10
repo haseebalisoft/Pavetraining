@@ -120,6 +120,28 @@ export function pickField(
   return null;
 }
 
+/**
+ * Normalize a commit request's `source` object (the ORIGINAL spreadsheet cells
+ * keyed by exact Excel header).
+ *
+ * The Training Matrix importer needs these raw display headers: `fields` only
+ * carries the ~6 mapped meta columns, so without `source` every N-code expiry
+ * column and every category record is silently dropped at commit.
+ */
+export function normalizeSourceRow(
+  value: unknown,
+): Record<string, string | null> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const source: Record<string, string | null> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    source[key] =
+      raw === null || raw === undefined || raw === "" ? null : String(raw);
+  }
+  return source;
+}
+
 /** Normalize common date cell values to YYYY-MM-DD when possible. */
 export function normalizeDateValue(value: string | null): string | null {
   if (!value?.trim()) return null;

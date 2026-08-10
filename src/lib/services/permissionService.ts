@@ -374,6 +374,37 @@ export const getActivePermissionByEmail = cache(
   },
 );
 
+export type PermissionResolutionReason = "not_found" | "inactive";
+
+/**
+ * Only called after getActivePermissionByEmail returns null, to distinguish
+ * "no Permissions row for this email at all" from "a row exists but isn't
+ * Active" — so access-denied can say "Permission not configured" vs.
+ * "Access pending" instead of one generic message for both.
+ */
+export const getPermissionResolutionReason = cache(
+  async (email: string): Promise<PermissionResolutionReason> => {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail) {
+      return "not_found";
+    }
+
+    const filter = buildSchemaFieldEqualsFilter(
+      "permissions",
+      "userEmail",
+      normalizedEmail,
+    );
+    const items = await fetchActivePermissionItems(filter, 10);
+    for (const item of items) {
+      const permission = mapPermissionItem(item.id, item.fields);
+      if (permission && permission.userEmail === normalizedEmail) {
+        return "inactive";
+      }
+    }
+    return "not_found";
+  },
+);
+
 export function accessScopeBadgeLabel(permission: PermissionProfile): string {
   const scope = permission.normalizedAccessScope;
   if (scope === "Company" || scope === "All") return "Company-wide";

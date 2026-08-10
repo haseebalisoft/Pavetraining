@@ -3,7 +3,10 @@ import {
   listAdminCompanies,
   listAdminPermissions,
 } from "@/lib/services/adminCrudService";
-import { listAdminDepartments } from "@/lib/services/departmentService";
+import {
+  isDepartmentActive,
+  listAdminDepartments,
+} from "@/lib/services/departmentService";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +19,7 @@ export default async function AdminPermissionsPage() {
   return (
     <AdminPermissionsClient
       companies={companies}
-      departments={departments}
+      departments={departments.filter(isDepartmentActive)}
       initialRows={records}
     />
   );

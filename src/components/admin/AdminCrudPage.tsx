@@ -16,6 +16,7 @@ import { useAdminToast } from "@/components/admin/AdminToast";
 import { Breadcrumbs } from "@/components/ui/Breadcrumbs";
 import { LoadingState } from "@/components/ui/States";
 import { readPublicApiError } from "@/lib/errors/publicMessages";
+import { isValidEmail } from "@/lib/validation/email";
 import type { Company } from "@/types/models";
 
 import styles from "./admin.module.css";
@@ -307,7 +308,9 @@ export function AdminCrudPage<T extends { id: string }>({
   const [rows, setRows] = useState<T[]>(initialRows);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState("");
-  const [companyFilter, setCompanyFilter] = useState("");
+  const [companyFilter, setCompanyFilter] = useState(
+    () => searchParams.get("company") ?? "",
+  );
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState<T | null>(null);
   const [form, setForm] = useState<FormState>({});
@@ -478,7 +481,33 @@ export function AdminCrudPage<T extends { id: string }>({
     try {
       const response = await fetch(deleteUrl(id), { method: "DELETE" });
       if (!response.ok) throw new Error(await readError(response));
+      const payload = (await response.json().catch(() => null)) as {
+        matrixSync?: {
+          summary?: {
+            updated?: number;
+            created?: number;
+            skipped?: number;
+            errors?: number;
+          };
+          items?: Array<{ warnings?: string[]; skipReason?: string }>;
+        };
+      } | null;
       pushToast("Record deleted", "success");
+      const sync = payload?.matrixSync?.summary;
+      if (sync?.errors) {
+        pushToast(
+          `Training Matrix recompute failed (${sync.errors} error(s)) after delete — check the Training Matrix for this candidate.`,
+          "error",
+        );
+      }
+      // Delete-recompute notes are rare and always meaningful (recomputed /
+      // cleared / "Manual Override / Source Deleted") — unlike a routine
+      // save's warnings, so surface every one of them here.
+      for (const item of payload?.matrixSync?.items ?? []) {
+        for (const note of [item.skipReason, ...(item.warnings ?? [])]) {
+          if (note?.trim()) pushToast(note.trim());
+        }
+      }
       setSelectedIds((current) => {
         const next = new Set(current);
         next.delete(id);
@@ -579,7 +608,7 @@ export function AdminCrudPage<T extends { id: string }>({
         field.type === "email" &&
         typeof value === "string" &&
         value.trim() &&
-        !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())
+        !isValidEmail(value)
       ) {
         return `${field.label} must be a valid email address.`;
       }
@@ -631,18 +660,31 @@ export function AdminCrudPage<T extends { id: string }>({
             skipped?: number;
             errors?: number;
           };
+          items?: Array<{ skipReason?: string }>;
         };
       } | null;
       const sync = payload?.matrixSync?.summary;
+      // Errors get their own red toast below — never folded into the green
+      // save toast, so a Matrix sync failure can't hide behind "success".
       const syncNote = sync
         ? ` Matrix sync: ${sync.updated ?? 0} updated, ${sync.created ?? 0} created` +
-          (sync.errors ? `, ${sync.errors} error(s)` : "") +
           (sync.skipped ? `, ${sync.skipped} skipped` : "") +
           "."
         : "";
       pushToast(
         (isCreate ? "Record created." : "Record updated.") + syncNote,
       );
+      if (sync?.errors) {
+        pushToast(
+          `Training Matrix sync failed (${sync.errors} error(s)). The record was saved — fix the Matrix issue and it will sync again on the next save.`,
+          "error",
+        );
+      }
+      // Informational notes (e.g. NVQ's "no Matrix expiry target configured")
+      // — surfaced so the admin sees why, without implying failure.
+      for (const item of payload?.matrixSync?.items ?? []) {
+        if (item.skipReason?.trim()) pushToast(item.skipReason.trim());
+      }
       const warnings = [
         payload?.warning?.trim(),
         payload?.matrixSeedWarning?.trim(),
@@ -1182,6 +1224,25 @@ export function AdminCrudPage<T extends { id: string }>({
                       value: valueMode === "name" ? dept.name : dept.id,
                       label: dept.name,
                     }));
+                  // Keep already-selected values visible even when the caller
+                  // only passed Active departments (e.g. one was deactivated
+                  // after being assigned) — otherwise the checkbox for it just
+                  // vanishes and looks like the assignment silently dropped.
+                  for (const value of selected) {
+                    const key = value.trim().toLowerCase();
+                    if (
+                      !multiOptions.some(
+                        (option) =>
+                          option.value.trim().toLowerCase() === key ||
+                          option.label.trim().toLowerCase() === key,
+                      )
+                    ) {
+                      multiOptions = [
+                        ...multiOptions,
+                        { value, label: `${value} (inactive)` },
+                      ];
+                    }
+                  }
                 }
               }
               control = (

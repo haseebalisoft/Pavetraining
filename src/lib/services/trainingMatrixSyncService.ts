@@ -18,7 +18,15 @@ import {
   upsertTrainingMatrixExampleRow,
 } from "@/lib/services/bulkUpload/trainingMatrixExampleService";
 import {
-  getListItemByKey,
+  buildWorkforceMatrixSource,
+  findMatrixRowByWorkforce,
+} from "@/lib/services/bulkUpload/workforceMatrixSync";
+import {
+  computeMatrixFieldAfterRemoval,
+  latestPassExpiry,
+  shouldApplyPassExpiry,
+} from "@/lib/services/bulkUpload/registerMatrixFieldSync";
+import {
   listHasColumn,
   updateListItemFieldsByKey,
 } from "@/lib/services/sharePointListService";
@@ -26,6 +34,7 @@ import {
   listAllNormalizedRegisters,
   listNormalizedRegisters,
   normalizeRegisterFromAdminRecord,
+  registerKeyToSource,
   type NormalizedRegisterRecord,
   type RegisterSource,
 } from "@/lib/services/trainingRegisterService";
@@ -70,55 +79,11 @@ function normalizeCompanyKey(value: string | null | undefined): string {
     .trim();
 }
 
-function parseDateMs(value: string | null | undefined): number | null {
-  if (!value?.trim()) return null;
-  const ms = new Date(value).getTime();
-  return Number.isNaN(ms) ? null : ms;
-}
-
-/**
- * Apply register expiry onto an existing matrix/workforce date only when:
- * - outcome is Pass
- * - incoming date exists
- * - existing is empty OR incoming is clearly newer (later or equal)
- * Fail never extends. Missing outcome does not extend.
- */
-export function shouldApplyPassExpiry(
-  existing: string | null | undefined,
-  incoming: string | null | undefined,
-  outcome: NormalizedRegisterRecord["trainingOutcome"],
-): boolean {
-  if (outcome !== "Pass") return false;
-  if (!incoming?.trim()) return false;
-  const incomingMs = parseDateMs(incoming);
-  if (incomingMs === null) return false;
-  const existingMs = parseDateMs(existing);
-  if (existingMs === null) return true;
-  return incomingMs >= existingMs;
-}
-
-function extractLookupIdFromFields(
-  fields: Record<string, unknown>,
-  fieldName: string,
-): string | null {
-  const nested = fields[fieldName];
-  if (nested && typeof nested === "object" && "LookupId" in nested) {
-    const id = (nested as { LookupId?: unknown }).LookupId;
-    if (typeof id === "number" || typeof id === "string") {
-      return String(id);
-    }
-  }
-  const lookupId = fields[`${fieldName}LookupId`];
-  if (typeof lookupId === "number" || typeof lookupId === "string") {
-    const text = String(lookupId).trim();
-    return text || null;
-  }
-  return null;
-}
-
 type MatrixRowWithLookups = AdminMatrixRecord & {
-  candidateLookupId: string | null;
-  companyLookupId: string | null;
+  /** Strong link keys — mirrors MatrixRowRef so this can be passed straight
+   * into findMatrixRowByWorkforce with no translation step. */
+  workforceItemId: string | null;
+  companyItemId: string | null;
   workforceNumber: string | null;
   /** Raw SharePoint item id on Training Matrix Update (no `example:` prefix). */
   exampleItemId: string | null;
@@ -127,13 +92,8 @@ type MatrixRowWithLookups = AdminMatrixRecord & {
 function exampleRowToMatrix(
   example: Awaited<ReturnType<typeof listTrainingMatrixExampleRows>>[number],
   workforce: AdminWorkforceRecord | null,
-  companyByName: Map<string, Company>,
+  company: Company | null,
 ): MatrixRowWithLookups {
-  const company =
-    (workforce?.companyName
-      ? companyByName.get(nameKey(workforce.companyName))
-      : null) ?? null;
-
   return {
     id: `example:${example.id}`,
     candidateName: example.candidateName,
@@ -156,10 +116,12 @@ function exampleRowToMatrix(
     n031Expiry: example.columnValues[ASBESTOS_MATRIX_HEADER] ?? null,
     columnValues: { ...example.columnValues },
     manualOverrideHeaders: example.manualOverrides ?? [],
-    workforceId: workforce?.id ?? null,
-    candidateLookupId: workforce?.id ?? null,
-    companyLookupId: company?.id ?? null,
-    workforceNumber: workforce?.workforceNumber ?? null,
+    workforceId: workforce?.id ?? example.workforceItemId ?? null,
+    // Prefer the row's own stored link — never re-derive it from name once set.
+    workforceItemId: example.workforceItemId ?? workforce?.id ?? null,
+    companyItemId: example.companyItemId ?? company?.id ?? null,
+    workforceNumber:
+      example.workforceNumber ?? workforce?.workforceNumber ?? null,
     exampleItemId: example.id,
   };
 }
@@ -169,22 +131,38 @@ async function loadMatrixRowsWithLookups(
   companies: Company[],
 ): Promise<MatrixRowWithLookups[]> {
   const exampleRows = await listTrainingMatrixExampleRows();
+  const workforceById = new Map(workforce.map((row) => [row.id, row] as const));
   const workforceByName = new Map<string, AdminWorkforceRecord>();
   for (const row of workforce) {
     const key = nameKey(row.candidateName);
     if (key && !workforceByName.has(key)) workforceByName.set(key, row);
   }
+  const companyById = new Map(companies.map((c) => [c.id, c] as const));
   const companyByName = new Map(
     companies.map((c) => [nameKey(c.companyName), c] as const),
   );
 
-  return exampleRows.map((example) =>
-    exampleRowToMatrix(
-      example,
-      workforceByName.get(nameKey(example.candidateName)) ?? null,
-      companyByName,
-    ),
-  );
+  return exampleRows.map((example) => {
+    // A stored WorkforceItemId is authoritative — only fall back to a
+    // name-derived guess for legacy/unlinked rows, so a linked row is never
+    // reattached to a different same-name candidate.
+    const linkedWorkforce = example.workforceItemId
+      ? (workforceById.get(example.workforceItemId) ?? null)
+      : null;
+    const resolvedWorkforce =
+      linkedWorkforce ??
+      workforceByName.get(nameKey(example.candidateName)) ??
+      null;
+    const linkedCompany = example.companyItemId
+      ? (companyById.get(example.companyItemId) ?? null)
+      : null;
+    const resolvedCompany =
+      linkedCompany ??
+      (resolvedWorkforce?.companyName
+        ? (companyByName.get(nameKey(resolvedWorkforce.companyName)) ?? null)
+        : null);
+    return exampleRowToMatrix(example, resolvedWorkforce, resolvedCompany);
+  });
 }
 
 type ResolvedCandidate = {
@@ -276,60 +254,27 @@ function findWorkforce(
   return null;
 }
 
+/**
+ * Delegates to the shared, tested findMatrixRowByWorkforce (id → legacy
+ * WorkforceNumber+CompanyItemId → unambiguous unlinked name) instead of
+ * reinventing name-first matching here — this is what makes register-driven
+ * sync agree with the Workforce-profile-save and delete paths on which row
+ * belongs to which candidate, and never adopt an ambiguous same-name row.
+ */
 function findMatrixRow(
-  rows: SyncContext["matrixRows"],
+  rows: MatrixRowWithLookups[],
   workforce: AdminWorkforceRecord,
   company: Company,
-) {
-  // Example list is keyed by candidate Title/Name — prefer exact name match first
-  // to avoid creating duplicates when lookup IDs are absent on Excel imports.
-  const byName = rows.filter(
-    (row) => nameKey(row.candidateName) === nameKey(workforce.candidateName),
-  );
-  if (byName.length === 1) return byName[0]!;
-  if (byName.length > 1) {
-    const forCompany = byName.filter(
-      (row) =>
-        row.companyLookupId === company.id ||
-        nameKey(row.companyName) === nameKey(company.companyName) ||
-        normalizeCompanyKey(row.companyName) ===
-          normalizeCompanyKey(company.companyName),
-    );
-    if (forCompany.length >= 1) return forCompany[0]!;
-    return byName[0]!;
-  }
-
-  const byCandidateId = rows.filter(
-    (row) => row.candidateLookupId && row.candidateLookupId === workforce.id,
-  );
-  if (byCandidateId.length === 1) return byCandidateId[0]!;
-  if (byCandidateId.length > 1) {
-    const forCompany = byCandidateId.filter(
-      (row) =>
-        row.companyLookupId === company.id ||
-        nameKey(row.companyName) === nameKey(company.companyName),
-    );
-    if (forCompany.length >= 1) return forCompany[0]!;
-    return byCandidateId[0]!;
-  }
-
-  if (workforce.workforceNumber?.trim()) {
-    const byNumber = rows.filter(
-      (row) =>
-        nameKey(row.workforceNumber) === nameKey(workforce.workforceNumber),
-    );
-    if (byNumber.length === 1) return byNumber[0]!;
-    if (byNumber.length > 1) {
-      const forCompany = byNumber.find(
-        (row) =>
-          row.companyLookupId === company.id ||
-          nameKey(row.companyName) === nameKey(company.companyName),
-      );
-      if (forCompany) return forCompany;
-    }
-  }
-
-  return null;
+): MatrixRowWithLookups | null {
+  const { row } = findMatrixRowByWorkforce(rows, {
+    id: workforce.id,
+    workforceItemId: workforce.id,
+    candidateName: workforce.candidateName,
+    dateOfBirth: workforce.dateOfBirth,
+    workforceNumber: workforce.workforceNumber,
+    companyItemId: company.id,
+  });
+  return row;
 }
 
 function recordsForCandidate(
@@ -674,6 +619,20 @@ async function syncOneCandidate(
 
   if (!ctx.dryRun && fieldsUpdated.length > 0) {
     try {
+      // Stamp the strong link columns on every register-driven write too, not
+      // just Workforce-profile saves — so a row this sync creates or touches
+      // is never left name-only (and thus vulnerable to a same-name mismatch
+      // on the next sync).
+      const { linkFields } = buildWorkforceMatrixSource({
+        id: workforce.id,
+        workforceItemId: workforce.id,
+        candidateName: workforce.candidateName,
+        companyName: company.companyName,
+        companyItemId: company.id,
+        companyNumber: company.companyNumber,
+        workforceNumber: workforce.workforceNumber,
+        dateOfBirth: workforce.dateOfBirth,
+      });
       const upserted = await upsertTrainingMatrixExampleRow({
         candidateName: workforce.candidateName,
         existingItemId:
@@ -681,6 +640,7 @@ async function syncOneCandidate(
           stripExampleMatrixId(matrixRow?.id) ??
           null,
         source: columnValues,
+        linkFields,
         // Do not touch ManualOverrides — sync never clears admin flags.
       });
       const nextRow: MatrixRowWithLookups = {
@@ -706,8 +666,8 @@ async function syncOneCandidate(
         columnValues: { ...columnValues },
         manualOverrideHeaders: manualOverrides,
         workforceId: workforce.id,
-        candidateLookupId: workforce.id,
-        companyLookupId: company.id,
+        workforceItemId: workforce.id,
+        companyItemId: company.id,
         workforceNumber: workforce.workforceNumber,
         exampleItemId: upserted.id,
       };
@@ -749,8 +709,8 @@ async function syncOneCandidate(
         columnValues["N027 - Excavation Marshal - Banksperson"] ?? null,
       n100Expiry: columnValues["N100 - Exc Crane"] ?? null,
       columnValues: { ...columnValues },
-      candidateLookupId: workforce.id,
-      companyLookupId: company.id,
+      workforceItemId: workforce.id,
+      companyItemId: company.id,
       workforceNumber: workforce.workforceNumber,
       exampleItemId: null,
     };
@@ -995,7 +955,7 @@ export async function syncAllMatrix(
   // Sync candidates that appear in registers or already have matrix rows.
   const candidateIds = new Set<string>();
   for (const row of ctx.matrixRows) {
-    if (row.candidateLookupId) candidateIds.add(row.candidateLookupId);
+    if (row.workforceItemId) candidateIds.add(row.workforceItemId);
   }
   for (const record of ctx.registers) {
     if (record.candidateLookupId) candidateIds.add(record.candidateLookupId);
@@ -1085,30 +1045,13 @@ export async function syncAfterRegisterSave(
     }
   }
 
-  const focus = normalizeRegisterFromAdminRecord(registerKey, record);
-
-  // Enrich lookup IDs from the saved SharePoint item when possible.
-  try {
-    const item = await getListItemByKey(registerKey, record.id);
-    if (item) {
-      const fCandidate =
-        registerKey === "nporsRegister"
-          ? "CandidateName"
-          : registerKey === "eusrRegister"
-            ? "CandidateName"
-            : registerKey === "nrswaRegister"
-              ? "CandidateName"
-              : "CandidateName";
-      focus.candidateLookupId =
-        extractLookupIdFromFields(item.fields, fCandidate) ??
-        focus.candidateLookupId;
-      focus.companyLookupId =
-        extractLookupIdFromFields(item.fields, "CompanyName") ??
-        focus.companyLookupId;
-    }
-  } catch {
-    // continue with name-based matching
-  }
+  // mapRegister already resolved the strong lookup ids from the saved
+  // SharePoint item (see adminCrudService.ts resolveRegisterPeople) — no need
+  // to re-read the item here just to re-extract them.
+  const focus = normalizeRegisterFromAdminRecord(registerKey, record, {
+    candidateLookupId: record.candidateLookupId,
+    companyLookupId: record.companyLookupId,
+  });
 
   const ctx = await loadSyncContext({ ...options, focusRecords: [focus] });
   // Ensure we have full register set for status — reload all for this candidate path.
@@ -1160,6 +1103,300 @@ export async function syncAfterRegisterSave(
   await auditSync(
     options.userEmail,
     `register/${registerKey}/${record.id}`,
+    result,
+  );
+  return result;
+}
+
+/**
+ * Recompute the Training Matrix field(s) fed by `deletedRegisterKey` for one
+ * candidate, from whatever valid (Pass) source records remain — per the
+ * source-aware refresh rules in registerMatrixFieldSync.ts: manual overrides
+ * are preserved and flagged, never blindly blanked; a system-synced value is
+ * cleared and flagged Needs Review only when no source remains to support it.
+ */
+async function recomputeCandidateMatrixAfterDelete(
+  ctx: SyncContext,
+  resolved: ResolvedCandidate,
+  deletedRegisterKey: AdminRegisterKey,
+): Promise<MatrixSyncResultItem> {
+  const { workforce, company } = resolved;
+  const warnings: string[] = [];
+  const errors: string[] = [];
+  const fieldsUpdated: string[] = [];
+
+  const matrixRow = findMatrixRow(ctx.matrixRows, workforce, company);
+  if (!matrixRow) {
+    return emptyResultItem({
+      candidate: workforce.candidateName,
+      company: company.companyName,
+      candidateId: workforce.id,
+      companyId: company.id,
+      registerSources: [registerKeyToSource(deletedRegisterKey)],
+      skipped: true,
+      skipReason:
+        "No Training Matrix row for this candidate — nothing to recompute.",
+    });
+  }
+
+  // ctx.registers is loaded fresh from SharePoint after the delete completed
+  // (the API route awaits the delete before calling this), so the deleted
+  // record is already absent — this is the authoritative remaining set.
+  const remainingForCandidate = recordsForCandidate(
+    ctx.registers,
+    workforce,
+    company,
+  );
+  const manualOverrides = matrixRow.manualOverrideHeaders ?? [];
+  const columnValues: Record<string, string | null> = {
+    ...matrixRow.columnValues,
+  };
+
+  const applyHeaderRecompute = (
+    header: string,
+    remainingRecords: NormalizedRegisterRecord[],
+  ) => {
+    const outcome = computeMatrixFieldAfterRemoval({
+      header,
+      currentValue: columnValues[header] ?? null,
+      isManualOverride: isManualOverrideHeader(header, manualOverrides),
+      remainingRecords,
+    });
+    if (outcome.action !== "unchanged") warnings.push(outcome.note);
+    if (outcome.action === "recomputed" || outcome.action === "cleared") {
+      columnValues[header] = outcome.nextValue;
+      if (!fieldsUpdated.includes(header)) fieldsUpdated.push(header);
+    }
+  };
+
+  let workforceEusrExpiry: string | null | undefined;
+  let workforceSwqrExpiry: string | null | undefined;
+
+  if (deletedRegisterKey === "nporsRegister") {
+    const nporsRecords = remainingForCandidate.filter(
+      (r) => r.source === "NPORS",
+    );
+    // Recompute every NPORS header the candidate still has data for, plus any
+    // header the row currently holds — covers the deleted record being the
+    // last one backing that category.
+    const headers = new Set<string>();
+    for (const record of nporsRecords) {
+      for (const code of record.nporsCategories) {
+        const header = NPORS_HEADER_BY_CODE[code.toUpperCase()];
+        if (header) headers.add(header);
+      }
+    }
+    for (const header of Object.values(NPORS_HEADER_BY_CODE)) {
+      if (columnValues[header]) headers.add(header);
+    }
+    for (const header of headers) {
+      const remaining = nporsRecords.filter((r) =>
+        r.nporsCategories.some(
+          (code) => NPORS_HEADER_BY_CODE[code.toUpperCase()] === header,
+        ),
+      );
+      applyHeaderRecompute(header, remaining);
+    }
+  }
+
+  if (deletedRegisterKey === "eusrRegister") {
+    const eusrRecords = remainingForCandidate.filter(
+      (r) => r.source === "EUSR",
+    );
+    applyHeaderRecompute("EUSR Expiry", eusrRecords);
+    if (fieldsUpdated.includes("EUSR Expiry")) {
+      workforceEusrExpiry = latestPassExpiry(eusrRecords);
+    }
+  }
+
+  if (deletedRegisterKey === "nrswaRegister") {
+    const nrswaRecords = remainingForCandidate.filter(
+      (r) => r.source === "NRSWA",
+    );
+    applyHeaderRecompute("NRSWA Expiry", nrswaRecords);
+    if (fieldsUpdated.includes("NRSWA Expiry")) {
+      workforceSwqrExpiry = latestPassExpiry(nrswaRecords);
+    }
+  }
+
+  if (deletedRegisterKey === "inHouseCertificates") {
+    const asbestosRecords = remainingForCandidate.filter(
+      (r) =>
+        r.source === "In-House" &&
+        isAsbestosAwarenessCategory(r.certificateCategory || r.courseCategory),
+    );
+    applyHeaderRecompute(ASBESTOS_MATRIX_HEADER, asbestosRecords);
+  }
+
+  if (fieldsUpdated.length === 0) {
+    return emptyResultItem({
+      candidate: workforce.candidateName,
+      company: company.companyName,
+      candidateId: workforce.id,
+      companyId: company.id,
+      matrixRowId: matrixRow.id,
+      matrixRowFound: true,
+      registerSources: [registerKeyToSource(deletedRegisterKey)],
+      warnings,
+      skipped: true,
+      skipReason: "No matrix field changes required after delete.",
+    });
+  }
+
+  if (ctx.dryRun) {
+    return emptyResultItem({
+      candidate: workforce.candidateName,
+      company: company.companyName,
+      candidateId: workforce.id,
+      companyId: company.id,
+      matrixRowId: matrixRow.id,
+      matrixRowFound: true,
+      registerSources: [registerKeyToSource(deletedRegisterKey)],
+      fieldsUpdated,
+      warnings,
+    });
+  }
+
+  try {
+    await upsertTrainingMatrixExampleRow({
+      candidateName: workforce.candidateName,
+      existingItemId:
+        matrixRow.exampleItemId ?? stripExampleMatrixId(matrixRow.id),
+      source: columnValues,
+      // Do not touch ManualOverrides — preserved overrides stay flagged, not cleared.
+    });
+  } catch (error) {
+    errors.push(
+      error instanceof Error
+        ? error.message
+        : "Failed to update Training Matrix row after delete.",
+    );
+  }
+
+  if (workforceEusrExpiry !== undefined) {
+    try {
+      await updateListItemFieldsByKey("workforce", workforce.id, {
+        EusrExpiry: workforceEusrExpiry,
+      });
+      fieldsUpdated.push("Workforce.EusrExpiry");
+    } catch (error) {
+      warnings.push(
+        error instanceof Error
+          ? `Could not update Workforce EUSR expiry: ${error.message}`
+          : "Could not update Workforce EUSR expiry.",
+      );
+    }
+  }
+
+  if (workforceSwqrExpiry !== undefined) {
+    try {
+      await updateListItemFieldsByKey("workforce", workforce.id, {
+        SwqrExpiry: workforceSwqrExpiry,
+      });
+      fieldsUpdated.push("Workforce.SwqrExpiry");
+    } catch (error) {
+      warnings.push(
+        error instanceof Error
+          ? `Could not update Workforce SWQR expiry: ${error.message}`
+          : "Could not update Workforce SWQR expiry.",
+      );
+    }
+  }
+
+  return emptyResultItem({
+    candidate: workforce.candidateName,
+    company: company.companyName,
+    candidateId: workforce.id,
+    companyId: company.id,
+    matrixRowId: matrixRow.id,
+    matrixRowFound: true,
+    registerSources: [registerKeyToSource(deletedRegisterKey)],
+    fieldsUpdated: [...new Set(fieldsUpdated)],
+    warnings,
+    errors,
+    skipped: false,
+  });
+}
+
+/**
+ * After a register record is deleted: recompute (or clear) the Matrix
+ * field(s) it fed, rather than leaving a stale system-synced expiry with no
+ * backing record. In-House non-Asbestos deletes have no Matrix target and
+ * are reported skipped, matching the create/update behavior for the same
+ * courses.
+ */
+export async function syncAfterRegisterDelete(
+  registerKey: AdminRegisterKey,
+  deletedRecord: AdminTrainingRecord,
+  options: MatrixSyncOptions = {},
+): Promise<MatrixSyncResult> {
+  if (registerKey === "inHouseCertificates") {
+    const asbestos =
+      isAsbestosAwarenessCategory(deletedRecord.certificateCategory) ||
+      isAsbestosAwarenessCategory(deletedRecord.courseCategory) ||
+      isAsbestosAwarenessCategory(deletedRecord.course);
+    if (!asbestos) {
+      const items = [
+        emptyResultItem({
+          candidate: deletedRecord.candidateName,
+          company: deletedRecord.companyName,
+          registerSources: [],
+          skipped: true,
+          skipReason:
+            "Deleted In-House course was standalone (only Asbestos Awareness affects N031).",
+        }),
+      ];
+      return {
+        dryRun: Boolean(options.dryRun),
+        scope: "register-delete",
+        items,
+        summary: buildSummary(items),
+      };
+    }
+  }
+
+  const ctx = await loadSyncContext(options);
+  const company = findCompany(ctx.companies, {
+    companyLookupId: deletedRecord.companyLookupId,
+    companyName: deletedRecord.companyName,
+  });
+  const workforce = findWorkforce(ctx.workforce, {
+    candidateLookupId: deletedRecord.candidateLookupId,
+    candidateName: deletedRecord.candidateName,
+    companyName: company?.companyName ?? deletedRecord.companyName,
+  });
+
+  const items: MatrixSyncResultItem[] = [];
+  if (!workforce || !company) {
+    items.push(
+      emptyResultItem({
+        candidate: deletedRecord.candidateName,
+        company: deletedRecord.companyName,
+        registerSources: [registerKeyToSource(registerKey)],
+        skipped: true,
+        skipReason:
+          "Could not resolve candidate/company for matrix recompute after delete.",
+      }),
+    );
+  } else {
+    items.push(
+      await recomputeCandidateMatrixAfterDelete(
+        ctx,
+        { workforce, company },
+        registerKey,
+      ),
+    );
+  }
+
+  const result: MatrixSyncResult = {
+    dryRun: Boolean(options.dryRun),
+    scope: "register-delete",
+    items,
+    summary: buildSummary(items),
+  };
+  await auditSync(
+    options.userEmail,
+    `register-delete/${registerKey}/${deletedRecord.id}`,
     result,
   );
   return result;

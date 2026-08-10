@@ -61,6 +61,13 @@ export const WORKFORCE_INBOUND_LOOKUPS: InboundLookupClearTarget[] = [
     listKey: "trainingMatrixCategoryRecords",
     lookupIdFields: ["Candidate_x0020_NameLookupId"],
   },
+  // "Training Matrix Update" also has a Workforce lookup. The matched row is
+  // normally deleted first, but when the link is ambiguous the row is kept on
+  // purpose — without this the leftover row would block the candidate delete.
+  {
+    listKey: "trainingMatrixExample",
+    lookupIdFields: ["WorkforceLookupId"],
+  },
 ];
 
 /** Inbound list refs that block Department delete. */
@@ -272,6 +279,54 @@ export async function clearInboundLookupsToPermission(
  * Used for “admin owns all lists” — callers should prefer domain deletes when
  * they also clean non-lookup side effects (matrix seeds, Outlook, etc.).
  */
+/**
+ * After a Restrict-Delete failure, report WHICH lists still point at the item so
+ * the admin gets a name instead of "ask a Site Owner". Only runs on the error
+ * path, and only over the known inbound table (about ten cheap filtered reads).
+ */
+export async function describeBlockingReferences(
+  targetItemId: string,
+  targets: InboundLookupClearTarget[],
+): Promise<string[]> {
+  const trimmed = String(targetItemId ?? "").trim();
+  const numericId = Number(trimmed);
+  if (!trimmed || !Number.isFinite(numericId) || numericId <= 0) return [];
+
+  const found: string[] = [];
+  await Promise.all(
+    targets.flatMap((target) =>
+      target.lookupIdFields.map(async (lookupIdField) => {
+        const fieldInternal = lookupIdField.replace(/LookupId$/, "");
+        try {
+          const items = target.multi
+            ? (await getListItemsByKey(target.listKey, { top: 5000 })).filter(
+                (item) =>
+                  extractMultiLookupIds(item.fields, fieldInternal).some((id) =>
+                    idsMatch(id, trimmed),
+                  ),
+              )
+            : await getListItemsByKey(target.listKey, {
+                filter: buildFieldLookupIdEqualsFilter(lookupIdField, numericId),
+                top: 5000,
+              });
+          if (items.length) {
+            const rows = items
+              .slice(0, 5)
+              .map((item) => `#${item.id}`)
+              .join(", ");
+            found.push(
+              `${target.listKey} → ${fieldInternal} (${items.length} row${items.length === 1 ? "" : "s"}: ${rows}${items.length > 5 ? ", …" : ""})`,
+            );
+          }
+        } catch {
+          // Diagnostics only — a failed probe must not mask the delete error.
+        }
+      }),
+    ),
+  );
+  return found.sort();
+}
+
 export async function safeDeleteListItem(
   listKey: SharePointListKey,
   itemId: string,
@@ -298,12 +353,21 @@ export async function safeDeleteListItem(
         message,
       );
     const label = options?.label ?? listKey;
+    if (related) {
+      // Name the offending list(s) instead of sending the admin to a Site Owner.
+      const blockers = options?.inbound?.length
+        ? await describeBlockingReferences(trimmed, options.inbound)
+        : [];
+      throw new ValidationError(
+        blockers.length
+          ? `SharePoint blocks deleting this ${label} because these rows still reference it: ${blockers.join("; ")}. Remove or reassign them, then delete again.`
+          : `SharePoint blocks deleting this ${label} because another list references it, and the reference is outside the lists this app manages. Ask a Site Owner which list has Restrict Delete pointing at ${listKey} item #${trimmed}.`,
+      );
+    }
     throw new ValidationError(
-      related
-        ? `SharePoint still blocks deleting this ${label} because another list references it. Related lookups were cleared — if it keeps failing, ask a Site Owner which list has Restrict Delete pointing here.`
-        : message.includes("SharePoint") || message.includes("delete")
-          ? message
-          : `Could not delete this ${label}. ${message}`,
+      message.includes("SharePoint") || message.includes("delete")
+        ? message
+        : `Could not delete this ${label}. ${message}`,
     );
   }
 }

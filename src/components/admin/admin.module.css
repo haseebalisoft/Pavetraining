@@ -1040,11 +1040,11 @@
 }
 
 .statWarn .statValue {
-  color: var(--warning);
+  color: var(--status-amber-text);
 }
 
 .statOk .statValue {
-  color: var(--success);
+  color: var(--status-green-text);
 }
 
 .sectionGrid {

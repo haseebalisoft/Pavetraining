@@ -463,7 +463,7 @@ export async function updateSettings(
     invalidateSettingsCache();
     await writeAuditLog({
       userEmail: options?.actorEmail ?? "unknown",
-      action: "PATCH",
+      action: "SETTINGS_UPDATE",
       entityName: "portal-settings",
       success: false,
       errorMessage:
@@ -505,7 +505,7 @@ export async function updateSettings(
     invalidateSettingsCache();
     await writeAuditLog({
       userEmail: options?.actorEmail ?? "unknown",
-      action: "PATCH",
+      action: "SETTINGS_UPDATE",
       entityName: "portal-settings",
       itemId,
       success: true,
@@ -525,7 +525,7 @@ export async function updateSettings(
     console.error("[settings] Failed to update Portal Settings", error);
     await writeAuditLog({
       userEmail: options?.actorEmail ?? "unknown",
-      action: "PATCH",
+      action: "SETTINGS_UPDATE",
       entityName: "portal-settings",
       success: false,
       errorMessage:

@@ -131,3 +131,33 @@ export function formatShortMonth(
     ? UK_SHORT_MONTH_FORMATTER.format(parsed)
     : invalidValueFallback(value, fallback);
 }
+
+/**
+ * Duration between a start and end date/time — hours/minutes when both fall
+ * on the same UK calendar day, whole days otherwise. Returns null when either
+ * side is missing/invalid or the range isn't positive, so callers can show a
+ * "Duration not set" fallback instead of a bogus value.
+ */
+export function formatDuration(start: DateValue, end: DateValue): string | null {
+  const startDate = parseDateValue(start);
+  const endDate = parseDateValue(end);
+  if (!startDate || !endDate) return null;
+
+  const diffMs = endDate.getTime() - startDate.getTime();
+  if (diffMs <= 0) return null;
+
+  const sameDay =
+    UK_DATE_FORMATTER.format(startDate) === UK_DATE_FORMATTER.format(endDate);
+
+  if (sameDay) {
+    const totalMinutes = Math.round(diffMs / 60_000);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    if (hours === 0) return `${minutes} min${minutes === 1 ? "" : "s"}`;
+    if (minutes === 0) return `${hours} hour${hours === 1 ? "" : "s"}`;
+    return `${hours}h ${minutes}m`;
+  }
+
+  const days = Math.ceil(diffMs / (24 * 60 * 60 * 1000));
+  return `${days} day${days === 1 ? "" : "s"}`;
+}

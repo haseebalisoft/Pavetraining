@@ -116,12 +116,15 @@ export async function previewBulkUpload(input: {
   file: File;
   suppressNotifications?: boolean;
   autoCreateMissingCompanies?: boolean;
+  autoCreateMissingDepartments?: boolean;
 }): Promise<BulkPreviewResult> {
   const importType = parseImportType(input.importType);
   const template = getBulkImportTemplate(importType);
   const { fileName, bytes } = await readUploadFile(input.file);
   const suppressNotifications = input.suppressNotifications ?? true;
   const autoCreateMissingCompanies = input.autoCreateMissingCompanies ?? false;
+  const autoCreateMissingDepartments =
+    input.autoCreateMissingDepartments ?? false;
 
   if (!template?.implemented) {
     return {
@@ -174,6 +177,7 @@ export async function previewBulkUpload(input: {
   if (importType === "workforce") {
     const rows = await previewCandidateImport(spreadsheet, {
       autoCreateMissingCompanies,
+      autoCreateMissingDepartments,
     });
     return {
       importType,
@@ -231,6 +235,7 @@ export async function commitBulkUpload(input: {
   duplicateMode?: string | null;
   suppressNotifications?: boolean;
   autoCreateMissingCompanies?: boolean;
+  autoCreateMissingDepartments?: boolean;
   rows: BulkCommitRowInput[];
   /** Live progress sink (e.g. streamed to the admin UI). */
   onEvent?: (event: BulkLogEvent) => void;
@@ -241,6 +246,10 @@ export async function commitBulkUpload(input: {
   const suppressNotifications = asBool(input.suppressNotifications, true);
   const autoCreateMissingCompanies = asBool(
     input.autoCreateMissingCompanies,
+    false,
+  );
+  const autoCreateMissingDepartments = asBool(
+    input.autoCreateMissingDepartments,
     false,
   );
   const fileName = input.fileName?.trim() || "upload.csv";
@@ -318,6 +327,7 @@ export async function commitBulkUpload(input: {
       rows: input.rows,
       duplicateMode,
       autoCreateMissingCompanies,
+      autoCreateMissingDepartments,
       log,
     });
     const summary = summarizeBulkRows(rows);
@@ -339,6 +349,7 @@ export async function commitBulkUpload(input: {
     const rows = await commitMatrixImport({
       rows: input.rows,
       duplicateMode,
+      log,
     });
     const summary = summarizeBulkRows(rows);
     logDone(summary);

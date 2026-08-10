@@ -1,5 +1,8 @@
 "use client";
 
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+
 import {
   AdminCrudPage,
   type AdminColumn,
@@ -8,6 +11,7 @@ import {
 import { ImageUploadButton } from "@/components/admin/ImageUploadButton";
 import { Thumbnail } from "@/components/ui/Thumbnail";
 import { allocateNextCompanyNumber } from "@/lib/companyNumber";
+import { isDepartmentActive } from "@/lib/services/departmentTypes";
 import type { Company } from "@/types/models";
 
 function cell(value: string | null | undefined) {
@@ -22,7 +26,7 @@ function cell(value: string | null | undefined) {
  * Accounts Contact Name | Accounts address | Accounts Contact number |
  * Accounts email | Notes prices agreed | Company Logo | Status
  */
-const columns: AdminColumn<Company>[] = [
+const baseColumns: AdminColumn<Company>[] = [
   {
     key: "companyNumber",
     header: "Company Number",
@@ -227,6 +231,58 @@ export function AdminCompaniesClient({
 }: {
   initialRows: Company[];
 }) {
+  const [departmentCounts, setDepartmentCounts] = useState<
+    Record<string, number>
+  >({});
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/admin/departments")
+      .then((response) => (response.ok ? response.json() : null))
+      .then(
+        (
+          payload: {
+            records?: { companyId: string | null; status?: string }[];
+          } | null,
+        ) => {
+          if (cancelled || !payload?.records) return;
+          const counts: Record<string, number> = {};
+          // Active-only count — clicking through to the Departments page
+          // shows the full list (active + inactive) with Status visible.
+          for (const record of payload.records) {
+            if (!record.companyId) continue;
+            if (!isDepartmentActive(record)) continue;
+            counts[record.companyId] = (counts[record.companyId] ?? 0) + 1;
+          }
+          setDepartmentCounts(counts);
+        },
+      )
+      .catch(() => {
+        // Non-critical — the count column just shows 0 if this fails.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const columns = useMemo<AdminColumn<Company>[]>(
+    () => [
+      ...baseColumns,
+      {
+        key: "departments",
+        header: "Departments",
+        render: (row) => (
+          <Link
+            href={`/admin/departments?company=${encodeURIComponent(row.companyName)}`}
+          >
+            {departmentCounts[row.id] ?? 0} — view
+          </Link>
+        ),
+      },
+    ],
+    [departmentCounts],
+  );
+
   return (
     <AdminCrudPage<Company>
       title="Companies"
@@ -244,7 +300,7 @@ export function AdminCompaniesClient({
         companyNumber: allocateNextCompanyNumber(rows),
       })}
       deleteConfirmExtra={
-        "This also deletes related Customer Documents, Training Matrix rows, NPORS/EUSR/Streetworks/In-House registers, NVQ records, Events, Workforce candidates, Permissions, and matching Training Manager Logs for that company."
+        "This also deletes related Customer Documents, Training Matrix rows, NPORS/EUSR/Streetworks/In-House registers, NVQ records, Events, Workforce candidates, and Permissions for that company. Its Audit / Activity Log history is kept."
       }
       mapResponse={(payload) =>
         (payload as { companies?: Company[] }).companies ?? []

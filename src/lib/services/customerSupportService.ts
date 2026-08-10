@@ -1,6 +1,7 @@
 import "server-only";
 
 import { ValidationError } from "@/lib/services/validationService";
+import { isValidEmail, normalizeEmail } from "@/lib/validation/email";
 import { sendNotification } from "@/lib/services/notificationService";
 import type { CustomerContext } from "@/types/models";
 
@@ -21,13 +22,13 @@ export async function submitCustomerSupportRequest(
   context: CustomerContext,
 ): Promise<{ ok: true }> {
   const name = input.name?.trim();
-  const email = input.email?.trim().toLowerCase();
+  const email = normalizeEmail(input.email);
   const subject = input.subject?.trim();
   const message = input.message?.trim();
   const phone = input.phone?.trim() || null;
 
   if (!name) throw new ValidationError("Name is required.");
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  if (!isValidEmail(email)) {
     throw new ValidationError("A valid email is required.");
   }
   if (!subject) throw new ValidationError("Subject is required.");

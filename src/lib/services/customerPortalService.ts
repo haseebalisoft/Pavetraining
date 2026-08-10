@@ -164,6 +164,11 @@ function mapNvq(id: string, fields: SharePointFields): CustomerNvqRecord | null 
     notes: asNullableString(fields[nvqFields.customerUpdateNotes]),
     completedDate,
     status: nvqStatus(completedDate),
+    ulnNumber: asNullableString(fields[nvqFields.ulnNumber]),
+    cardSchemeCategory: asNullableString(fields[nvqFields.cardSchemeCategory]),
+    cardExtensionDateNeeded: asNullableString(
+      fields[nvqFields.cardExtensionDateNeeded],
+    ),
   };
 }
 

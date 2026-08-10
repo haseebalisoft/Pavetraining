@@ -198,7 +198,7 @@
 
 .viewAllLink {
   flex-shrink: 0;
-  color: var(--pave-lime-hover);
+  color: var(--pave-lime-dark);
   font-family: var(--pave-font-body);
   font-size: 0.86rem;
   font-weight: 800;
@@ -206,7 +206,8 @@
 }
 
 .viewAllLink:hover {
-  color: var(--pave-lime-dark);
+  color: var(--pave-charcoal);
+  text-decoration: underline;
 }
 
 .eventsGrid {
@@ -414,4 +415,43 @@
   .eventCard {
     transition: none;
   }
+}
+
+.documentsList {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.documentRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.7rem 0.85rem;
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  color: inherit;
+  border: 1px solid rgba(var(--pave-charcoal-rgb), 0.08);
+  background: var(--pave-surface-alt, transparent);
+  transition: border-color 140ms ease, background 140ms ease;
+}
+
+.documentRow:hover {
+  border-color: rgba(var(--pave-charcoal-rgb), 0.2);
+}
+
+.documentName {
+  font-weight: 700;
+  color: var(--pave-charcoal);
+}
+
+.documentMeta {
+  color: var(--pave-charcoal-light);
+  font-size: 0.85rem;
+}
+
+.documentsEmpty {
+  margin: 0;
+  color: var(--pave-charcoal-light);
 }

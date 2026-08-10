@@ -13,6 +13,7 @@ import {
   asString,
   buildFieldLookupIdEqualsFilter,
   buildSchemaFieldEqualsFilter,
+  extractLookupId,
   getListItemsByKey,
   type SharePointFields,
 } from "@/lib/services/sharePointListService";
@@ -59,10 +60,17 @@ function companyAndVisibleFilter(
   return `${companyFilter} and fields/${visibleField} eq true`;
 }
 
+/**
+ * A row's own real Candidate lookup id (`rowLookupId`) is authoritative and
+ * always preferred — the name→id map is a same-name-unsafe fallback only for
+ * legacy rows where the Lookup value itself is missing.
+ */
 function resolveWorkforceId(
   candidateName: string,
   workforceIds: Map<string, string>,
+  rowLookupId?: string | null,
 ): string | null {
+  if (rowLookupId) return rowLookupId;
   return workforceIds.get(candidateName.trim().toLowerCase()) ?? null;
 }
 
@@ -83,7 +91,11 @@ function mapNpors(
   return {
     id,
     candidateName,
-    workforceId: resolveWorkforceId(candidateName, workforceIds),
+    workforceId: resolveWorkforceId(
+      candidateName,
+      workforceIds,
+      extractLookupId(fields, nporsFields.candidateName),
+    ),
     nporsNumber: asNullableString(fields[nporsFields.nporsNumber]),
     trainingDate: asNullableString(fields[nporsFields.trainingDate]),
     trainingAddress: stripSharePointHtml(
@@ -115,7 +127,11 @@ function mapEusr(
   return {
     id,
     candidateName,
-    workforceId: resolveWorkforceId(candidateName, workforceIds),
+    workforceId: resolveWorkforceId(
+      candidateName,
+      workforceIds,
+      extractLookupId(fields, eusrFields.candidateName),
+    ),
     eusrNumber: asNullableString(fields[eusrFields.eusrNumber]),
     eusrCategory: asMultiChoiceText(fields[eusrFields.eusrCategory]),
     cardType: asNullableString(fields[eusrFields.cardType]),
@@ -150,7 +166,11 @@ function mapStreetworks(
   return {
     id,
     candidateName,
-    workforceId: resolveWorkforceId(candidateName, workforceIds),
+    workforceId: resolveWorkforceId(
+      candidateName,
+      workforceIds,
+      extractLookupId(fields, streetworksFields.candidateName),
+    ),
     swqrNumber: asNullableString(fields[streetworksFields.swqrNumber]),
     trainingDate: asNullableString(fields[streetworksFields.trainingDate]),
     trainingDateEnd: endMatch?.[1] ?? null,
@@ -190,7 +210,11 @@ function mapInHouse(
   return {
     id,
     candidateName,
-    workforceId: resolveWorkforceId(candidateName, workforceIds),
+    workforceId: resolveWorkforceId(
+      candidateName,
+      workforceIds,
+      extractLookupId(fields, inHouseFields.candidateName),
+    ),
     course,
     trainingDate: asNullableString(fields[inHouseFields.courseDate]),
     trainingAddress: stripSharePointHtml(

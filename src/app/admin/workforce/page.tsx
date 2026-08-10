@@ -5,7 +5,10 @@ import {
   listAdminWorkforce,
   type AdminPermissionRecord,
 } from "@/lib/services/adminCrudService";
-import { listAdminDepartments } from "@/lib/services/departmentService";
+import {
+  isDepartmentActive,
+  listAdminDepartments,
+} from "@/lib/services/departmentService";
 
 export const dynamic = "force-dynamic";
 
@@ -38,7 +41,10 @@ export default async function AdminWorkforcePage() {
   return (
     <AdminWorkforceClient
       companies={companies}
-      departments={departments}
+      // Dropdown only offers Active departments; an existing candidate whose
+      // department was later deactivated still displays correctly (name
+      // resolution above uses the unfiltered `departments` list).
+      departments={departments.filter(isDepartmentActive)}
       initialRows={records}
       permissionPeople={permissionPeople}
     />

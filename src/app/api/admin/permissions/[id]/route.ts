@@ -3,6 +3,7 @@ import {
   deleteAdminPermission,
   updateAdminPermission,
 } from "@/lib/services/adminCrudService";
+import { logPermissionDepartmentScopeUpdate } from "@/lib/services/auditLogService";
 
 export const dynamic = "force-dynamic";
 
@@ -13,9 +14,20 @@ export async function PATCH(
   const { id } = await context.params;
   return withAdminApi(
     "PATCH /api/admin/permissions/[id]",
-    async (_ctx, req) => {
+    async (ctx, req) => {
       const body = (await req.json()) as Record<string, unknown>;
       const { record, choiceWarnings } = await updateAdminPermission(id, body);
+      if (body.departmentsAllowed !== undefined) {
+        await logPermissionDepartmentScopeUpdate({
+          userEmail: ctx.loggedInEmail,
+          permissionId: record.id,
+          personName: record.name,
+          departmentNames: record.departmentScopes,
+          companyName: record.companyName,
+          success: true,
+          request: req,
+        });
+      }
       return { record, choiceWarnings };
     },
     { errorMessage: "Failed to update permission" },
@@ -31,8 +43,8 @@ export async function DELETE(
   return withAdminApi(
     "DELETE /api/admin/permissions/[id]",
     async () => {
-      await deleteAdminPermission(id);
-      return { ok: true, id };
+      const record = await deleteAdminPermission(id);
+      return { ok: true, id, record };
     },
     { errorMessage: "Failed to delete permission", entityName: "Permission" },
     _request,

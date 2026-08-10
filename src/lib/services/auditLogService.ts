@@ -297,34 +297,93 @@ export async function writeAuditLog(input: AuditLogInput): Promise<void> {
   });
 }
 
+const NESTED_PAYLOAD_KEYS = [
+  "record",
+  "company",
+  "permission",
+  "document",
+  "result",
+  "settings",
+] as const;
+
+/** Fallback id keys for payloads that don't expose a plain `id` (e.g. cascade-delete summaries use `companyId`). */
+const ID_FALLBACK_KEYS = [
+  "companyId",
+  "candidateId",
+  "workforceId",
+  "permissionId",
+  "recordId",
+  "documentId",
+];
+
+function pickId(obj: Record<string, unknown>): string | null {
+  const direct = obj.id;
+  if (typeof direct === "string" || typeof direct === "number") {
+    return String(direct);
+  }
+  for (const key of ID_FALLBACK_KEYS) {
+    const value = obj[key];
+    if (typeof value === "string" || typeof value === "number") {
+      return String(value);
+    }
+  }
+  return null;
+}
+
 export function extractItemId(payload: unknown): string | null {
   if (!payload || typeof payload !== "object") {
     return null;
   }
 
   const record = payload as Record<string, unknown>;
-  for (const key of [
-    "record",
-    "company",
-    "permission",
-    "document",
-    "result",
-    "settings",
-  ]) {
+  for (const key of NESTED_PAYLOAD_KEYS) {
     const nested = record[key];
-    if (nested && typeof nested === "object" && "id" in nested) {
-      const id = (nested as { id?: unknown }).id;
-      if (typeof id === "string" || typeof id === "number") {
-        return String(id);
-      }
+    if (nested && typeof nested === "object") {
+      const id = pickId(nested as Record<string, unknown>);
+      if (id) return id;
     }
   }
 
-  if (typeof record.id === "string" || typeof record.id === "number") {
-    return String(record.id);
+  return pickId(record);
+}
+
+/** Name-ish fields checked in priority order — first match wins. */
+const NAME_FALLBACK_KEYS = [
+  "companyName",
+  "candidateName",
+  "name",
+  "fullName",
+  "title",
+  "userEmail",
+  "email",
+];
+
+function pickName(obj: Record<string, unknown>): string | null {
+  for (const key of NAME_FALLBACK_KEYS) {
+    const value = obj[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+/** Best-effort human-readable entity name from a handler's response body. */
+export function extractItemName(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
   }
 
-  return null;
+  const record = payload as Record<string, unknown>;
+  for (const key of NESTED_PAYLOAD_KEYS) {
+    const nested = record[key];
+    if (nested && typeof nested === "object") {
+      const name = pickName(nested as Record<string, unknown>);
+      if (name) return name;
+    }
+  }
+
+  return pickName(record);
 }
 
 function mapSharePointItemToRecord(item: {
@@ -387,67 +446,67 @@ function mapSharePointItemToRecord(item: {
 export async function listAuditLogs(
   query: AuditLogQuery = {},
 ): Promise<AuditLogRecord[]> {
+  // Not configured is an intentional, expected state (surfaced in the UI via
+  // the "usingConsoleFallback" banner) — distinct from a genuine read failure
+  // below, which is left to THROW so the API route's error handling and the
+  // admin UI's error banner fire instead of silently rendering "No log
+  // entries" for what is actually a SharePoint/Graph outage.
   if (!logsConfigured()) {
     return [];
   }
 
-  try {
-    const top = Math.min(Math.max(query.top ?? 200, 1), 500);
-    const items = await getListItemsByKey("trainingManagerLogs", { top: 500 });
-    let rows = items
-      .map((item) =>
-        mapSharePointItemToRecord({
-          id: item.id,
-          fields: item.fields,
-          createdDateTime: item.createdDateTime,
-        }),
-      )
-      .filter((row): row is AuditLogRecord => Boolean(row));
+  const top = Math.min(Math.max(query.top ?? 200, 1), 500);
+  const items = await getListItemsByKey("trainingManagerLogs", { top: 500 });
+  let rows = items
+    .map((item) =>
+      mapSharePointItemToRecord({
+        id: item.id,
+        fields: item.fields,
+        createdDateTime: item.createdDateTime,
+      }),
+    )
+    .filter((row): row is AuditLogRecord => Boolean(row));
 
-    // Prefer structured audit + compatible legacy rows; keep notification logs too.
-    const search = query.search?.trim().toLowerCase();
-    if (search) {
-      rows = rows.filter((row) => row.userEmail.includes(search));
-    }
-    if (query.action?.trim()) {
-      const action = query.action.trim().toLowerCase();
-      rows = rows.filter((row) => row.action.toLowerCase().includes(action));
-    }
-    if (query.entityType?.trim()) {
-      const entityType = query.entityType.trim().toLowerCase();
-      rows = rows.filter((row) =>
-        row.entityType.toLowerCase().includes(entityType),
-      );
-    }
-    if (query.success === "true") {
-      rows = rows.filter((row) => row.success);
-    } else if (query.success === "false") {
-      rows = rows.filter((row) => !row.success);
-    }
-    if (query.from) {
-      const fromMs = new Date(query.from).getTime();
-      if (!Number.isNaN(fromMs)) {
-        rows = rows.filter((row) => new Date(row.timestamp).getTime() >= fromMs);
-      }
-    }
-    if (query.to) {
-      const toDate = new Date(query.to);
-      if (!Number.isNaN(toDate.getTime())) {
-        toDate.setHours(23, 59, 59, 999);
-        const toMs = toDate.getTime();
-        rows = rows.filter((row) => new Date(row.timestamp).getTime() <= toMs);
-      }
-    }
-
-    rows.sort(
-      (a, b) =>
-        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
-    );
-    return rows.slice(0, top);
-  } catch (error) {
-    console.error("[audit] Failed to list logs", error);
-    return [];
+  // Prefer structured audit + compatible legacy rows; keep notification logs too.
+  const search = query.search?.trim().toLowerCase();
+  if (search) {
+    rows = rows.filter((row) => row.userEmail.includes(search));
   }
+  if (query.action?.trim()) {
+    const action = query.action.trim().toLowerCase();
+    rows = rows.filter((row) => row.action.toLowerCase().includes(action));
+  }
+  if (query.entityType?.trim()) {
+    const entityType = query.entityType.trim().toLowerCase();
+    rows = rows.filter((row) =>
+      row.entityType.toLowerCase().includes(entityType),
+    );
+  }
+  if (query.success === "true") {
+    rows = rows.filter((row) => row.success);
+  } else if (query.success === "false") {
+    rows = rows.filter((row) => !row.success);
+  }
+  if (query.from) {
+    const fromMs = new Date(query.from).getTime();
+    if (!Number.isNaN(fromMs)) {
+      rows = rows.filter((row) => new Date(row.timestamp).getTime() >= fromMs);
+    }
+  }
+  if (query.to) {
+    const toDate = new Date(query.to);
+    if (!Number.isNaN(toDate.getTime())) {
+      toDate.setHours(23, 59, 59, 999);
+      const toMs = toDate.getTime();
+      rows = rows.filter((row) => new Date(row.timestamp).getTime() <= toMs);
+    }
+  }
+
+  rows.sort(
+    (a, b) =>
+      new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+  );
+  return rows.slice(0, top);
 }
 
 export async function getAuditLogById(
@@ -732,6 +791,114 @@ export async function logSystemError(input: {
     success: false,
     errorMessage: input.errorMessage,
     metadata: input.metadata,
+  });
+}
+
+export async function logFolderCreateFailed(input: {
+  scope: "company" | "candidate";
+  entityName: string;
+  errorMessage: string;
+  metadata?: Record<string, unknown> | null;
+}): Promise<void> {
+  await writeAuditEvent({
+    userEmail: "system",
+    roleType: "Admin",
+    action: "FOLDER_CREATE_FAILED",
+    entityType: "Document Folders",
+    entityName: input.entityName,
+    success: false,
+    errorMessage: input.errorMessage,
+    metadata: { scope: input.scope, ...input.metadata },
+  });
+}
+
+export async function logDepartmentChange(input: {
+  action:
+    | "DEPARTMENT_CREATE"
+    | "DEPARTMENT_UPDATE"
+    | "DEPARTMENT_DEACTIVATE"
+    | "DEPARTMENT_DELETE";
+  userEmail: string;
+  departmentId?: string | null;
+  departmentName: string;
+  companyName?: string | null;
+  success: boolean;
+  errorMessage?: string | null;
+  request?: Request | null;
+  metadata?: Record<string, unknown> | null;
+}): Promise<void> {
+  await writeAuditEvent({
+    userEmail: input.userEmail,
+    roleType: "Admin",
+    company: input.companyName,
+    action: input.action,
+    entityType: "Departments",
+    entityId: input.departmentId,
+    entityName: input.departmentName,
+    success: input.success,
+    errorMessage: input.errorMessage,
+    request: input.request,
+    metadata: { companyName: input.companyName ?? null, ...input.metadata },
+  });
+}
+
+export async function logWorkforceDepartmentAssign(input: {
+  userEmail: string;
+  workforceId?: string | null;
+  candidateName?: string | null;
+  departmentName: string;
+  companyName?: string | null;
+  success: boolean;
+  errorMessage?: string | null;
+  request?: Request | null;
+  metadata?: Record<string, unknown> | null;
+}): Promise<void> {
+  await writeAuditEvent({
+    userEmail: input.userEmail,
+    roleType: "Admin",
+    company: input.companyName,
+    action: "WORKFORCE_DEPARTMENT_ASSIGN",
+    entityType: "Workforce",
+    entityId: input.workforceId,
+    entityName: input.candidateName,
+    success: input.success,
+    errorMessage: input.errorMessage,
+    request: input.request,
+    metadata: {
+      departmentName: input.departmentName,
+      companyName: input.companyName ?? null,
+      ...input.metadata,
+    },
+  });
+}
+
+export async function logPermissionDepartmentScopeUpdate(input: {
+  userEmail: string;
+  permissionId?: string | null;
+  personName?: string | null;
+  departmentNames: string[];
+  companyName?: string | null;
+  success: boolean;
+  errorMessage?: string | null;
+  request?: Request | null;
+  metadata?: Record<string, unknown> | null;
+}): Promise<void> {
+  await writeAuditEvent({
+    userEmail: input.userEmail,
+    roleType: "Admin",
+    company: input.companyName,
+    action: "PERMISSION_DEPARTMENT_SCOPE_UPDATE",
+    entityType: "Permissions",
+    entityId: input.permissionId,
+    entityName: input.personName,
+    success: input.success,
+    errorMessage: input.errorMessage,
+    request: input.request,
+    metadata: {
+      departmentNames: input.departmentNames,
+      companyName: input.companyName ?? null,
+      ...input.metadata,
+    },
   });
 }
 

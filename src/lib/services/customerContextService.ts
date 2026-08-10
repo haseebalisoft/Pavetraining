@@ -59,14 +59,15 @@ export const getMeContext = cache(
         : (permission.companyDisplayName ?? null);
 
     // Customer-side roles (Training Manager / Supervisor / Candidate) land on
-    // /customer first. Literal Admin (no customerRole) lands on /admin.
-    // Training Managers retain canAccessAdmin for /admin if they navigate there.
+    // the Customer Dashboard first, never blank and never Matrix by default.
+    // Literal Admin (no customerRole) lands on /admin. Training Managers
+    // retain canAccessAdmin for /admin if they navigate there.
     const redirectTo =
       permission.customerRole != null
-        ? "/customer"
+        ? "/customer/dashboard"
         : permission.canAccessAdmin
           ? "/admin"
-          : "/customer";
+          : "/customer/dashboard";
 
     return {
       loggedInEmail: permission.userEmail,

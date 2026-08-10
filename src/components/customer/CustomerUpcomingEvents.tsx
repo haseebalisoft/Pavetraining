@@ -3,6 +3,7 @@ import Link from "next/link";
 import {
   formatDate,
   formatDay,
+  formatDuration,
   formatShortMonth,
   formatTime,
 } from "@/lib/utils/formatDate";
@@ -84,7 +85,11 @@ export function CustomerUpcomingEvents({
                   </p>
                   <p className={`${styles.eventMeta} ${styles.eventMetaTime}`}>
                     <ClockIcon />
-                    <span>{timeRange(event)}</span>
+                    <span>
+                      {timeRange(event)} ·{" "}
+                      {formatDuration(event.eventDate, event.endDate) ??
+                        "Duration not set"}
+                    </span>
                   </p>
                   <span
                     className={

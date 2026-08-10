@@ -188,7 +188,7 @@ async function ensureChildFolder(
   parentId: string,
   name: string,
   stableNumber?: string | null,
-): Promise<string> {
+): Promise<{ id: string; created: boolean }> {
   const existing = await resolveChildFolderId(
     driveId,
     parentId,
@@ -196,7 +196,7 @@ async function ensureChildFolder(
     stableNumber,
   );
   if (existing) {
-    return existing;
+    return { id: existing, created: false };
   }
 
   const client = getGraphClient();
@@ -211,7 +211,7 @@ async function ensureChildFolder(
     if (!created.id) {
       throw new Error(`Folder "${name}" was created without an id.`);
     }
-    return String(created.id);
+    return { id: String(created.id), created: true };
   } catch (error) {
     const again = await resolveChildFolderId(
       driveId,
@@ -219,7 +219,7 @@ async function ensureChildFolder(
       name,
       stableNumber,
     );
-    if (again) return again;
+    if (again) return { id: again, created: false };
     throw error;
   }
 }
@@ -240,7 +240,7 @@ type PathStep = {
  */
 export interface FolderEnsureCache {
   driveId?: Promise<string>;
-  folders: Map<string, Promise<string>>;
+  folders: Map<string, Promise<{ id: string; created: boolean }>>;
 }
 
 export function createFolderEnsureCache(): FolderEnsureCache {
@@ -265,7 +265,7 @@ function ensureChildFolderCached(
   parentId: string,
   name: string,
   stableNumber?: string | null,
-): Promise<string> {
+): Promise<{ id: string; created: boolean }> {
   const key = `${driveId}::${parentId}::${name.toLowerCase()}`;
   const hit = cache.folders.get(key);
   if (hit) return hit;
@@ -286,13 +286,14 @@ async function ensureFolderPathStepsCached(
   for (const step of steps) {
     const safe = sanitizeFolderSegment(step.name);
     if (!safe) continue;
-    parentId = await ensureChildFolderCached(
+    const result = await ensureChildFolderCached(
       cache,
       driveId,
       parentId,
       safe,
       step.stableNumber,
     );
+    parentId = result.id;
   }
   return { driveId, folderId: parentId };
 }
@@ -388,6 +389,14 @@ export async function ensureCompanyDocumentFolders(
     const message =
       error instanceof Error ? error.message : "Folder create failed.";
     console.warn("[customerDocumentsFolderService] company folders:", message);
+    const { logFolderCreateFailed } = await import(
+      "@/lib/services/auditLogService"
+    );
+    await logFolderCreateFailed({
+      scope: "company",
+      entityName: input.companyName,
+      errorMessage: message,
+    });
     return {
       ok: false,
       warning: `Company saved, but document folders were not created: ${message}`,
@@ -408,7 +417,10 @@ export async function ensureCandidateDocumentFolders(
     workforceNumber?: string | null;
   },
   cache: FolderEnsureCache = createFolderEnsureCache(),
-): Promise<{ ok: true } | { ok: false; warning: string }> {
+): Promise<
+  | { ok: true; status: "created" | "existed" }
+  | { ok: false; status: "failed"; warning: string }
+> {
   try {
     const company = companyFolderStep(input.companyNumber, input.companyName);
     const candidate = candidateFolderStep(
@@ -427,7 +439,9 @@ export async function ensureCandidateDocumentFolders(
     // Candidate folder under Candidates, then the four required subfolders in
     // parallel (distinct names under a known parent — safe, and removes the
     // repeated root-to-Candidates walk the loop used to do per subfolder).
-    const candidateId = await ensureChildFolderCached(
+    // Whether the CANDIDATE's own folder (not the shared company-level ones)
+    // was newly created is the signal the bulk-upload result reports per row.
+    const { id: candidateId, created } = await ensureChildFolderCached(
       cache,
       driveId,
       candidatesId,
@@ -439,7 +453,7 @@ export async function ensureCandidateDocumentFolders(
         ensureChildFolderCached(cache, driveId, candidateId, sub),
       ),
     );
-    return { ok: true };
+    return { ok: true, status: created ? "created" : "existed" };
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Folder create failed.";
@@ -447,8 +461,18 @@ export async function ensureCandidateDocumentFolders(
       "[customerDocumentsFolderService] candidate folders:",
       message,
     );
+    const { logFolderCreateFailed } = await import(
+      "@/lib/services/auditLogService"
+    );
+    await logFolderCreateFailed({
+      scope: "candidate",
+      entityName: input.candidateName,
+      errorMessage: message,
+      metadata: { companyName: input.companyName },
+    });
     return {
       ok: false,
+      status: "failed",
       warning: `Candidate saved, but document folders were not created: ${message}`,
     };
   }

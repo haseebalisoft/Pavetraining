@@ -45,10 +45,53 @@ export type BulkCandidateFields = {
   supervisor: string | null;
 };
 
+/**
+ * How a row resolved against the Workforce ↔ Training Matrix link. Reported per
+ * row in the preview and the commit result so an admin can see, before and
+ * after importing, exactly which matrix row each candidate attached to.
+ */
+export type BulkLinkOutcome =
+  | "linkedCompanyNameDob"
+  | "linkedNameDob"
+  | "linkedExistingNeedsReview"
+  | "createdLinked"
+  | "needsReviewNoMatch"
+  | "needsReviewMultipleMatches"
+  | "skippedAmbiguous";
+
+export const BULK_LINK_OUTCOME_LABELS: Record<BulkLinkOutcome, string> = {
+  linkedCompanyNameDob: "Linked by Company + Name + DOB",
+  linkedNameDob: "Linked by Name + DOB",
+  linkedExistingNeedsReview: "Existing Needs Review row will be linked",
+  createdLinked: "Matrix created new linked row",
+  needsReviewNoMatch: "Needs Review - no Workforce match",
+  needsReviewMultipleMatches: "Needs Review - multiple matches",
+  skippedAmbiguous: "Matrix skipped due to ambiguous match",
+};
+
+/**
+ * Document-folder outcome for a bulk-imported Workforce row. The app is the
+ * sole folder-creation owner (no Power Automate step in this flow), so every
+ * row resolves synchronously to one of these — there is no "Pending" state.
+ */
+export type BulkFolderOutcome = "folderCreated" | "folderExisted" | "folderFailed";
+
+export const BULK_FOLDER_OUTCOME_LABELS: Record<BulkFolderOutcome, string> = {
+  folderCreated: "Folder created",
+  folderExisted: "Folder already existed",
+  folderFailed: "Folder creation failed",
+};
+
 export type BulkPreviewRow = {
   rowNumber: number;
   status: BulkRowStatus;
   messages: string[];
+  /** Workforce ↔ Training Matrix link result for this row. */
+  linkOutcome?: BulkLinkOutcome | null;
+  /** Matrix row this candidate linked to (`example:<id>`), once known. */
+  matrixRowId?: string | null;
+  /** Document-folder result for this candidate (Workforce bulk import only). */
+  folderOutcome?: BulkFolderOutcome | null;
   fields: Record<string, string | null>;
   /** Original spreadsheet cells keyed by Excel header (exact template columns). */
   source?: Record<string, string | null>;

@@ -10,7 +10,6 @@ import {
   getListItemById,
   getListItemByKey,
   getListItems,
-  getListItemsByKey,
 } from "@/lib/services/sharePointListService";
 
 const companyFields = getSharePointFields("company");
@@ -309,32 +308,9 @@ export async function deleteCompanyWithRelatedData(
     );
   }
 
-  if (result.companyName && !result.companyName.startsWith("#")) {
-    try {
-      const escaped = result.companyName.replace(/'/g, "''");
-      const logs = await getListItemsByKey("trainingManagerLogs", {
-        filter: `fields/Company eq '${escaped}'`,
-        top: 5000,
-      });
-      let logDeleted = 0;
-      for (const item of logs) {
-        try {
-          await deleteListItemByKey("trainingManagerLogs", item.id);
-          result.relatedDeleted += 1;
-          logDeleted += 1;
-        } catch {
-          // Logs must not block company delete.
-        }
-      }
-      if (logDeleted > 0) {
-        result.details.push(
-          `Training Manager Logs: deleted ${logDeleted} item(s)`,
-        );
-      }
-    } catch {
-      // optional list / field
-    }
-  }
+  // Training Manager Logs are intentionally NOT cascade-deleted here — the
+  // audit trail (including this delete's own entry) must survive the entity
+  // it describes, per the retention policy in auditLogService.ts.
 
   // Always attempt company delete after cascade. Soft related errors should not
   // skip the final delete — SharePoint will reject if Restrict Delete remains.

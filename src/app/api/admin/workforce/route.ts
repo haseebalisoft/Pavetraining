@@ -3,6 +3,7 @@ import {
   createAdminWorkforce,
   listAdminWorkforce,
 } from "@/lib/services/adminCrudService";
+import { logWorkforceDepartmentAssign } from "@/lib/services/auditLogService";
 
 export const dynamic = "force-dynamic";
 
@@ -21,9 +22,20 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   return withAdminApi(
     "POST /api/admin/workforce",
-    async (_context, req) => {
+    async (context, req) => {
       const body = (await req.json()) as Record<string, unknown>;
       const record = await createAdminWorkforce(body);
+      if (body.department !== undefined || body.departmentText !== undefined) {
+        await logWorkforceDepartmentAssign({
+          userEmail: context.loggedInEmail,
+          workforceId: record.id,
+          candidateName: record.candidateName,
+          departmentName: record.department ?? "(none)",
+          companyName: record.companyName,
+          success: true,
+          request: req,
+        });
+      }
       const folderWarning =
         "folderWarning" in record
           ? (record as { folderWarning?: string }).folderWarning

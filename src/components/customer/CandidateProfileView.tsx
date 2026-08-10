@@ -12,6 +12,10 @@ import {
   TrainingRecordsTable,
   type TrainingRecordColumn,
 } from "@/components/customer/TrainingRecordsTable";
+import {
+  buildCandidateCategoryRows,
+  type CandidateCategoryRow,
+} from "@/lib/training/candidateCategories";
 import { formatDate } from "@/lib/utils/formatDate";
 import type {
   CustomerDocumentRecord,
@@ -219,6 +223,70 @@ const inHouseColumns: TrainingRecordColumn<CustomerInHouseRecord>[] = [
   },
 ];
 
+function renderCategoryOutcome(label: string | null) {
+  if (!label?.trim()) {
+    return <span className={styles.muted}>Not recorded</span>;
+  }
+  const tone =
+    label === "Pass" || label === "Completed"
+      ? "ok"
+      : label === "Fail"
+        ? "danger"
+        : "info";
+  return <StatusBadge label={label} tone={tone} />;
+}
+
+function CandidateCategoriesSection({ rows }: { rows: CandidateCategoryRow[] }) {
+  return (
+    <section
+      className={styles.profileSection}
+      aria-label="All training categories"
+    >
+      <h2 className={styles.profileSectionTitle}>All Training Categories</h2>
+      <p className={styles.profileSectionMeta}>
+        Every category held across NPORS, EUSR, Streetworks / NRSWA, In-House,
+        NVQ and the Training Matrix — expired first, then expiring soon.
+      </p>
+      {rows.length === 0 ? (
+        <p className={styles.muted}>No training categories recorded for this candidate.</p>
+      ) : (
+        <div className={styles.tableWrap}>
+          <table className={styles.dataTable}>
+            <thead>
+              <tr>
+                <th scope="col">Category</th>
+                <th scope="col">Source</th>
+                <th scope="col">Training Date</th>
+                <th scope="col">Expiry Date</th>
+                <th scope="col">Outcome</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.id}>
+                  <td>{row.category}</td>
+                  <td>{row.source}</td>
+                  <td>
+                    {row.trainingDate ? (
+                      formatDate(row.trainingDate)
+                    ) : (
+                      <span className={styles.muted}>—</span>
+                    )}
+                  </td>
+                  <td>
+                    <ExpiryDateBadge date={row.expiryDate} />
+                  </td>
+                  <td>{renderCategoryOutcome(row.outcomeLabel)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function ProfileNvqSection({
   records,
   emptyLabel,
@@ -245,9 +313,12 @@ function ProfileNvqSection({
                 <th scope="col">NVQ Title</th>
                 <th scope="col">Status</th>
                 <th scope="col">Bolt On</th>
+                <th scope="col">ULN</th>
+                <th scope="col">Card Scheme</th>
                 <th scope="col">Date Registered</th>
                 <th scope="col">Induction Date</th>
                 <th scope="col">Stage of NVQ</th>
+                <th scope="col">Card Extension Date</th>
                 <th scope="col">Notes</th>
                 <th scope="col">Completed Date</th>
               </tr>
@@ -268,6 +339,8 @@ function ProfileNvqSection({
                     />
                   </td>
                   <td>{row.boltOn?.trim() || "—"}</td>
+                  <td>{row.ulnNumber?.trim() || "—"}</td>
+                  <td>{row.cardSchemeCategory?.trim() || "—"}</td>
                   <td>
                     {row.dateRegistered
                       ? formatDate(row.dateRegistered)
@@ -279,6 +352,11 @@ function ProfileNvqSection({
                       : "—"}
                   </td>
                   <td>{row.stageOfNvq?.trim() || "—"}</td>
+                  <td>
+                    {row.cardExtensionDateNeeded
+                      ? formatDate(row.cardExtensionDateNeeded)
+                      : "—"}
+                  </td>
                   <td>{row.notes?.trim() || "—"}</td>
                   <td>
                     {row.completedDate
@@ -383,6 +461,14 @@ export function CandidateProfileView({
     variant,
   );
   const companyName = candidate.companyName;
+  const categoryRows = buildCandidateCategoryRows({
+    nporsRecords,
+    eusrRecords,
+    streetworksRecords,
+    inHouseRecords,
+    nvqRecords,
+    matrixRow,
+  });
 
   return (
     <div>
@@ -506,6 +592,8 @@ export function CandidateProfileView({
           date={matrixRow?.nextExpiryDate ?? null}
         />
       </section>
+
+      <CandidateCategoriesSection rows={categoryRows} />
 
       <div className={styles.profileSection}>
         <TrainingRecordsTable

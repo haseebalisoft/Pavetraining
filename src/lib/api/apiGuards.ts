@@ -6,6 +6,7 @@ import {
 } from "@/lib/services/errorHandler";
 import {
   extractItemId,
+  extractItemName,
   logAdminCreate,
   logAdminDelete,
   logAdminUpdate,
@@ -140,6 +141,7 @@ export async function withAdminApi<T>(
     email = context.loggedInEmail;
     const data = await handler(context, request);
     const itemId = extractItemId(data);
+    const entityName = options?.entityName ?? extractItemName(data) ?? entityType;
 
     if (shouldAudit) {
       if (method === "POST") {
@@ -147,7 +149,7 @@ export async function withAdminApi<T>(
           userEmail: email,
           entityType,
           entityId: itemId,
-          entityName: options?.entityName ?? entityType,
+          entityName,
           request,
         });
       } else if (method === "PATCH" || method === "PUT") {
@@ -155,7 +157,7 @@ export async function withAdminApi<T>(
           userEmail: email,
           entityType,
           entityId: itemId,
-          entityName: options?.entityName ?? entityType,
+          entityName,
           request,
         });
       } else if (method === "DELETE") {
@@ -163,7 +165,7 @@ export async function withAdminApi<T>(
           userEmail: email,
           entityType,
           entityId: itemId,
-          entityName: options?.entityName ?? entityType,
+          entityName,
           request,
         });
       } else {
