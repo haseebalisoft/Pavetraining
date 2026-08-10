@@ -196,7 +196,7 @@ export async function previewBulkUpload(input: {
   if (importType === "trainingMatrix") {
     const log = createBulkLogger("preview:trainingMatrix", { verbose: true });
     log.info("start", { fileName, rows: spreadsheet.rows.length });
-    const rows = await previewMatrixImport(spreadsheet, log);
+    const rows = await previewMatrixImport(spreadsheet);
     const summary = summarizeBulkRows(rows);
     log.info("done", summary as unknown as Record<string, unknown>);
     return {
