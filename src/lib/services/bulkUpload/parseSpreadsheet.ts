@@ -16,15 +16,38 @@ function cellToString(value: unknown): string | null {
   if (value === null || value === undefined) return null;
   if (value instanceof Date) {
     if (Number.isNaN(value.getTime())) return null;
-    // Use local Y-M-D — toISOString() shifts calendar day near midnight in US timezones.
-    const year = value.getFullYear();
-    const month = String(value.getMonth() + 1).padStart(2, "0");
-    const day = String(value.getDate()).padStart(2, "0");
+    // SheetJS date-only cells are often UTC midnight, or local midnight encoded as
+    // a prior UTC evening (e.g. 1971-12-31T19:00Z for 01/01/1972 in UTC+5).
+    // Prefer local calendar day when UTC time is afternoon/evening and local
+    // date is ahead; otherwise use UTC Y-M-D (Vercel is UTC).
+    const utcY = value.getUTCFullYear();
+    const utcM = value.getUTCMonth() + 1;
+    const utcD = value.getUTCDate();
+    const localY = value.getFullYear();
+    const localM = value.getMonth() + 1;
+    const localD = value.getDate();
+    const useLocal =
+      value.getUTCHours() >= 12 &&
+      (localY > utcY ||
+        localM > utcM ||
+        (localY === utcY && localM === utcM && localD > utcD));
+    const year = useLocal ? localY : utcY;
+    const month = String(useLocal ? localM : utcM).padStart(2, "0");
+    const day = String(useLocal ? localD : utcD).padStart(2, "0");
     return `${year}-${month}-${day}`;
   }
   if (typeof value === "number") {
-    // Excel serial dates often arrive as numbers; leave as string of number
-    // unless it looks like a date serial — callers normalize DOB separately.
+    // Prefer normalizing Excel serials immediately to YYYY-MM-DD.
+    if (value > 20000 && value < 60000) {
+      const ms = Date.UTC(1899, 11, 30) + Math.round(value) * 86_400_000;
+      const parsed = new Date(ms);
+      if (!Number.isNaN(parsed.getTime())) {
+        const year = parsed.getUTCFullYear();
+        const month = String(parsed.getUTCMonth() + 1).padStart(2, "0");
+        const day = String(parsed.getUTCDate()).padStart(2, "0");
+        return `${year}-${month}-${day}`;
+      }
+    }
     return String(value);
   }
   const text = String(value).trim();
@@ -52,8 +75,10 @@ export function parseSpreadsheetBuffer(
 
   const workbook = XLSX.read(bytes, {
     type: "array",
-    cellDates: true,
-    raw: false,
+    // Keep Excel serial day numbers (not JS Dates) — Dates shift a calendar day
+    // in non-UTC timezones. cellToString + normalizeDateValue handle serials.
+    cellDates: false,
+    raw: true,
   });
   const sheetName = workbook.SheetNames[0];
   if (!sheetName) {
@@ -69,7 +94,7 @@ export function parseSpreadsheetBuffer(
     {
       header: 1,
       defval: null,
-      raw: false,
+      raw: true,
       blankrows: false,
     },
   );

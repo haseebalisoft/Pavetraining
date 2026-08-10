@@ -14,6 +14,7 @@ import {
 } from "@/lib/config/sharepoint";
 import {
   getGraphClient,
+  withGraphMutationRetry,
   withGraphReadRetry,
 } from "@/lib/graph/graphClient";
 import {
@@ -534,9 +535,9 @@ export async function createListItemByKey(
   const listId = getSharePointListId(listKey);
   const client = getGraphClient();
 
-  const created = (await client
-    .api(`${siteRoot}/lists/${listId}/items`)
-    .post({ fields })) as {
+  const created = (await withGraphMutationRetry(() =>
+    client.api(`${siteRoot}/lists/${listId}/items`).post({ fields }),
+  )) as {
     id: string;
     createdDateTime?: string;
     fields?: SharePointFields;
@@ -565,9 +566,11 @@ export async function updateListItemFieldsByKey(
   const listId = getSharePointListId(listKey);
   const client = getGraphClient();
 
-  await client
-    .api(`${siteRoot}/lists/${listId}/items/${itemId}/fields`)
-    .patch(fields);
+  await withGraphMutationRetry(() =>
+    client
+      .api(`${siteRoot}/lists/${listId}/items/${itemId}/fields`)
+      .patch(fields),
+  );
 
   markListMutated(listKey);
 
@@ -607,7 +610,7 @@ export async function deleteListItemByKey(
   const itemPath = `${siteRoot}/lists/${listId}/items/${encodeURIComponent(trimmedId)}`;
 
   try {
-    await client.api(itemPath).delete();
+    await withGraphMutationRetry(() => client.api(itemPath).delete());
     markListMutated(listKey);
     return;
   } catch (error: unknown) {

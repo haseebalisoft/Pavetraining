@@ -224,8 +224,11 @@ export function realMatrixItemId(id: string | null | undefined): string | null {
   const text = clean(id);
   if (!text) return null;
   if (text.startsWith(SYNTHETIC_MATRIX_PREFIX)) return null;
+  if (text.startsWith("pending:")) return null;
   if (text.startsWith(EXAMPLE_MATRIX_PREFIX)) {
-    return clean(text.slice(EXAMPLE_MATRIX_PREFIX.length));
+    const stripped = clean(text.slice(EXAMPLE_MATRIX_PREFIX.length));
+    if (!stripped || stripped.startsWith("pending:")) return null;
+    return stripped;
   }
   return text;
 }

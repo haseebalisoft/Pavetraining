@@ -7,7 +7,8 @@ import { TokenCredentialAuthenticationProvider } from "@microsoft/microsoft-grap
 let cachedClient: Client | null = null;
 
 const GRAPH_READ_MAX_ATTEMPTS = 3;
-const GRAPH_READ_RETRY_BASE_MS = 300;
+const GRAPH_MUTATION_MAX_ATTEMPTS = 4;
+const GRAPH_RETRY_BASE_MS = 300;
 
 function errorStatus(error: unknown): number | null {
   if (!error || typeof error !== "object") return null;
@@ -24,8 +25,8 @@ function errorText(error: unknown): string {
   return String(error ?? "").toLowerCase();
 }
 
-/** True only for failures where repeating an idempotent Graph GET is safe. */
-export function isTransientGraphReadError(error: unknown): boolean {
+/** True for transient network / throttling failures Graph SDK surfaces poorly. */
+export function isTransientGraphError(error: unknown): boolean {
   const status = errorStatus(error);
   if (status === -1 || status === 408 || status === 425 || status === 429) {
     return true;
@@ -41,11 +42,47 @@ export function isTransientGraphReadError(error: unknown): boolean {
     "etimedout",
     "socket hang up",
     "und_err_",
+    "network",
+    "other side closed",
   ].some((marker) => text.includes(marker));
 }
 
-function retryDelay(attempt: number): number {
-  return GRAPH_READ_RETRY_BASE_MS * 2 ** (attempt - 1);
+/** @deprecated Prefer isTransientGraphError — kept for existing import sites. */
+export function isTransientGraphReadError(error: unknown): boolean {
+  return isTransientGraphError(error);
+}
+
+function retryDelay(attempt: number, baseMs = GRAPH_RETRY_BASE_MS): number {
+  const jitter = Math.floor(Math.random() * 120);
+  return baseMs * 2 ** (attempt - 1) + jitter;
+}
+
+async function withGraphRetry<T>(
+  operation: () => Promise<T>,
+  maxAttempts: number,
+  label: string,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt === maxAttempts || !isTransientGraphError(error)) {
+        throw error;
+      }
+      const waitMs = retryDelay(attempt);
+      console.warn(
+        `[graph] transient ${label} failure attempt=${attempt}/${maxAttempts} retryInMs=${waitMs} message=${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, waitMs);
+      });
+    }
+  }
+  throw lastError;
 }
 
 /**
@@ -55,24 +92,39 @@ function retryDelay(attempt: number): number {
 export async function withGraphReadRetry<T>(
   operation: () => Promise<T>,
 ): Promise<T> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= GRAPH_READ_MAX_ATTEMPTS; attempt += 1) {
-    try {
-      return await operation();
-    } catch (error) {
-      lastError = error;
-      if (
-        attempt === GRAPH_READ_MAX_ATTEMPTS ||
-        !isTransientGraphReadError(error)
-      ) {
-        throw error;
-      }
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, retryDelay(attempt));
-      });
-    }
+  return withGraphRetry(operation, GRAPH_READ_MAX_ATTEMPTS, "read");
+}
+
+/**
+ * Retries Graph POST/PATCH/DELETE for the same transient class as reads.
+ * Callers must only wrap idempotent-enough operations (or accept rare
+ * duplicate creates under extreme failure — matrix upsert prefers update).
+ */
+export async function withGraphMutationRetry<T>(
+  operation: () => Promise<T>,
+): Promise<T> {
+  return withGraphRetry(operation, GRAPH_MUTATION_MAX_ATTEMPTS, "mutation");
+}
+
+/** Richer message for bulk logs when Graph drops the socket. */
+export function formatGraphError(error: unknown): string {
+  if (!(error instanceof Error)) return String(error ?? "Unknown Graph error");
+  const status = errorStatus(error);
+  const cause =
+    "cause" in error && error.cause
+      ? error.cause instanceof Error
+        ? error.cause.message
+        : String(error.cause)
+      : "";
+  const parts = [error.message];
+  if (status != null) parts.push(`status=${status}`);
+  if (cause) parts.push(`cause=${cause}`);
+  if (isTransientGraphError(error)) {
+    parts.push(
+      "(transient network to Microsoft Graph — retry or check VPN/firewall)",
+    );
   }
-  throw lastError;
+  return parts.join(" ");
 }
 
 function getAzureCredentials() {

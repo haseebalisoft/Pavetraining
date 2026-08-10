@@ -194,16 +194,21 @@ export async function previewBulkUpload(input: {
   }
 
   if (importType === "trainingMatrix") {
-    const rows = await previewMatrixImport(spreadsheet);
+    const log = createBulkLogger("preview:trainingMatrix", { verbose: true });
+    log.info("start", { fileName, rows: spreadsheet.rows.length });
+    const rows = await previewMatrixImport(spreadsheet, log);
+    const summary = summarizeBulkRows(rows);
+    log.info("done", summary as unknown as Record<string, unknown>);
     return {
       importType,
       fileName,
       headers: spreadsheet.headers,
       rows,
-      summary: summarizeBulkRows(rows),
+      summary,
       suppressNotifications,
       implemented: true,
-      message: null,
+      message:
+        "Training Matrix always upserts: create if missing, OVERRIDE if the candidate matrix row already exists.",
     };
   }
 
@@ -348,7 +353,8 @@ export async function commitBulkUpload(input: {
   if (importType === "trainingMatrix") {
     const rows = await commitMatrixImport({
       rows: input.rows,
-      duplicateMode,
+      // Matrix always upserts (create or override); mode kept for API shape.
+      duplicateMode: "update",
       log,
     });
     const summary = summarizeBulkRows(rows);
@@ -356,13 +362,12 @@ export async function commitBulkUpload(input: {
     return {
       importType,
       fileName,
-      duplicateMode,
+      duplicateMode: "update",
       suppressNotifications,
       rows,
       summary,
-      message: suppressNotifications
-        ? "Import completed. Customer notifications were suppressed. Import Workforce before matrix if candidates are missing."
-        : "Import completed.",
+      message:
+        "Training Matrix import finished (create if missing, override if exists).",
     };
   }
 

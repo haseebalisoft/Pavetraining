@@ -1,11 +1,12 @@
 /**
  * Shared email helpers for forms + API validation.
- * Accepts any RFC-like address with a real domain (including .org, .co.uk,
- * .training, subdomains). Does not restrict to known TLDs.
+ * Accepts normal work domains (.com, .org, .co.uk, .training, subdomains, +tags).
+ * Does not whitelist providers (Gmail vs corporate) and does not block uncommon TLDs.
  */
 
+/** Practical check: local@domain with at least one dot in the domain, no spaces. */
 const EMAIL_PATTERN =
-  /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/i;
+  /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function normalizeEmail(value: string): string {
   return value.trim().toLowerCase();
@@ -17,12 +18,15 @@ export function isValidEmail(value: string | null | undefined): boolean {
   const email = normalizeEmail(value);
   if (email.length > 254) return false;
   if (email.includes("..")) return false;
+  if (email.startsWith(".") || email.endsWith(".")) return false;
+  if (email.includes("@.") || email.includes(".@")) return false;
+  const at = email.indexOf("@");
+  if (at <= 0 || at !== email.lastIndexOf("@")) return false;
   return EMAIL_PATTERN.test(email);
 }
 
 /**
- * Optional fields: blank → null; invalid → null when `strict` is false,
- * or callers throw via assert helpers.
+ * Optional fields: blank → null; invalid → null when used as soft parse.
  */
 export function optionalEmail(
   value: string | null | undefined,

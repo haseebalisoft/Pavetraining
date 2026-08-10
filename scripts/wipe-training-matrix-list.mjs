@@ -14,7 +14,9 @@ import { Client } from "@microsoft/microsoft-graph-client";
 import { TokenCredentialAuthenticationProvider } from "@microsoft/microsoft-graph-client/authProviders/azureTokenCredentials/index.js";
 
 const DRY_RUN = process.argv.includes("--dry-run");
-const CONCURRENCY = 8;
+/** Only wipe Training Matrix Update (portal). Skips legacy + category lists. */
+const EXAMPLE_ONLY = process.argv.includes("--example-only");
+const CONCURRENCY = 3;
 
 function requireEnv(name) {
   const value = process.env[name]?.trim();
@@ -42,14 +44,32 @@ function getClient() {
   return Client.initWithMiddleware({ authProvider });
 }
 
+async function withRetry(label, fn, attempts = 5) {
+  let lastErr;
+  for (let i = 1; i <= attempts; i += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastErr = error;
+      const msg = error?.message || String(error);
+      const wait = 500 * 2 ** (i - 1);
+      console.warn(`[retry ${i}/${attempts}] ${label}: ${msg} → wait ${wait}ms`);
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+  throw lastErr;
+}
+
 async function listAllItems(client, listId) {
   const items = [];
   let url = `${siteRoot()}/lists/${listId}/items?$top=200`;
   while (url) {
-    const res = await client
-      .api(url.replace(/^https:\/\/graph\.microsoft\.com\/v1\.0/i, ""))
-      .header("Prefer", "HonorNonIndexedQueriesWarningMayFailRandomly")
-      .get();
+    const res = await withRetry(`list ${listId}`, () =>
+      client
+        .api(url.replace(/^https:\/\/graph\.microsoft\.com\/v1\.0/i, ""))
+        .header("Prefer", "HonorNonIndexedQueriesWarningMayFailRandomly")
+        .get(),
+    );
     items.push(...(res.value ?? []));
     url = res["@odata.nextLink"] || null;
   }
@@ -91,9 +111,11 @@ async function wipeList(client, label, listId) {
   await mapPool(items, CONCURRENCY, async (item) => {
     try {
       if (!DRY_RUN) {
-        await client
-          .api(`${siteRoot()}/lists/${listId}/items/${item.id}`)
-          .delete();
+        await withRetry(`delete #${item.id}`, () =>
+          client
+            .api(`${siteRoot()}/lists/${listId}/items/${item.id}`)
+            .delete(),
+        );
       }
       deleted += 1;
       if (deleted % 25 === 0 || deleted === items.length) {
@@ -128,16 +150,24 @@ async function main() {
       label: "Training Matrix (portal / EXAMPLE)",
       listId: process.env.SHAREPOINT_TRAINING_MATRIX_EXAMPLE_LIST_ID?.trim(),
     },
-    {
-      label: "Training Matrix (legacy)",
-      listId: process.env.SHAREPOINT_TRAINING_MATRIX_LIST_ID?.trim(),
-    },
-    {
-      label: "Matrix Category Records",
-      listId:
-        process.env.SHAREPOINT_TRAINING_MATRIX_CATEGORY_RECORDS_LIST_ID?.trim(),
-    },
+    ...(!EXAMPLE_ONLY
+      ? [
+          {
+            label: "Training Matrix (legacy)",
+            listId: process.env.SHAREPOINT_TRAINING_MATRIX_LIST_ID?.trim(),
+          },
+          {
+            label: "Matrix Category Records",
+            listId:
+              process.env.SHAREPOINT_TRAINING_MATRIX_CATEGORY_RECORDS_LIST_ID?.trim(),
+          },
+        ]
+      : []),
   ];
+
+  if (EXAMPLE_ONLY) {
+    console.log("Mode: --example-only (Training Matrix Update list only)");
+  }
 
   if (!targets[0].listId) {
     throw new Error(

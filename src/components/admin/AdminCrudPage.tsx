@@ -1629,9 +1629,11 @@ export function AdminCrudPage<T extends { id: string }>({
                         ? "date"
                         : field.type === "datetime"
                           ? "datetime-local"
-                          : field.type === "email"
-                            ? "email"
-                            : "text"
+                          : "text"
+                    }
+                    inputMode={field.type === "email" ? "email" : undefined}
+                    autoComplete={
+                      field.type === "email" ? "email" : undefined
                     }
                     value={String(form[field.name] ?? "")}
                     placeholder={field.placeholder}
