@@ -384,6 +384,16 @@ async function wipeBoth() {
       `  baseline after wipe — workforce=${baseline.workforce} matrix=${baseline.matrix} (SharePoint refused to delete these)`,
     );
   }
+
+  // This wipe deletes via raw Graph calls, bypassing the app's
+  // unstable_cache/revalidateTag path entirely. The app's cached workforce/
+  // matrix list reads (45s TTL) can still be serving the pre-wipe snapshot to
+  // the very next preview/commit call, which misreports fresh creates as
+  // "duplicate updates". Wait out the TTL so the app's next read is live.
+  const CACHE_SETTLE_MS = 46_000;
+  console.log(`  waiting ${CACHE_SETTLE_MS / 1000}s for the app read-cache to expire...`);
+  await new Promise((resolve) => setTimeout(resolve, CACHE_SETTLE_MS));
+
   return baseline;
 }
 

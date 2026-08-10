@@ -537,10 +537,16 @@ export async function commitMatrixImport(input: {
   // these events the admin sees a spinner with no output and assumes it hung.
   const log = input.log ?? createBulkLogger("commit:trainingMatrix");
   const loadPhase = log.phase("load");
+  const timed = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
+    const start = Date.now();
+    const result = await fn();
+    log.info(`load:${label}`, { ms: Date.now() - start });
+    return result;
+  };
   const [workforce, exampleRows, categoryCaches] = await Promise.all([
-    listAdminWorkforce(),
-    listTrainingMatrixExampleRows(),
-    loadMatrixCategoryLookupCaches(),
+    timed("workforce", listAdminWorkforce),
+    timed("exampleRows", listTrainingMatrixExampleRows),
+    timed("categoryCaches", loadMatrixCategoryLookupCaches),
   ]);
   loadPhase.end({ workforce: workforce.length, matrixRows: exampleRows.length });
   const peers = buildWorkforcePeers(workforce);
