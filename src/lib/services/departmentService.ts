@@ -42,6 +42,48 @@ export function departmentKey(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+/**
+ * Detect SharePoint's `tP_E_INVALIDLOOKUPPARENT` failure and rewrite it into an
+ * actionable message. This error means the lookup column exists on the target
+ * list, but the row it's pointing at either doesn't exist, was recycled, or the
+ * lookup is bound to a different SharePoint list than the one whose IDs we're
+ * sending. Common client tenants triggers:
+ *   - Company row was hard-deleted (not recycled) after the page loaded.
+ *   - The Departments list's `Company` lookup was configured against a
+ *     different Company list than the SHAREPOINT_COMPANY_LIST_ID env var
+ *     currently points at.
+ *
+ * Returns a friendly message when the underlying Graph error contains the
+ * marker, otherwise `null` so the caller can rethrow the original error.
+ */
+function describeLookupParentError(
+  error: unknown,
+  targetListLabel: string,
+  lookupColumn: string,
+  ctx: { companyId?: string; companyName?: string | null } = {},
+): string | null {
+  const body =
+    error && typeof error === "object" && "body" in error
+      ? String((error as { body?: unknown }).body ?? "")
+      : "";
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const combined = `${body} ${message}`.toLowerCase();
+  if (!combined.includes("invalidlookupparent")) return null;
+  const parts = [
+    `SharePoint rejected the ${targetListLabel} write because its ${lookupColumn} lookup could not resolve the parent Company`,
+  ];
+  if (ctx.companyName) {
+    parts.push(`"${ctx.companyName}"`);
+  }
+  if (ctx.companyId) {
+    parts.push(`(id ${ctx.companyId})`);
+  }
+  parts.push(
+    `— either that Company row no longer exists in the Company List, or the ${targetListLabel} list's ${lookupColumn} lookup is configured against a different Company list than SHAREPOINT_COMPANY_LIST_ID points at. Verify the Departments list column settings in SharePoint.`,
+  );
+  return parts.join(" ");
+}
+
 function mapDepartment(
   item: { id: string; fields: SharePointFields },
   companyNameById?: Map<string, string>,
@@ -168,9 +210,30 @@ export async function createAdminDepartment(input: {
     status: input.status ?? DEFAULT_DEPARTMENT_STATUS,
     notes: input.notes ?? null,
   });
-  payload[`${fields.company}LookupId`] = Number(companyId);
+  // Explicit integer check: an accidental company name or GUID in the ID slot
+  // would silently become NaN and SharePoint would reject with the confusing
+  // `tP_E_INVALIDLOOKUPPARENT` error further below.
+  const numericCompanyId = Number(companyId);
+  if (!Number.isInteger(numericCompanyId) || numericCompanyId <= 0) {
+    throw new ValidationError(
+      `Company id "${companyId}" is not a valid SharePoint row id. Pick the company from the dropdown so the numeric id is captured.`,
+    );
+  }
+  payload[`${fields.company}LookupId`] = numericCompanyId;
 
-  const item = await createListItemByKey("departments", payload);
+  let item;
+  try {
+    item = await createListItemByKey("departments", payload);
+  } catch (error) {
+    const message = describeLookupParentError(error, "departments", "Company", {
+      companyId: String(numericCompanyId),
+      companyName: company.companyName,
+    });
+    if (message) {
+      throw new Error(message);
+    }
+    throw error;
+  }
   const mapped = mapDepartment(
     item,
     new Map([[company.id, company.companyName]]),
@@ -201,10 +264,18 @@ export async function updateAdminDepartment(
     payload[fields.title] = name;
     payload[fields.name] = name;
   }
+  let numericCompanyIdForPatch: number | null = null;
   if (input.companyId !== undefined) {
     const companyId = input.companyId.trim();
     if (!companyId) throw new ValidationError("Company is required.");
-    payload[`${fields.company}LookupId`] = Number(companyId);
+    const numericCompanyId = Number(companyId);
+    if (!Number.isInteger(numericCompanyId) || numericCompanyId <= 0) {
+      throw new ValidationError(
+        `Company id "${companyId}" is not a valid SharePoint row id. Pick the company from the dropdown so the numeric id is captured.`,
+      );
+    }
+    numericCompanyIdForPatch = numericCompanyId;
+    payload[`${fields.company}LookupId`] = numericCompanyId;
   }
   if (input.status !== undefined) {
     payload[fields.status] = input.status;
@@ -213,7 +284,21 @@ export async function updateAdminDepartment(
     payload[fields.notes] = input.notes ?? "";
   }
 
-  const item = await updateListItemFieldsByKey("departments", id, payload);
+  let item;
+  try {
+    item = await updateListItemFieldsByKey("departments", id, payload);
+  } catch (error) {
+    if (numericCompanyIdForPatch !== null) {
+      const message = describeLookupParentError(
+        error,
+        "departments",
+        "Company",
+        { companyId: String(numericCompanyIdForPatch) },
+      );
+      if (message) throw new Error(message);
+    }
+    throw error;
+  }
   const companies = await getAllCompanies();
   const companyNameById = new Map(
     companies.map((row) => [row.id, row.companyName] as const),

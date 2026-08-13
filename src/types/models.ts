@@ -324,6 +324,30 @@ export interface AdminContext {
   canDownload: boolean;
   canEdit: boolean;
   accessScope: AccessScope;
+  /**
+   * Raw SharePoint RoleType value ("Admin", "Training Manager", …). Preserved
+   * so the top-nav can distinguish a pure Admin from a Training Manager who
+   * also has `canAccessAdmin`.
+   */
+  sharePointRoleType: string;
+  /** Customer sub-role for Training Managers who ALSO have admin access; null for pure Admins. */
+  customerRole: CustomerRoleType | null;
+  /** Human label ("Admin" / "Training Manager") for badges + diagnostics. */
+  roleLabel: string;
+  /**
+   * True iff this user should have full SharePoint-Admin power. Either:
+   *   - literal SharePoint RoleType === "Admin" (customerRole === null), OR
+   *   - the email is on the hardcoded/protected admin list.
+   * Training Managers with only `canAccessAdmin === true` are NOT SharePoint admins.
+   * Used to gate admin-only nav items and pages (Bulk Upload, Permissions writes).
+   */
+  isSharePointAdmin: boolean;
+  /**
+   * True iff `loggedInEmail` is on the hardcoded protected-admin list (see
+   * `protectedAdmins.ts`). Rendered in the admin debug panel so we can quickly
+   * tell whether a user is being kept as admin by that safety net.
+   */
+  isAlwaysAdminEmail: boolean;
 }
 
 export interface AdminDashboardExpiryRow {

@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import { redirect } from "next/navigation";
 
 import { BrandLogo } from "@/components/brand/BrandLogo";
-import { auth, signIn } from "@/auth";
+import { auth } from "@/auth";
 import { LoginClient } from "./LoginClient";
 import styles from "./login.module.css";
 
@@ -12,11 +12,6 @@ export default async function LoginPage() {
   const session = await auth();
   if (session?.user?.email) {
     redirect("/");
-  }
-
-  async function microsoftSignIn() {
-    "use server";
-    await signIn("microsoft-entra-id", { redirectTo: "/" });
   }
 
   return (
@@ -53,15 +48,7 @@ export default async function LoginPage() {
             email one-time code. Access still comes from Permissions.
           </p>
           <Suspense fallback={<p className={styles.copy}>Loading sign-in…</p>}>
-            <LoginClient
-              microsoftButton={
-                <form action={microsoftSignIn}>
-                  <button className={styles.button} type="submit">
-                    Sign in with Microsoft
-                  </button>
-                </form>
-              }
-            />
+            <LoginClient />
           </Suspense>
         </div>
       </section>

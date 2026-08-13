@@ -296,6 +296,14 @@ export function AdminCompaniesClient({
       deleteUrl={(id) => `/api/admin/companies/${id}`}
       bulkDeleteUrl="/api/admin/companies/bulk-delete"
       enableBulkDelete
+      // Optimistic UI: delete row from the table instantly; SharePoint
+      // cascade (12 lists) runs in the background. Silent restore + review
+      // pill if it fails. Non-destructive fallback: refreshing the page
+      // shows real SharePoint state.
+      optimistic
+      optimisticRowLabel={(row) =>
+        row.companyName?.trim() || row.companyNumber?.trim() || `#${row.id}`
+      }
       getCreateDefaults={(rows) => ({
         companyNumber: allocateNextCompanyNumber(rows),
       })}

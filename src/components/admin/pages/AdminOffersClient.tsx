@@ -82,6 +82,7 @@ export function AdminOffersClient({
       createUrl="/api/admin/offers"
       updateUrl={(id) => `/api/admin/offers/${id}`}
       deleteUrl={(id) => `/api/admin/offers/${id}`}
+      optimistic
       mapResponse={(payload) =>
         ((payload as { records?: AdminOfferRecord[] }).records ?? [])
       }

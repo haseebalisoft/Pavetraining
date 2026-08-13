@@ -6,6 +6,8 @@ import { getCompanyById } from "@/lib/services/companyService";
 import {
   accessScopeBadgeLabel,
   getActivePermissionByEmail,
+  isAlwaysAdminEmail,
+  isSharePointAdminForProfile,
 } from "@/lib/services/permissionService";
 import {
   AccessDeniedError,
@@ -58,10 +60,11 @@ export const getMeContext = cache(
           )
         : (permission.companyDisplayName ?? null);
 
-    // Customer-side roles (Training Manager / Supervisor / Candidate) land on
-    // the Customer Dashboard first, never blank and never Matrix by default.
-    // Literal Admin (no customerRole) lands on /admin. Training Managers
-    // retain canAccessAdmin for /admin if they navigate there.
+    // STRICT: only literal SP RoleType = Admin can reach /admin. Every
+    // customer-side role (Training Manager / Supervisor / Candidate) lands
+    // on the Customer Dashboard. Since `canAccessAdmin` is now equivalent
+    // to `customerRole === null && sharePointRoleType === "Admin"`, either
+    // predicate is sufficient — we keep `canAccessAdmin` for readability.
     const redirectTo =
       permission.customerRole != null
         ? "/customer/dashboard"
@@ -165,6 +168,14 @@ export const getAdminContext = cache(
       canDownload: permission.canDownload,
       canEdit: permission.canEdit,
       accessScope: permission.accessScope,
+      sharePointRoleType: permission.sharePointRoleType,
+      customerRole: permission.customerRole,
+      roleLabel: permission.roleLabel,
+      // Hardcoded protected admins ALWAYS resolve as SharePoint Admin even
+      // when their SP row has been edited to Training Manager — otherwise
+      // they silently lose Bulk Upload / Permissions in the nav.
+      isSharePointAdmin: isSharePointAdminForProfile(permission),
+      isAlwaysAdminEmail: isAlwaysAdminEmail(permission.userEmail),
     };
   },
 );

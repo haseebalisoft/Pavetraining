@@ -97,7 +97,7 @@ export function roleLabelFor(
   customerRole: CustomerRoleType | null
 ): string {
   if (customerRole === "TrainingManager") return "Training Manager";
-  if (customerRole === "Supervisor") return "Supervisor";
+  if (customerRole === "Supervisor") return "Customer";
   if (customerRole === "Candidate") return "Candidate";
   const raw = sharePointRole.trim();
   if (raw) return raw;

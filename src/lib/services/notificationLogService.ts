@@ -117,7 +117,9 @@ export async function listNotificationLogs(options?: {
   }
 
   try {
-    const items = await getListItemsByKey("trainingManagerLogs", { top: 500 });
+    const items = await getListItemsByKey("trainingManagerLogs", {
+      top: 2000,
+    });
     const mapped: NotificationLogEntry[] = [];
 
     for (const item of items) {

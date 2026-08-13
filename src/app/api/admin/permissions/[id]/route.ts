@@ -1,4 +1,4 @@
-import { withAdminApi } from "@/lib/api/adminApi";
+import { withSharePointAdminApi } from "@/lib/api/adminApi";
 import {
   deleteAdminPermission,
   updateAdminPermission,
@@ -12,7 +12,7 @@ export async function PATCH(
   context: { params: Promise<{ id: string }> },
 ) {
   const { id } = await context.params;
-  return withAdminApi(
+  return withSharePointAdminApi(
     "PATCH /api/admin/permissions/[id]",
     async (ctx, req) => {
       const body = (await req.json()) as Record<string, unknown>;
@@ -40,7 +40,7 @@ export async function DELETE(
   context: { params: Promise<{ id: string }> },
 ) {
   const { id } = await context.params;
-  return withAdminApi(
+  return withSharePointAdminApi(
     "DELETE /api/admin/permissions/[id]",
     async () => {
       const record = await deleteAdminPermission(id);

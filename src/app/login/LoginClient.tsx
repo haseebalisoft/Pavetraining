@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { signIn } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 
@@ -8,11 +8,17 @@ import styles from "./login.module.css";
 
 type OtpStep = "email" | "code";
 
-export function LoginClient({
-  microsoftButton,
-}: {
-  microsoftButton: ReactNode;
-}) {
+function safeCallbackUrl(value: string | null): string {
+  if (!value || !value.startsWith("/") || value.startsWith("//")) {
+    return "/";
+  }
+  if (value.startsWith("/login") || value.startsWith("/api/")) {
+    return "/";
+  }
+  return value;
+}
+
+export function LoginClient() {
   const searchParams = useSearchParams();
   const autoSignInTried = useRef(false);
 
@@ -24,6 +30,7 @@ export function LoginClient({
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [verifying, setVerifying] = useState(false);
+  const [microsoftBusy, setMicrosoftBusy] = useState(false);
 
   useEffect(() => {
     const authError = searchParams.get("error")?.trim();
@@ -88,21 +95,23 @@ export function LoginClient({
           );
           return;
         }
-        let destination = "/";
-        try {
-          const meRes = await fetch("/api/me");
-          if (meRes.ok) {
-            const me = (await meRes.json()) as { redirectTo?: string };
-            if (
-              me.redirectTo === "/admin" ||
-              me.redirectTo === "/customer" ||
-              me.redirectTo === "/customer/dashboard"
-            ) {
-              destination = me.redirectTo;
+        let destination = safeCallbackUrl(searchParams.get("callbackUrl"));
+        if (destination === "/") {
+          try {
+            const meRes = await fetch("/api/me");
+            if (meRes.ok) {
+              const me = (await meRes.json()) as { redirectTo?: string };
+              if (
+                me.redirectTo === "/admin" ||
+                me.redirectTo === "/customer" ||
+                me.redirectTo === "/customer/dashboard"
+              ) {
+                destination = me.redirectTo;
+              }
             }
+          } catch {
+            // Fall back to home router.
           }
-        } catch {
-          // Fall back to home router.
         }
         window.location.href = destination;
       } catch (err) {
@@ -201,27 +210,46 @@ export function LoginClient({
         );
         return;
       }
-      let destination = "/";
-      try {
-        const meRes = await fetch("/api/me");
-        if (meRes.ok) {
-          const me = (await meRes.json()) as { redirectTo?: string };
-          if (
-            me.redirectTo === "/admin" ||
-            me.redirectTo === "/customer" ||
-            me.redirectTo === "/customer/dashboard"
-          ) {
-            destination = me.redirectTo;
+      let destination = safeCallbackUrl(searchParams.get("callbackUrl"));
+      if (destination === "/") {
+        try {
+          const meRes = await fetch("/api/me");
+          if (meRes.ok) {
+            const me = (await meRes.json()) as { redirectTo?: string };
+            if (
+              me.redirectTo === "/admin" ||
+              me.redirectTo === "/customer" ||
+              me.redirectTo === "/customer/dashboard"
+            ) {
+              destination = me.redirectTo;
+            }
           }
+        } catch {
+          // Fall back to home router.
         }
-      } catch {
-        // Fall back to home router.
       }
       window.location.href = destination;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sign-in failed.");
     } finally {
       setVerifying(false);
+    }
+  }
+
+  async function onMicrosoftSignIn() {
+    setError(null);
+    setMicrosoftBusy(true);
+    try {
+      await signIn("microsoft-entra-id", {
+        callbackUrl: safeCallbackUrl(searchParams.get("callbackUrl")),
+      });
+    } catch (err) {
+      setMicrosoftBusy(false);
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Microsoft sign-in failed. Try again, or use an email one-time code.",
+      );
     }
   }
 
@@ -292,7 +320,14 @@ export function LoginClient({
 
   return (
     <>
-      {microsoftButton}
+      <button
+        className={styles.button}
+        type="button"
+        onClick={() => void onMicrosoftSignIn()}
+        disabled={microsoftBusy}
+      >
+        {microsoftBusy ? "Redirecting to Microsoft…" : "Sign in with Microsoft"}
+      </button>
       <div className={styles.otpBlock}>
         <div className={styles.divider}>
           <span>or</span>

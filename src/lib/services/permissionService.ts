@@ -3,6 +3,7 @@ import "server-only";
 import { cache } from "react";
 
 import { isAlwaysAdminEmail } from "@/lib/auth/protectedAdmins";
+export { isAlwaysAdminEmail } from "@/lib/auth/protectedAdmins";
 import { getSharePointFields } from "@/lib/schema/sharepointSchema";
 import { getSharePointListId } from "@/lib/config/sharepoint";
 import {
@@ -135,7 +136,7 @@ export function roleLabelFor(
   customerRole: CustomerRoleType | null,
 ): string {
   if (customerRole === "TrainingManager") return "Training Manager";
-  if (customerRole === "Supervisor") return "Supervisor";
+  if (customerRole === "Supervisor") return "Customer";
   if (customerRole === "Candidate") return "Candidate";
   return sharePointRole.trim() || "Admin";
 }
@@ -242,8 +243,13 @@ function mapPermissionItem(
   const resolvedAccessScope = accessScope || "Full Company";
   const customerRole = resolveCustomerRole(sharePointRoleType, resolvedAccessScope);
   const isAdminOnly = roleType === "Admin" && customerRole === null;
+  // Strict rule (client sign-off requirement): ONLY literal SharePoint
+  // `RoleType = Admin` can enter /admin. Training Managers, Supervisors,
+  // and Candidates route to /customer/*. `customerRole === null` reads
+  // exactly the same intent — it's true only when the SP role is "Admin".
   const canAccessAdmin =
-    roleType === "Admin" || customerRole === "TrainingManager";
+    sharePointRoleType.trim().toLowerCase() === "admin" &&
+    customerRole === null;
   const canAccessCustomer = customerRole !== null;
   const departmentScopes = Array.from(
     new Set([
@@ -326,6 +332,23 @@ function preferenceOrDefault(
   return asBoolean(fields[internal]);
 }
 
+/**
+ * True when the resolved profile is a full SharePoint Admin — i.e. literal
+ * SharePoint RoleType = "Admin" (customerRole is null).
+ *
+ * The hardcoded protected-admin list intentionally does NOT override this:
+ * that list only exists to (a) prevent the email being deleted / set to
+ * Inactive from the app UI, and (b) act as a fallback synthetic profile
+ * when no SharePoint row exists at all. An existing SharePoint row is
+ * always honoured as-is; to promote a protected admin back to full Admin,
+ * update their SharePoint Permissions row.
+ */
+export function isSharePointAdminForProfile(
+  profile: Pick<PermissionProfile, "customerRole">,
+): boolean {
+  return profile.customerRole === null;
+}
+
 /** Synthetic Admin profile when SharePoint row is missing for a hardcoded email. */
 function alwaysAdminPermissionProfile(email: string): PermissionProfile {
   return {
@@ -391,21 +414,25 @@ export const getActivePermissionByEmail = cache(
       }
     }
 
-    // Prefer Admin (Training Manager) when both roles exist for one email.
+    // Prefer Admin routing (pure SP Admin OR TM legacy routing) when both
+    // roles exist for one email. The strict access rule is applied later on
+    // canAccessAdmin — this pick just decides which row wins when duplicates.
     const chosen =
       matches.find((permission) => permission.roleType === "Admin") ??
       matches[0] ??
       null;
 
-    if (chosen?.canAccessAdmin) {
+    // Hardcoded protected admins only fall back to the synthetic Admin
+    // profile when NO SharePoint row exists for them. If a row exists (even
+    // with a non-admin RoleType), that row is authoritative — matching the
+    // client's rule "existing SharePoint row is always honoured as-is".
+    if (chosen) {
       return chosen;
     }
-
     if (isAlwaysAdminEmail(normalizedEmail)) {
       return alwaysAdminPermissionProfile(normalizedEmail);
     }
-
-    return chosen;
+    return null;
   },
 );
 

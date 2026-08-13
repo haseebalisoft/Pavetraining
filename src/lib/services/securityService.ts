@@ -35,12 +35,32 @@ export async function requireCustomerAccess(
 }
 
 /**
- * Admin portal security: active Admin permission only (literal Admin or Training Manager legacy).
+ * Admin portal security. STRICT after the role-model tighten-up:
+ * only SharePoint `RoleType = Admin` rows can enter /admin. Training
+ * Managers, Supervisors, and Candidates are rejected here and routed to
+ * `/customer/*`. `getAdminContext` enforces both Active status and the
+ * strict `canAccessAdmin`; nothing else needs to check the role again.
  */
 export async function requireAdminAccess(): Promise<AdminContext> {
   const email = await requireAuthenticatedEmail();
-  // getAdminContext enforces Active + canAccessAdmin.
   return getAdminContext(email);
+}
+
+/**
+ * With the strict role model this is functionally equivalent to
+ * `requireAdminAccess` — kept as a separate export so page/API code that
+ * says "SharePoint Admin only" (Bulk Upload commits, Permissions writes)
+ * reads clearly at call-sites. Also protects against a future softening
+ * of `canAccessAdmin`.
+ */
+export async function requireSharePointAdminAccess(): Promise<AdminContext> {
+  const context = await requireAdminAccess();
+  if (!context.isSharePointAdmin) {
+    throw new AccessDeniedError(
+      "This action requires full Admin access.",
+    );
+  }
+  return context;
 }
 
 /**

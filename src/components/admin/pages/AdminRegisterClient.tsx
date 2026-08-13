@@ -424,6 +424,7 @@ export function AdminRegisterClient({
       createUrl={`/api/admin/training-records/${kind}`}
       updateUrl={(id) => `/api/admin/training-records/${kind}/${id}`}
       deleteUrl={(id) => `/api/admin/training-records/${kind}/${id}`}
+      optimistic
       mapResponse={(payload) =>
         ((payload as { records?: AdminTrainingRecord[] }).records ?? [])
       }

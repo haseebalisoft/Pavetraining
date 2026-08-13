@@ -13,6 +13,8 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AdminConfirm } from "@/components/admin/AdminConfirm";
 import { AdminDrawer } from "@/components/admin/AdminDrawer";
 import { useAdminToast } from "@/components/admin/AdminToast";
+import { QuickAddPermissionPersonModal } from "@/components/admin/QuickAddPermissionPersonModal";
+import type { AdminPermissionRecord } from "@/lib/services/adminCrudService";
 import { Breadcrumbs } from "@/components/ui/Breadcrumbs";
 import { LoadingState } from "@/components/ui/States";
 import { readPublicApiError } from "@/lib/errors/publicMessages";
@@ -75,15 +77,41 @@ export interface AdminFieldConfig {
   options?: Array<{ value: string; label: string }>;
   /**
    * When set, select options are built from `permissionPeople` filtered to the
-   * form's selected company (and this Permissions form role).
+   * form's selected company AND the ROUTING role bucket (Admin / Customer /
+   * Candidate). Broader than `sharePointRoleTypeFilter` — "Admin" here matches
+   * both `RoleType = Admin` and `RoleType = Training Manager`. Prefer
+   * `sharePointRoleTypeFilter` for strict matching on the raw SharePoint
+   * `RoleType` value.
    */
   permissionRoleFilter?: "Admin" | "Customer" | "Candidate";
   /**
-   * When true, select/multiselect options come from `departments` filtered to
-   * the form's selected company. Values are department ids (multiselect) or
-   * names (select) depending on `departmentValueMode`.
+   * STRICT SharePoint `RoleType` filter for `permissionPeople` options. Use
+   * for pages that need to pick a specific SharePoint role (Training Manager
+   * / Supervisor / Candidate / Admin) without the routing-bucket permissive
+   * match. Also filters to Active-only rows and to the form's selected
+   * company. Setting this also enables the "+ Add new" quick-create button
+   * on the field (unless `allowQuickAdd={false}` overrides).
    */
-  companyScopedDepartments?: boolean;
+  sharePointRoleTypeFilter?:
+    | "Admin"
+    | "Training Manager"
+    | "Supervisor"
+    | "Candidate";
+  /** Explicit override for the quick-add button next to the dropdown. */
+  allowQuickAdd?: boolean;
+  /**
+   * Controls how the `departments` prop populates a select/multiselect:
+   *   - `true` — filter to departments belonging to the form's selected
+   *     company (default cross-company hygiene for e.g. Workforce Department).
+   *   - `"all"` — show every active department across every company, labelled
+   *     with the company name in parentheses. Use on forms where the admin
+   *     legitimately needs to pick departments regardless of the row's Company
+   *     (e.g. Permissions "Departments allowed" for cross-company TMs).
+   *   - `false` / omitted — use `field.options` instead of `departments`.
+   * Values are department ids (multiselect) or names (select) depending on
+   * `departmentValueMode`.
+   */
+  companyScopedDepartments?: boolean | "all";
   /** How to store the selected department in the form (default: name). */
   departmentValueMode?: "id" | "name";
   placeholder?: string;
@@ -156,6 +184,17 @@ interface AdminCrudPageProps<T extends { id: string }> {
   getCreateDefaults?: (
     rows: T[],
   ) => Partial<Record<string, string | boolean>>;
+  /**
+   * Enables optimistic UI: delete removes the row immediately and the API
+   * runs in the background. On failure the row is silently restored and
+   * added to a small "N action(s) need review" pill above the table.
+   * Update + create likewise apply locally first and revert silently on
+   * failure. No red toasts on background failure — the review pill is the
+   * only surface.
+   */
+  optimistic?: boolean;
+  /** Short row label for the review pill (fallback: `row.id`). */
+  optimisticRowLabel?: (row: T) => string;
 }
 
 type FormState = Record<string, string | boolean>;
@@ -300,6 +339,8 @@ export function AdminCrudPage<T extends { id: string }>({
   stickyColumnKey,
   tableClassName,
   getCreateDefaults,
+  optimistic = false,
+  optimisticRowLabel,
 }: AdminCrudPageProps<T>) {
   const { pushToast } = useAdminToast();
   const router = useRouter();
@@ -321,6 +362,141 @@ export function AdminCrudPage<T extends { id: string }>({
   const [pendingSave, setPendingSave] = useState<FormState | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
+  /**
+   * Quick-add for role-filtered dropdowns (Training Manager / Supervisor).
+   * When non-null the QuickAddPermissionPersonModal is open; on save the
+   * caller field auto-selects the new person and the permission people list
+   * is refreshed. Null when no quick-add is in progress.
+   */
+  const [quickAdd, setQuickAdd] = useState<{
+    fieldName: string;
+    role: "Training Manager" | "Supervisor" | "Candidate";
+    companyId: string;
+    companyName: string;
+  } | null>(null);
+  /**
+   * Optimistic UI: rows whose background API call failed after we already
+   * updated the client. The pill above the table lets the admin see and
+   * retry them without a red toast interrupting their flow.
+   */
+  const [reviewOps, setReviewOps] = useState<
+    Array<{
+      key: string;
+      op: "delete" | "update" | "create";
+      label: string;
+      errorMessage: string;
+      when: number;
+      retry: () => void;
+    }>
+  >([]);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  /**
+   * Session-persisted set: IDs the user has already asked to delete but whose
+   * SharePoint cascade hasn't confirmed yet. Refreshing the /admin/companies
+   * page picks these up so the row does NOT come back mid-cascade. Auto-expires
+   * after HIDDEN_TTL_MS to avoid hiding a row forever if the API silently died.
+   */
+  const HIDDEN_TTL_MS = 10 * 60 * 1000;
+  const hiddenStorageKey = `admin-crud-hidden::${listUrl}`;
+  const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => new Set());
+  const rowLabelFor = useCallback(
+    (row: T): string => {
+      if (optimisticRowLabel) return optimisticRowLabel(row);
+      const anyRow = row as unknown as Record<string, unknown>;
+      const candidates = [
+        anyRow.companyName,
+        anyRow.candidateName,
+        anyRow.name,
+        anyRow.title,
+      ];
+      for (const value of candidates) {
+        if (typeof value === "string" && value.trim()) return value.trim();
+      }
+      return `#${row.id}`;
+    },
+    [optimisticRowLabel],
+  );
+
+  // Load persisted "hidden" IDs on first mount and prune expired ones.
+  useEffect(() => {
+    if (!optimistic) return;
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.sessionStorage.getItem(hiddenStorageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Record<string, number>;
+      const now = Date.now();
+      const kept = new Set<string>();
+      const pruned: Record<string, number> = {};
+      for (const [id, when] of Object.entries(parsed)) {
+        if (typeof when !== "number") continue;
+        if (now - when > HIDDEN_TTL_MS) continue;
+        kept.add(id);
+        pruned[id] = when;
+      }
+      setHiddenIds(kept);
+      window.sessionStorage.setItem(hiddenStorageKey, JSON.stringify(pruned));
+    } catch {
+      // sessionStorage disabled / quota — safe to fall back to in-memory only.
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hiddenStorageKey, optimistic]);
+
+  const persistHidden = useCallback(
+    (next: Set<string>) => {
+      if (typeof window === "undefined") return;
+      try {
+        const map: Record<string, number> = {};
+        const now = Date.now();
+        for (const id of next) map[id] = now;
+        window.sessionStorage.setItem(hiddenStorageKey, JSON.stringify(map));
+      } catch {
+        // ignore
+      }
+    },
+    [hiddenStorageKey],
+  );
+
+  const addHiddenId = useCallback(
+    (id: string) => {
+      setHiddenIds((current) => {
+        if (current.has(id)) return current;
+        const next = new Set(current);
+        next.add(id);
+        persistHidden(next);
+        return next;
+      });
+    },
+    [persistHidden],
+  );
+
+  const removeHiddenId = useCallback(
+    (id: string) => {
+      setHiddenIds((current) => {
+        if (!current.has(id)) return current;
+        const next = new Set(current);
+        next.delete(id);
+        persistHidden(next);
+        return next;
+      });
+    },
+    [persistHidden],
+  );
+
+  // Apply session-persisted hidden IDs to the SSR payload on mount so a
+  // hard refresh mid-cascade doesn't briefly re-show a row the user has
+  // already asked to delete.
+  useEffect(() => {
+    if (!optimistic) return;
+    if (hiddenIds.size === 0) return;
+    setRows((current) => {
+      const filtered = current.filter((row) => !hiddenIds.has(row.id));
+      if (filtered.length === current.length) return current;
+      onRowsChange?.(filtered);
+      return filtered;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hiddenIds, optimistic]);
   // Prefer live API refresh when opening create/edit; fall back to prop.
   // Do not sync prop→state in an effect — unstable array identities (or
   // default `= []`) re-trigger setState every render and hit max update depth.
@@ -329,7 +505,9 @@ export function AdminCrudPage<T extends { id: string }>({
   >(null);
   const livePermissionPeople = permissionPeopleLive ?? permissionPeople;
   const needsPermissionPeople = fields.some(
-    (field) => Boolean(field.permissionRoleFilter),
+    (field) =>
+      Boolean(field.permissionRoleFilter) ||
+      Boolean(field.sharePointRoleTypeFilter),
   );
   const openedFromQueryRef = useRef(false);
 
@@ -403,7 +581,17 @@ export function AdminCrudPage<T extends { id: string }>({
         throw new Error(await readError(response));
       }
       const payload = await response.json();
-      const nextRows = mapResponse(payload);
+      let nextRows = mapResponse(payload);
+      // Optimistic: if a row is still "hidden" (its background delete has
+      // not confirmed on SharePoint yet), keep it out of the visible list.
+      // Once SharePoint returns without the row, we drop it from hiddenIds.
+      if (optimistic && hiddenIds.size > 0) {
+        const seenInPayload = new Set(nextRows.map((row) => row.id));
+        nextRows = nextRows.filter((row) => !hiddenIds.has(row.id));
+        for (const id of hiddenIds) {
+          if (!seenInPayload.has(id)) removeHiddenId(id);
+        }
+      }
       setRows(nextRows);
       onRowsChange?.(nextRows);
     } catch (error) {
@@ -414,7 +602,15 @@ export function AdminCrudPage<T extends { id: string }>({
     } finally {
       setLoading(false);
     }
-  }, [listUrl, mapResponse, onRowsChange, pushToast]);
+  }, [
+    listUrl,
+    mapResponse,
+    onRowsChange,
+    pushToast,
+    optimistic,
+    hiddenIds,
+    removeHiddenId,
+  ]);
 
   const filtered = useMemo(() => {
     let next = rows;
@@ -471,12 +667,115 @@ export function AdminCrudPage<T extends { id: string }>({
     setSelectedIds(new Set(filtered.map((row) => row.id)));
   }
 
+  /**
+   * Runs the DELETE fetch and applies post-success side effects (toast,
+   * training-matrix recompute notes). Shared between the synchronous path
+   * and the optimistic (background) path.
+   */
+  async function performDeleteRequest(id: string) {
+    if (!deleteUrl) return;
+    const response = await fetch(deleteUrl(id), { method: "DELETE" });
+    if (!response.ok) throw new Error(await readError(response));
+    const payload = (await response.json().catch(() => null)) as {
+      matrixSync?: {
+        summary?: {
+          updated?: number;
+          created?: number;
+          skipped?: number;
+          errors?: number;
+        };
+        items?: Array<{ warnings?: string[]; skipReason?: string }>;
+      };
+    } | null;
+    const sync = payload?.matrixSync?.summary;
+    if (sync?.errors) {
+      pushToast(
+        `Training Matrix recompute failed (${sync.errors} error(s)) after delete — check the Training Matrix for this candidate.`,
+        "error",
+      );
+    }
+    for (const item of payload?.matrixSync?.items ?? []) {
+      for (const note of [item.skipReason, ...(item.warnings ?? [])]) {
+        if (note?.trim()) pushToast(note.trim());
+      }
+    }
+  }
+
   async function deleteOne(id: string) {
     if (!deleteUrl) return;
     const ok = window.confirm(
       `Delete this record?${deleteConfirmExtra ? `\n\n${deleteConfirmExtra}` : "\n\nThis cannot be undone."}`,
     );
     if (!ok) return;
+
+    // Optimistic path: hide the row immediately, run DELETE silently in the
+    // background. On failure we silently put the row back and log it to the
+    // review pill above the table.
+    if (optimistic) {
+      const snapshot = rows.find((row) => row.id === id);
+      if (!snapshot) return;
+      setSelectedIds((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+      setRows((current) => {
+        const next = current.filter((row) => row.id !== id);
+        onRowsChange?.(next);
+        return next;
+      });
+      // Keep this ID hidden across a page refresh until SharePoint confirms.
+      addHiddenId(id);
+      if (editing?.id === id) {
+        setDrawerOpen(false);
+        setEditing(null);
+      }
+      // Immediate confirmation for the user — same tone as the sync path.
+      pushToast("Record deleted", "success");
+      const restore = () => {
+        setRows((current) => {
+          if (current.some((row) => row.id === id)) return current;
+          const next = [...current, snapshot];
+          onRowsChange?.(next);
+          return next;
+        });
+      };
+      void (async () => {
+        try {
+          await performDeleteRequest(id);
+          // Reconcile with SharePoint truth after the cascade settles.
+          void load();
+        } catch (error) {
+          restore();
+          removeHiddenId(id);
+          const message =
+            error instanceof Error ? error.message : "Delete failed";
+          const reviewKey = `delete-${id}-${Date.now()}`;
+          setReviewOps((prev) => [
+            ...prev,
+            {
+              key: reviewKey,
+              op: "delete",
+              label: rowLabelFor(snapshot),
+              errorMessage: message,
+              when: Date.now(),
+              retry: () => {
+                setReviewOps((current) =>
+                  current.filter((entry) => entry.key !== reviewKey),
+                );
+                void deleteOne(id);
+              },
+            },
+          ]);
+        }
+        // On success, keep the hidden-ID entry a little longer so a fast
+        // reload right after the cascade completes doesn't briefly show the
+        // row before SharePoint's list read reflects the delete. It will
+        // naturally age out via HIDDEN_TTL_MS pruning on next mount.
+      })();
+      return;
+    }
+
     setDeleting(true);
     try {
       const response = await fetch(deleteUrl(id), { method: "DELETE" });
@@ -554,6 +853,94 @@ export function AdminCrudPage<T extends { id: string }>({
       }`,
     );
     if (!ok) return;
+
+    // Optimistic bulk delete: hide every selected row instantly, keep them
+    // hidden across page refresh (sessionStorage), show the pending pill.
+    // POST /bulk-delete runs in the background; on failure any rows that
+    // couldn't be deleted come silently back with a review entry.
+    if (optimistic) {
+      const snapshotById = new Map<string, T>();
+      for (const id of ids) {
+        const row = rows.find((r) => r.id === id);
+        if (row) snapshotById.set(id, row);
+      }
+      const targetIds = Array.from(snapshotById.keys());
+      if (targetIds.length === 0) return;
+      setSelectedIds(new Set());
+      setRows((current) => {
+        const target = new Set(targetIds);
+        const next = current.filter((row) => !target.has(row.id));
+        onRowsChange?.(next);
+        return next;
+      });
+      setHiddenIds((current) => {
+        const next = new Set(current);
+        for (const id of targetIds) next.add(id);
+        persistHidden(next);
+        return next;
+      });
+      pushToast(
+        `Deleted ${targetIds.length} record${targetIds.length === 1 ? "" : "s"}`,
+        "success",
+      );
+
+      void (async () => {
+        try {
+          const response = await fetch(bulkDeleteUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ids: targetIds }),
+          });
+          if (!response.ok) throw new Error(await readError(response));
+          void load();
+        } catch (error) {
+          // Full-batch failure — restore everything silently. Partial failures
+          // (some ids deleted, some not) are handled by the reconciling load()
+          // call above: it sees which rows SharePoint no longer has and
+          // clears their hidden entries; the rest naturally come back.
+          const message =
+            error instanceof Error ? error.message : "Bulk delete failed";
+          const reviewKey = `bulk-delete-${Date.now()}`;
+          const failedIds = Array.from(snapshotById.keys());
+          setRows((current) => {
+            const known = new Set(current.map((row) => row.id));
+            const restored = [...current];
+            for (const id of failedIds) {
+              if (known.has(id)) continue;
+              const row = snapshotById.get(id);
+              if (row) restored.push(row);
+            }
+            onRowsChange?.(restored);
+            return restored;
+          });
+          setHiddenIds((current) => {
+            const next = new Set(current);
+            for (const id of failedIds) next.delete(id);
+            persistHidden(next);
+            return next;
+          });
+          setReviewOps((prev) => [
+            ...prev,
+            {
+              key: reviewKey,
+              op: "delete",
+              label: `${failedIds.length} record${failedIds.length === 1 ? "" : "s"}`,
+              errorMessage: message,
+              when: Date.now(),
+              retry: () => {
+                setReviewOps((current) =>
+                  current.filter((entry) => entry.key !== reviewKey),
+                );
+                setSelectedIds(new Set(failedIds));
+                void deleteSelected();
+              },
+            },
+          ]);
+        }
+      })();
+      return;
+    }
+
     setDeleting(true);
     try {
       const response = await fetch(bulkDeleteUrl, {
@@ -782,6 +1169,74 @@ export function AdminCrudPage<T extends { id: string }>({
           {warnings.map((warning) => (
             <p key={warning}>{warning}</p>
           ))}
+        </div>
+      ) : null}
+
+      {reviewOps.length > 0 ? (
+        <div className={styles.reviewBar}>
+          <span aria-hidden="true">⚠</span>
+          <span>
+            {reviewOps.length} action
+            {reviewOps.length === 1 ? "" : "s"} need review
+          </span>
+          <button
+            type="button"
+            className={styles.reviewBarButton}
+            onClick={() => setReviewOpen((value) => !value)}
+          >
+            {reviewOpen ? "Hide" : "Review"}
+          </button>
+          <button
+            type="button"
+            className={styles.reviewBarClear}
+            onClick={() => {
+              setReviewOps([]);
+              setReviewOpen(false);
+            }}
+          >
+            Dismiss
+          </button>
+        </div>
+      ) : null}
+      {reviewOpen && reviewOps.length > 0 ? (
+        <div className={styles.reviewPanel} role="dialog" aria-label="Pending actions">
+          <ul className={styles.reviewList}>
+            {reviewOps.map((entry) => (
+              <li key={entry.key} className={styles.reviewItem}>
+                <div>
+                  <p className={styles.reviewItemTitle}>
+                    {entry.op === "delete"
+                      ? "Delete"
+                      : entry.op === "update"
+                        ? "Update"
+                        : "Create"}
+                    : {entry.label}
+                  </p>
+                  <p className={styles.reviewItemError}>{entry.errorMessage}</p>
+                </div>
+                <div className={styles.reviewItemActions}>
+                  <button
+                    type="button"
+                    className={styles.reviewItemRetry}
+                    onClick={entry.retry}
+                  >
+                    Retry
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.reviewItemDismiss}
+                    onClick={() =>
+                      setReviewOps((current) =>
+                        current.filter((row) => row.key !== entry.key),
+                      )
+                    }
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
         </div>
       ) : null}
 
@@ -1222,8 +1677,18 @@ export function AdminCrudPage<T extends { id: string }>({
                 .toLowerCase();
               const selectedCompanyId = String(form.companyId ?? "").trim();
               const valueMode = field.departmentValueMode ?? "id";
+              const scopeMode = field.companyScopedDepartments;
               let multiOptions = field.options ?? [];
-              if (field.companyScopedDepartments) {
+              if (scopeMode === "all") {
+                // Cross-company mode: every active department, tagged with its
+                // company so the admin can tell duplicates apart.
+                multiOptions = departments.map((dept) => ({
+                  value: valueMode === "name" ? dept.name : dept.id,
+                  label: dept.companyName
+                    ? `${dept.name} — ${dept.companyName}`
+                    : dept.name,
+                }));
+              } else if (scopeMode) {
                 if (!selectedCompanyName && !selectedCompanyId) {
                   multiOptions = [];
                 } else {
@@ -1248,42 +1713,52 @@ export function AdminCrudPage<T extends { id: string }>({
                       value: valueMode === "name" ? dept.name : dept.id,
                       label: dept.name,
                     }));
-                  // Keep already-selected values visible even when the caller
-                  // only passed Active departments (e.g. one was deactivated
-                  // after being assigned) — otherwise the checkbox for it just
-                  // vanishes and looks like the assignment silently dropped.
-                  for (const value of selected) {
-                    const key = value.trim().toLowerCase();
-                    if (
-                      !multiOptions.some(
-                        (option) =>
-                          option.value.trim().toLowerCase() === key ||
-                          option.label.trim().toLowerCase() === key,
-                      )
-                    ) {
-                      multiOptions = [
-                        ...multiOptions,
-                        { value, label: `${value} (inactive)` },
-                      ];
-                    }
+                }
+              }
+              if (scopeMode) {
+                // Keep already-selected values visible even when the caller
+                // only passed Active departments (e.g. one was deactivated
+                // after being assigned) — otherwise the checkbox for it just
+                // vanishes and looks like the assignment silently dropped.
+                // Applies to both "scoped" and "all" modes.
+                for (const value of selected) {
+                  const key = value.trim().toLowerCase();
+                  if (
+                    !multiOptions.some(
+                      (option) =>
+                        option.value.trim().toLowerCase() === key ||
+                        option.label.trim().toLowerCase() === key,
+                    )
+                  ) {
+                    multiOptions = [
+                      ...multiOptions,
+                      { value, label: `${value} (inactive)` },
+                    ];
                   }
                 }
               }
               control = (
                 <fieldset className={styles.field}>
                   <legend className={styles.fieldLabel}>{field.label}</legend>
-                  {field.companyScopedDepartments &&
+                  {field.companyScopedDepartments === true &&
                   !selectedCompanyName &&
                   !selectedCompanyId ? (
                     <p className={styles.helpText}>
                       Select a company first to choose departments.
                     </p>
                   ) : null}
-                  {field.companyScopedDepartments &&
+                  {field.companyScopedDepartments === true &&
                   (selectedCompanyName || selectedCompanyId) &&
                   multiOptions.length === 0 ? (
                     <p className={styles.helpText}>
                       No departments for this company yet. Add them under
+                      Departments.
+                    </p>
+                  ) : null}
+                  {field.companyScopedDepartments === "all" &&
+                  multiOptions.length === 0 ? (
+                    <p className={styles.helpText}>
+                      No active departments exist yet. Add them under
                       Departments.
                     </p>
                   ) : null}
@@ -1350,6 +1825,91 @@ export function AdminCrudPage<T extends { id: string }>({
                       : company.companyName,
                   label: company.companyName,
                 }));
+              } else if (field.sharePointRoleTypeFilter) {
+                // STRICT: match the SharePoint RoleType exactly. Preferred
+                // over `permissionRoleFilter` for pages that need to pick a
+                // specific role (Training Manager, Supervisor, etc.) — the
+                // routing-role bucket used by `permissionRoleFilter` conflates
+                // Admin + Training Manager and Supervisor + Candidate.
+                const target = field.sharePointRoleTypeFilter;
+                const emptyLabel =
+                  target === "Training Manager"
+                    ? "No active Training Managers in Permissions for this company"
+                    : target === "Supervisor"
+                      ? "No active Supervisors in Permissions for this company"
+                      : `No active ${target}s in Permissions for this company`;
+                const resolvedCompanyId =
+                  selectedCompanyId ||
+                  companies.find(
+                    (company) =>
+                      company.companyName.trim().toLowerCase() ===
+                      selectedCompanyName,
+                  )?.id ||
+                  "";
+                if (!selectedCompanyName && !resolvedCompanyId) {
+                  options = [
+                    { value: "", label: "Select a company first…" },
+                  ];
+                } else {
+                  const targetKey = target.toLowerCase().replace(/\s+/g, " ");
+                  const scoped = livePermissionPeople.filter((person) => {
+                    if ((person.status || "").toLowerCase() !== "active") {
+                      return false;
+                    }
+                    const spRole = (person.sharePointRoleType || "")
+                      .trim()
+                      .toLowerCase()
+                      .replace(/\s+/g, " ");
+                    // Accept the exact SharePoint RoleType. Legacy rows with
+                    // an empty RoleType are excluded from strict filters —
+                    // they should be reclassified before appearing in a
+                    // role-specific picker.
+                    if (spRole !== targetKey) {
+                      // Allow "TrainingManager" as a legacy spelling.
+                      if (
+                        !(target === "Training Manager" && spRole === "trainingmanager")
+                      ) {
+                        return false;
+                      }
+                    }
+                    if (
+                      resolvedCompanyId &&
+                      person.companyId &&
+                      person.companyId !== resolvedCompanyId
+                    ) {
+                      return false;
+                    }
+                    if (
+                      !person.companyId &&
+                      selectedCompanyName &&
+                      (person.companyName || "").trim().toLowerCase() !==
+                        selectedCompanyName
+                    ) {
+                      return false;
+                    }
+                    return true;
+                  });
+                  const peopleOptions = scoped
+                    .map((person) => {
+                      const value = person.name?.trim() || person.userEmail;
+                      if (!value) return null;
+                      return {
+                        value,
+                        label: person.name?.trim()
+                          ? `${person.name.trim()} (${person.userEmail})`
+                          : person.userEmail,
+                      };
+                    })
+                    .filter(
+                      (option): option is { value: string; label: string } =>
+                        option !== null,
+                    )
+                    .sort((a, b) => a.label.localeCompare(b.label));
+                  options =
+                    peopleOptions.length === 0
+                      ? [{ value: "", label: emptyLabel }]
+                      : [{ value: "", label: "— None —" }, ...peopleOptions];
+                }
               } else if (field.permissionRoleFilter) {
                 const role = field.permissionRoleFilter;
                 const emptyLabel =
@@ -1444,6 +2004,44 @@ export function AdminCrudPage<T extends { id: string }>({
                       ? [{ value: "", label: emptyLabel }]
                       : [{ value: "", label: "— None —" }, ...peopleOptions];
                 }
+              } else if (field.companyScopedDepartments === "all") {
+                const valueMode = field.departmentValueMode ?? "name";
+                const allDepts = departments;
+                options =
+                  allDepts.length === 0
+                    ? [
+                        {
+                          value: "",
+                          label:
+                            "No departments — add them under Departments",
+                        },
+                      ]
+                    : [
+                        { value: "", label: "— None —" },
+                        ...allDepts.map((dept) => ({
+                          value: valueMode === "id" ? dept.id : dept.name,
+                          label: dept.companyName
+                            ? `${dept.name} — ${dept.companyName}`
+                            : dept.name,
+                        })),
+                      ];
+                const currentDept = String(form[field.name] ?? "").trim();
+                if (
+                  currentDept &&
+                  !options.some(
+                    (option) =>
+                      option.value.trim().toLowerCase() ===
+                      currentDept.toLowerCase(),
+                  )
+                ) {
+                  options = [
+                    ...options,
+                    {
+                      value: currentDept,
+                      label: `${currentDept} (not in Departments list)`,
+                    },
+                  ];
+                }
               } else if (field.companyScopedDepartments) {
                 const valueMode = field.departmentValueMode ?? "name";
                 if (!selectedCompanyName && !selectedCompanyId) {
@@ -1506,6 +2104,24 @@ export function AdminCrudPage<T extends { id: string }>({
                 options = field.options ?? [];
               }
 
+              // Quick-add button is shown next to any strict-RoleType dropdown
+              // unless the field explicitly opts out.
+              const quickAddEnabled =
+                Boolean(field.sharePointRoleTypeFilter) &&
+                field.allowQuickAdd !== false;
+              const quickAddCompanyId =
+                selectedCompanyId ||
+                companies.find(
+                  (company) =>
+                    company.companyName.trim().toLowerCase() ===
+                    selectedCompanyName,
+                )?.id ||
+                "";
+              const quickAddCompanyName =
+                String(form.companyName ?? "").trim() ||
+                companies.find((company) => company.id === selectedCompanyId)
+                  ?.companyName ||
+                "";
               control = (
                 <label className={styles.field}>
                   <span className={styles.fieldLabel}>{field.label}</span>
@@ -1607,7 +2223,8 @@ export function AdminCrudPage<T extends { id: string }>({
                       });
                     }}
                   >
-                    {field.permissionRoleFilter ? null : (
+                    {field.permissionRoleFilter ||
+                    field.sharePointRoleTypeFilter ? null : (
                       <option value="">Select…</option>
                     )}
                     {options.map((option) => (
@@ -1616,6 +2233,27 @@ export function AdminCrudPage<T extends { id: string }>({
                       </option>
                     ))}
                   </select>
+                  {quickAddEnabled && quickAddCompanyId && quickAddCompanyName ? (
+                    <button
+                      type="button"
+                      className={styles.quickAddInlineButton}
+                      onClick={() => {
+                        setQuickAdd({
+                          fieldName: field.name,
+                          role:
+                            field.sharePointRoleTypeFilter as
+                              | "Training Manager"
+                              | "Supervisor"
+                              | "Candidate",
+                          companyId: quickAddCompanyId,
+                          companyName: quickAddCompanyName,
+                        });
+                      }}
+                      disabled={field.readOnly}
+                    >
+                      + Add new {field.sharePointRoleTypeFilter}
+                    </button>
+                  ) : null}
                 </label>
               );
             } else {
@@ -1673,6 +2311,31 @@ export function AdminCrudPage<T extends { id: string }>({
           if (pendingSave) {
             void persist(pendingSave);
           }
+        }}
+      />
+
+      <QuickAddPermissionPersonModal
+        open={quickAdd !== null}
+        role={quickAdd?.role ?? "Training Manager"}
+        companyId={quickAdd?.companyId ?? ""}
+        companyName={quickAdd?.companyName ?? ""}
+        onClose={() => setQuickAdd(null)}
+        onCreated={(record: AdminPermissionRecord) => {
+          // Refresh the underlying dropdown data.
+          void refreshPermissionPeople();
+          // Auto-select the newly created person on the field that opened
+          // this modal. The dropdown value is the Permissions row's Name
+          // (or userEmail fallback) — matches what applyWorkforcePersonLookups
+          // resolves back to a Lookup id.
+          const selectValue = record.name?.trim() || record.userEmail;
+          if (quickAdd) {
+            setForm((current) => ({
+              ...current,
+              [quickAdd.fieldName]: selectValue,
+            }));
+          }
+          pushToast(`Added ${record.name ?? record.userEmail}`, "success");
+          setQuickAdd(null);
         }}
       />
     </div>

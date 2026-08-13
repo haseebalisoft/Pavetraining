@@ -178,15 +178,19 @@ const fields: AdminFieldConfig[] = [
     name: "trainingManager",
     label: "Training manager",
     type: "select",
-    /** Permissions Training Manager (Admin form role), scoped to selected company. */
-    permissionRoleFilter: "Admin",
+    /**
+     * STRICT SharePoint RoleType filter — only rows where
+     * `RoleType = Training Manager` (Active, matching company). "+ Add new"
+     * quick-create appears next to the dropdown.
+     */
+    sharePointRoleTypeFilter: "Training Manager",
   },
   {
     name: "supervisor",
     label: "Supervisor",
     type: "select",
-    /** Permissions Supervisor (Customer form role), scoped to selected company. */
-    permissionRoleFilter: "Customer",
+    /** STRICT SharePoint RoleType = Supervisor only. */
+    sharePointRoleTypeFilter: "Supervisor",
   },
   { name: "candidateAddress", label: "Candidate Address", type: "text" },
   { name: "email", label: "Email", type: "email" },
@@ -255,6 +259,7 @@ export function AdminWorkforceClient({
       createUrl="/api/admin/workforce"
       updateUrl={(id) => `/api/admin/workforce/${id}`}
       deleteUrl={(id) => `/api/admin/workforce/${id}`}
+      optimistic
       deleteConfirmExtra="This removes the candidate from Workforce and the Training Matrix. Past NPORS / EUSR / Streetworks / In-House / NVQ records are kept for history."
       mapResponse={(payload) =>
         ((payload as { records?: AdminWorkforceRecord[] }).records ?? [])

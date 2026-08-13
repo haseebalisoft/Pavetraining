@@ -473,6 +473,27 @@ export function findPermissionPerson(
 }
 
 /**
+ * Deterministic pending email so a name-only TM/Supervisor can still be
+ * created on the Permissions list (SharePoint UserEmail is required). The
+ * same name+role always maps to the same address, so a second import reuses
+ * the row. Admin can replace it with a real email later to enable login.
+ */
+export function placeholderPermissionEmail(
+  displayName: string,
+  roleType: RoleType,
+): string {
+  const slug =
+    displayName
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ".")
+      .replace(/^\.+|\.+$/g, "")
+      .slice(0, 48) || "person";
+  const role = roleType === "Admin" ? "tm" : "sp";
+  return `pending.${role}.${slug}@pave.local`;
+}
+
+/**
  * Resolve or create a Permissions List row for Workforce TM/Supervisor lookups.
  * SharePoint scheme: these columns are Lookups to Permissions.Name.
  */
@@ -481,24 +502,30 @@ export async function ensurePermissionPerson(input: {
   roleType: RoleType;
   companyId?: string | null;
   people?: PermissionPersonRef[];
+  /**
+   * Real email when the spreadsheet provided one. If omitted, a deterministic
+   * `pending.{tm|sp}.{name}@pave.local` placeholder is used so the person
+   * still appears on the Permissions list (login stays disabled until an
+   * admin replaces it with a real mailbox).
+   */
+  userEmail?: string | null;
 }): Promise<{ person: PermissionPersonRef; people: PermissionPersonRef[]; created: boolean }> {
   const displayName = input.displayName.trim();
   if (!displayName) {
     throw new ValidationError("Display name is required for permission person.");
   }
 
+  const providedEmail = input.userEmail?.trim().toLowerCase() || null;
+  const userEmail =
+    providedEmail ?? placeholderPermissionEmail(displayName, input.roleType);
   let people = input.people ?? (await loadPermissionPeople());
-  const existing = findPermissionPerson(people, displayName);
+  // Match by email first (stable, including a previous placeholder), then name.
+  const existing =
+    findPermissionPerson(people, userEmail) ??
+    findPermissionPerson(people, displayName);
   if (existing) {
     return { person: existing, people, created: false };
   }
-
-  const slug = displayName
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ".")
-    .replace(/^\.+|\.+$/g, "")
-    .slice(0, 40);
-  const userEmail = `import.${slug || "person"}.${Date.now()}@pave.local`;
   const fields = getSharePointFields("permissions");
   const payload: SharePointFields = toSharePointFields("permissions", {
     userEmail,
@@ -536,6 +563,21 @@ async function applyWorkforcePersonLookups(
     companyId?: string | null;
     createIfMissing?: boolean;
     people?: PermissionPersonRef[];
+    /**
+     * When true AND createIfMissing is false, a name that can't be resolved
+     * against Permissions falls back to the sidecar text column instead of
+     * throwing. Bulk import always creates the Permissions row (placeholder
+     * email if needed), so this is only a last-resort fallback.
+     */
+    allowUnresolvedText?: boolean;
+    /**
+     * Optional real email for the Training Manager. When provided AND the
+     * name doesn't match, `ensurePermissionPerson` creates a real Permissions
+     * row keyed on this email.
+     */
+    trainingManagerEmail?: string | null;
+    /** Same for Supervisor. */
+    supervisorEmail?: string | null;
   },
 ): Promise<{
   people: PermissionPersonRef[];
@@ -543,8 +585,12 @@ async function applyWorkforcePersonLookups(
   supervisorName: string | null;
 }> {
   // Never write free text into Lookup columns — SharePoint rejects / ignores it.
+  // TrainingManagerText / SupervisorText are NOT on the live Workforce list;
+  // sending them makes Graph reject the whole item create.
   delete payload[workforceFields.trainingManager];
   delete payload[workforceFields.supervisor];
+  delete payload[workforceFields.trainingManagerText];
+  delete payload[workforceFields.supervisorText];
 
   let people = options?.people ?? (await loadPermissionPeople());
   let trainingManagerName: string | null = null;
@@ -554,15 +600,28 @@ async function applyWorkforcePersonLookups(
     value: string | null | undefined,
     roleType: RoleType,
     lookupIdField: string,
+    email: string | null | undefined,
   ): Promise<string | null> => {
     const text = value?.trim();
     if (!text) {
       payload[lookupIdField] = null;
       return null;
     }
+    const trimmedEmail = email?.trim().toLowerCase() || null;
     const key = permissionPersonKey(text);
     const companyId = options?.companyId ?? null;
+    // Prefer email match (stable across name variants), then fall back to name.
     let hit =
+      (trimmedEmail
+        ? (people.find((row) => {
+            if (row.roleType !== roleType) return false;
+            if ((row.status || "").toLowerCase() !== "active") return false;
+            if (companyId && row.companyId && row.companyId !== companyId) {
+              return false;
+            }
+            return permissionPersonKey(row.userEmail ?? "") === trimmedEmail;
+          }) ?? null)
+        : null) ??
       people.find((row) => {
         if (row.roleType !== roleType) return false;
         if ((row.status || "").toLowerCase() !== "active") return false;
@@ -570,26 +629,40 @@ async function applyWorkforcePersonLookups(
           return false;
         }
         return (
-          permissionPersonKey(row.name ?? "") === key || row.userEmail === key
+          permissionPersonKey(row.name ?? "") === key ||
+          row.userEmail === key
         );
-      }) ?? null;
+      }) ??
+      null;
     if (!hit) {
       hit = findPermissionPerson(people, text);
       if (hit && hit.roleType !== roleType) {
         hit = null;
       }
     }
-    if (!hit && options?.createIfMissing) {
+    if (
+      !hit &&
+      options?.createIfMissing &&
+      (trimmedEmail || options.allowUnresolvedText)
+    ) {
+      // Real email when provided; otherwise a pending.{tm|sp}.{name}@pave.local
+      // placeholder so bulk import still adds the person to Permissions.
+      // Admin form (allowUnresolvedText false) still requires an email.
       const ensured = await ensurePermissionPerson({
         displayName: text,
         roleType,
         companyId: options.companyId,
         people,
+        userEmail: trimmedEmail,
       });
       people = ensured.people;
       hit = ensured.person;
     }
     if (!hit) {
+      if (options?.allowUnresolvedText) {
+        payload[lookupIdField] = null;
+        return text;
+      }
       throw new ValidationError(
         `"${text}" was not found in Permissions as an active ${
           roleType === "Admin" ? "Training Manager" : "Supervisor"
@@ -605,6 +678,8 @@ async function applyWorkforcePersonLookups(
       optionalText(input.trainingManager),
       "Admin",
       `${workforceFields.trainingManager}LookupId`,
+      options?.trainingManagerEmail ??
+        optionalText(input.trainingManagerEmail),
     );
   }
   if (input.supervisor !== undefined) {
@@ -612,6 +687,7 @@ async function applyWorkforcePersonLookups(
       optionalText(input.supervisor),
       "Customer",
       `${workforceFields.supervisor}LookupId`,
+      options?.supervisorEmail ?? optionalText(input.supervisorEmail),
     );
   }
 
@@ -892,12 +968,14 @@ function mapWorkforce(
     trainingManager:
       asLookupOrString(item.fields[workforceFields.trainingManager]) ??
       asNullableString(item.fields[workforceFields.trainingManager]) ??
+      asNullableString(item.fields[workforceFields.trainingManagerText]) ??
       (trainingManagerLookupId && permissionNameById
         ? (permissionNameById.get(trainingManagerLookupId) ?? null)
         : null),
     supervisor:
       asLookupOrString(item.fields[workforceFields.supervisor]) ??
       asNullableString(item.fields[workforceFields.supervisor]) ??
+      asNullableString(item.fields[workforceFields.supervisorText]) ??
       (supervisorLookupId && permissionNameById
         ? (permissionNameById.get(supervisorLookupId) ?? null)
         : null),
@@ -1164,6 +1242,11 @@ export async function createAdminWorkforce(input: Record<string, unknown>) {
     companyId: company.id,
     createIfMissing,
     people: seededPeople,
+    // In bulk mode, name-only TM/Supervisor still auto-create a Permissions
+    // row (placeholder email). Sidecar text is only a last-resort fallback.
+    allowUnresolvedText: isBulk,
+    trainingManagerEmail: optionalText(input.trainingManagerEmail),
+    supervisorEmail: optionalText(input.supervisorEmail),
   });
   const departmentLookups = await applyWorkforceDepartmentLookup(
     payload,
@@ -1377,6 +1460,8 @@ export async function updateAdminWorkforce(
   const createIfMissing =
     input.createMissingPermissionPeople !== false &&
     input.createMissingPermissionPeople !== "false";
+  const isBulkUpdate =
+    input.bulkMode === true || input.bulkMode === "true";
   const seededPeople = Array.isArray(input.permissionPeople)
     ? (input.permissionPeople as PermissionPersonRef[])
     : undefined;
@@ -1392,6 +1477,9 @@ export async function updateAdminWorkforce(
     companyId: companyIdForPeople,
     createIfMissing,
     people: seededPeople,
+    allowUnresolvedText: isBulkUpdate,
+    trainingManagerEmail: optionalText(input.trainingManagerEmail),
+    supervisorEmail: optionalText(input.supervisorEmail),
   });
   const departmentLookups = await applyWorkforceDepartmentLookup(
     payload,
@@ -1424,8 +1512,6 @@ export async function updateAdminWorkforce(
   // Keep the candidate's REAL Training Matrix Update row in step with profile
   // edits. Skipped for bulk (the importer syncs once at the end); best-effort
   // so a matrix hiccup never fails the workforce update.
-  const isBulkUpdate =
-    input.bulkMode === true || input.bulkMode === "true";
   if (!isBulkUpdate) {
     try {
       await syncWorkforceToTrainingMatrix(toMatrixProfile(mapped));
@@ -2041,6 +2127,98 @@ export async function createAdminMatrix(input: Record<string, unknown>) {
     dateOfBirth: mapped.dateOfBirth ?? candidate.dateOfBirth,
     columnValues: buildMatrixColumnValues(mapped, undefined, candidate),
   };
+}
+
+/**
+ * Repair action: attach an existing Matrix Update row to a specific Workforce
+ * candidate. Fixes Orphan / Needs Review rows that the upload could not link
+ * automatically (name typo, DOB missing, etc.). Writes `WorkforceItemId`,
+ * `WorkforceNumber`, `CompanyItemId`, `CompanyNumber`, and flips
+ * `MatrixLinkStatus` to "Linked" on the SharePoint row. Idempotent —
+ * re-running with the same workforceId is a no-op.
+ *
+ * Only works for `example:` matrix rows (the "Training Matrix Update" list).
+ * Trying to link a `workforce-only:` row (a workforce candidate with no
+ * matrix row yet) throws — those get linked automatically via the standard
+ * workforce → matrix sync.
+ */
+export async function linkAdminMatrixToWorkforce(
+  matrixId: string,
+  workforceId: string,
+): Promise<AdminMatrixRecord> {
+  if (!matrixId.startsWith("example:")) {
+    throw new ValidationError(
+      "Only imported Matrix rows can be relinked. Edit a Workforce-only row directly.",
+    );
+  }
+  const exampleId = stripExampleMatrixId(matrixId);
+  if (!exampleId) throw new NotFoundError("Matrix record not found.");
+
+  const trimmedWorkforceId = String(workforceId ?? "").trim();
+  if (!trimmedWorkforceId) {
+    throw new ValidationError("Workforce candidate is required.");
+  }
+
+  const [workforce, existingRows] = await Promise.all([
+    listAdminWorkforce(),
+    listTrainingMatrixExampleRows(),
+  ]);
+  const candidate = workforce.find((row) => row.id === trimmedWorkforceId);
+  if (!candidate) {
+    throw new NotFoundError("Workforce candidate not found.");
+  }
+  const existing = existingRows.find((row) => row.id === exampleId);
+  if (!existing) throw new NotFoundError("Matrix record not found.");
+
+  // Reject re-linking to a candidate that already owns a DIFFERENT matrix row
+  // — merging would silently drop data. Admin can delete the other row first
+  // if that's the intent.
+  const conflict = existingRows.find(
+    (row) =>
+      row.id !== exampleId &&
+      String(row.workforceItemId ?? "").trim() === trimmedWorkforceId,
+  );
+  if (conflict) {
+    throw new ValidationError(
+      `Workforce candidate "${candidate.candidateName}" is already linked to Matrix row #${conflict.id}. Delete that row first or pick a different candidate.`,
+    );
+  }
+
+  await upsertTrainingMatrixExampleRow({
+    candidateName: candidate.candidateName,
+    existingItemId: exampleId,
+    // Provide the display name change so SharePoint's Name column stays in
+    // step with the linked Workforce candidate — but keep every date cell as
+    // it is (writer only touches keys we pass in `source`).
+    source: { Name: candidate.candidateName },
+    profileFields: {
+      Company: candidate.companyName,
+      "Workforce Number": candidate.workforceNumber,
+    },
+    linkFields: {
+      numbers: {
+        WorkforceItemId: Number(candidate.id),
+        ...(candidate.companyId
+          ? { CompanyItemId: Number(candidate.companyId) }
+          : {}),
+      },
+      text: {
+        WorkforceNumber: candidate.workforceNumber ?? "",
+        ...(candidate.companyNumber
+          ? { CompanyNumber: candidate.companyNumber }
+          : {}),
+        CandidateName: candidate.candidateName,
+        MatrixLinkStatus: "Linked",
+      },
+    },
+  });
+
+  const refreshed = await listAdminMatrix(null, { includeUnlinked: true });
+  const updated = refreshed.find((row) => row.id === matrixId);
+  if (!updated) {
+    throw new NotFoundError("Matrix record not found after link.");
+  }
+  return updated;
 }
 
 export async function deleteAdminMatrix(id: string) {
@@ -5206,7 +5384,30 @@ async function applyPermissionDepartmentCoverage(
 function rethrowPermissionWriteError(error: unknown): never {
   if (error instanceof ValidationError) throw error;
   const message = error instanceof Error ? error.message : String(error);
-  const lower = message.toLowerCase();
+  // Graph errors carry the underlying SharePoint code in a `body` string
+  // (JSON with .code / .innerError.code). Extract that so the user sees the
+  // specific reason instead of a generic 500 wrapper.
+  const rawBody =
+    error && typeof error === "object" && "body" in error
+      ? String((error as { body?: unknown }).body ?? "")
+      : "";
+  const combined = `${message} ${rawBody}`;
+  const lower = combined.toLowerCase();
+  // Always log the raw error server-side so `npm run dev` terminal shows
+  // exactly what SharePoint said. The user only sees the wrapped message.
+  console.error("[permissions write] SharePoint rejected write", {
+    message,
+    body: rawBody || undefined,
+  });
+
+  // Specific: lookup parent could not be resolved. Usually Company or
+  // DepartmentsAllowed pointing at a row that does not exist on the list the
+  // lookup column is actually bound to.
+  if (lower.includes("invalidlookupparent")) {
+    throw new ValidationError(
+      "SharePoint rejected the Permissions write because a Lookup parent (Company or DepartmentsAllowed) could not be resolved. Either the selected row no longer exists, or the Permissions list's Company / DepartmentsAllowed columns are bound to a different SharePoint list than SHAREPOINT_COMPANY_LIST_ID / SHAREPOINT_DEPARTMENTS_LIST_ID. Ask a Site Owner to verify the Permissions list column settings.",
+    );
+  }
   if (
     lower.includes("accessscope") ||
     lower.includes("roletype") ||
@@ -5222,8 +5423,14 @@ function rethrowPermissionWriteError(error: unknown): never {
     lower.includes("invalid request") ||
     lower.includes("invalidrequest")
   ) {
+    // Include the raw SharePoint code (if any) so the admin can act on it.
+    const codeMatch = combined.match(/"code"\s*:\s*"([^"]+)"/gi);
+    const codes = codeMatch
+      ? Array.from(new Set(codeMatch.map((m) => m.replace(/"code"\s*:\s*"|"$/g, ""))))
+      : [];
+    const codeHint = codes.length ? ` SharePoint code: ${codes.join(", ")}.` : "";
     throw new ValidationError(
-      "SharePoint rejected this permission. Check the company is selected and try again. If it keeps failing, ask a Site Owner to verify the Permissions list columns.",
+      `SharePoint rejected this permission.${codeHint} Check the company is selected and try again. If it keeps failing, ask a Site Owner to verify the Permissions list columns.`,
     );
   }
   throw new ValidationError(

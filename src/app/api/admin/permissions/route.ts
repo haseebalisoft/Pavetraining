@@ -1,4 +1,4 @@
-import { withAdminApi } from "@/lib/api/adminApi";
+import { withAdminApi, withSharePointAdminApi } from "@/lib/api/adminApi";
 import {
   createAdminPermission,
   listAdminPermissions,
@@ -7,6 +7,11 @@ import { logPermissionDepartmentScopeUpdate } from "@/lib/services/auditLogServi
 
 export const dynamic = "force-dynamic";
 
+/**
+ * GET is intentionally left on the standard admin guard: Training Managers
+ * need to read Permissions rows to populate Workforce "Training Manager" /
+ * "Supervisor" dropdowns. Only WRITES require pure SharePoint Admin.
+ */
 export async function GET(request: Request) {
   return withAdminApi(
     "GET /api/admin/permissions",
@@ -17,7 +22,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  return withAdminApi(
+  return withSharePointAdminApi(
     "POST /api/admin/permissions",
     async (context, req) => {
       const body = (await req.json()) as Record<string, unknown>;

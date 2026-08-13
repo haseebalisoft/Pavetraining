@@ -47,7 +47,7 @@ const IMPORT_OPTIONS: Array<{
   {
     value: "workforce",
     label: "Workforce / Candidates",
-    hint: "Use Workforce list.xlsx exactly. Preview shows every Excel column. Missing companies are created on import.",
+    hint: "Use Workforce list.xlsx exactly. Missing companies, departments, training managers, and supervisors are created automatically. No row limit.",
     implemented: true,
   },
   {
@@ -379,7 +379,7 @@ function BulkCommitClock({
           </p>
         ) : null}
         {progress.parallel ? (
-          <p className={styles.commitClockParallel}>Running 5 in parallel</p>
+          <p className={styles.commitClockParallel}>Running 12 in parallel</p>
         ) : null}
         <p className={styles.commitClockHint}>Please keep this window open…</p>
       </div>
@@ -393,8 +393,6 @@ export function AdminBulkUploadClient() {
   const [file, setFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [suppressNotifications, setSuppressNotifications] = useState(true);
-  const [autoCreateMissingDepartments, setAutoCreateMissingDepartments] =
-    useState(false);
   const [duplicateMode, setDuplicateMode] =
     useState<BulkDuplicateMode>("skip");
   const [previewing, setPreviewing] = useState(false);
@@ -514,10 +512,8 @@ export function AdminBulkUploadClient() {
         suppressNotifications ? "true" : "false",
       );
       if (importType === "workforce") {
-        form.set(
-          "autoCreateMissingDepartments",
-          autoCreateMissingDepartments ? "true" : "false",
-        );
+        form.set("autoCreateMissingCompanies", "true");
+        form.set("autoCreateMissingDepartments", "true");
       }
       const response = await fetch("/api/admin/bulk-upload/preview", {
         method: "POST",
@@ -555,7 +551,6 @@ export function AdminBulkUploadClient() {
       setPreviewing(false);
     }
   }, [
-    autoCreateMissingDepartments,
     file,
     importType,
     pushToast,
@@ -664,10 +659,10 @@ export function AdminBulkUploadClient() {
           fileName: preview.fileName,
           duplicateMode,
           suppressNotifications,
+          autoCreateMissingCompanies:
+            preview.importType === "workforce" ? true : false,
           autoCreateMissingDepartments:
-            preview.importType === "workforce"
-              ? autoCreateMissingDepartments
-              : false,
+            preview.importType === "workforce" ? true : false,
           rows: preview.rows.map((row) => ({
             rowNumber: row.rowNumber,
             fields: row.fields,
@@ -734,12 +729,35 @@ export function AdminBulkUploadClient() {
       const warningN =
         result.summary.warningRows ??
         result.rows.filter((row) => row.status === "Warning").length;
+      // Matrix imports save Needs Review rows to SharePoint even when they
+      // can't be auto-linked to Workforce. Reporting them as "imported=0"
+      // makes the client think the upload failed — the client rule is
+      // "N Matrix rows uploaded. X linked, Y need review, Z empty rows
+      // skipped, W failed." Every non-matrix import keeps its existing
+      // Imported / Skipped / Warnings phrasing.
+      const isMatrix = result.importType === "trainingMatrix";
       if (result.summary.importedRows === 0 && result.summary.errorRows > 0) {
         pushToast(
           firstError?.messages.slice(-1)[0] ??
             `Import failed for ${result.summary.errorRows} row(s). Check Messages in the table.`,
           "error",
         );
+      } else if (isMatrix) {
+        const savedRows = result.summary.importedRows + warningN;
+        const parts = [
+          `${savedRows} Matrix row${savedRows === 1 ? "" : "s"} uploaded`,
+          `${result.summary.importedRows} linked`,
+        ];
+        if (warningN > 0) parts.push(`${warningN} need review`);
+        if (result.summary.skippedRows > 0) {
+          parts.push(
+            `${result.summary.skippedRows} empty row${result.summary.skippedRows === 1 ? "" : "s"} skipped`,
+          );
+        }
+        if (result.summary.errorRows > 0) {
+          parts.push(`${result.summary.errorRows} failed`);
+        }
+        pushToast(`${parts.join(", ")}.`, result.summary.errorRows > 0 ? "error" : "success");
       } else if (result.summary.errorRows > 0) {
         pushToast(
           `Import finished with errors: ${result.summary.importedRows} imported, ${result.summary.skippedRows} skipped, ${result.summary.errorRows} failed` +
@@ -767,7 +785,6 @@ export function AdminBulkUploadClient() {
       setCommitProgress(null);
     }
   }, [
-    autoCreateMissingDepartments,
     duplicateMode,
     preview,
     pushToast,
@@ -1021,22 +1038,6 @@ export function AdminBulkUploadClient() {
                 Suppress customer notifications during import (recommended)
               </span>
             </label>
-
-            {importType === "workforce" ? (
-              <label className={styles.bulkCheckRow}>
-                <input
-                  type="checkbox"
-                  checked={autoCreateMissingDepartments}
-                  onChange={(event) =>
-                    setAutoCreateMissingDepartments(event.target.checked)
-                  }
-                />
-                <span>
-                  Auto-create missing departments (off = rows with an unknown
-                  department for their company are rejected)
-                </span>
-              </label>
-            ) : null}
 
             <div className={styles.bulkActions}>
               <button

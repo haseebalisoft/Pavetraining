@@ -57,14 +57,23 @@ export function extractCategoryCode(
 }
 
 async function loadLookupCaches(): Promise<MatrixCategoryLookupCaches> {
+  // These four scans return the FULL Workforce / Company / NPORS Categories
+  // / Matrix Category Records lists and combined can easily exceed the
+  // Next.js unstable_cache 2MB limit — which throws an unhandledRejection
+  // when it tries to persist the result. Read uncached (the bulk import is
+  // a one-shot job, so cache re-use gives us nothing here).
   const [workforceItems, companyItems, categoryItems, existingRecords] =
     await Promise.all([
-      getListItemsByKey("workforce", { top: 5000 }),
-      getListItemsByKey("company", { top: 5000 }),
-      getListItemsByKey("nporsCategories", { top: 5000 }).catch(() => []),
-      getListItemsByKey("trainingMatrixCategoryRecords", { top: 5000 }).catch(
-        () => [],
-      ),
+      getListItemsByKey("workforce", { top: 5000, skipCache: true }),
+      getListItemsByKey("company", { top: 5000, skipCache: true }),
+      getListItemsByKey("nporsCategories", {
+        top: 5000,
+        skipCache: true,
+      }).catch(() => []),
+      getListItemsByKey("trainingMatrixCategoryRecords", {
+        top: 5000,
+        skipCache: true,
+      }).catch(() => []),
     ]);
 
   const workforceByName = new Map<string, string>();

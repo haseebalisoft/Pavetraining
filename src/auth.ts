@@ -56,29 +56,32 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     async signIn({ user }) {
       const email = user.email?.trim().toLowerCase();
       if (!email) return;
-      try {
-        const { getMeContext } = await import(
-          "@/lib/services/customerContextService"
-        );
-        const { logLogin } = await import("@/lib/services/auditLogService");
-        const me = await getMeContext(email);
-        if (!me) {
+      // Never block the OAuth callback on SharePoint audit writes.
+      void (async () => {
+        try {
+          const { getMeContext } = await import(
+            "@/lib/services/customerContextService"
+          );
+          const { logLogin } = await import("@/lib/services/auditLogService");
+          const me = await getMeContext(email);
+          if (!me) {
+            await logLogin({
+              userEmail: email,
+              success: false,
+              errorMessage: "No active permission for this account.",
+            });
+            return;
+          }
           await logLogin({
             userEmail: email,
-            success: false,
-            errorMessage: "No active permission for this account.",
+            roleType: me.roleLabel ?? me.role,
+            company: me.companyName,
+            success: true,
           });
-          return;
+        } catch (error) {
+          console.error("[audit] signIn event logging failed", error);
         }
-        await logLogin({
-          userEmail: email,
-          roleType: me.roleLabel ?? me.role,
-          company: me.companyName,
-          success: true,
-        });
-      } catch (error) {
-        console.error("[audit] signIn event logging failed", error);
-      }
+      })();
     },
   },
   callbacks: {

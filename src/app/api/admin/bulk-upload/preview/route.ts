@@ -1,11 +1,11 @@
-import { withAdminApi, ValidationError } from "@/lib/api/adminApi";
+import { withSharePointAdminApi, ValidationError } from "@/lib/api/adminApi";
 import { logBulkUpload } from "@/lib/services/auditLogService";
 import { previewBulkUpload } from "@/lib/services/bulkUpload/bulkUploadService";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
-  return withAdminApi(
+  return withSharePointAdminApi(
     "POST /api/admin/bulk-upload/preview",
     async (context, req) => {
       const contentType = req.headers.get("content-type") ?? "";
@@ -26,15 +26,22 @@ export async function POST(request: Request) {
           ? true
           : !["false", "0", "no"].includes(String(suppressRaw).toLowerCase());
       const autoCreateRaw = form.get("autoCreateMissingCompanies");
-      const autoCreateMissingCompanies = ["true", "1", "yes"].includes(
-        String(autoCreateRaw ?? "").toLowerCase(),
-      );
+      const autoCreateMissingCompanies =
+        autoCreateRaw === null || autoCreateRaw === undefined
+          ? true
+          : !["false", "0", "no"].includes(
+              String(autoCreateRaw).toLowerCase(),
+            );
       const autoCreateDepartmentsRaw = form.get(
         "autoCreateMissingDepartments",
       );
-      const autoCreateMissingDepartments = ["true", "1", "yes"].includes(
-        String(autoCreateDepartmentsRaw ?? "").toLowerCase(),
-      );
+      const autoCreateMissingDepartments =
+        autoCreateDepartmentsRaw === null ||
+        autoCreateDepartmentsRaw === undefined
+          ? true
+          : !["false", "0", "no"].includes(
+              String(autoCreateDepartmentsRaw).toLowerCase(),
+            );
 
       try {
         const result = await previewBulkUpload({

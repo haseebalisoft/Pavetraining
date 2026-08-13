@@ -79,10 +79,20 @@ const workforceFields = {
    */
   trainingManager: "Trainingmanager",
   /**
+   * Not a live Workforce column. Kept for read fallback only — never write
+   * this name to Graph (it is rejected as unrecognized).
+   */
+  trainingManagerText: "TrainingManagerText",
+  /**
    * Lookup → Permissions List (Name). Live type is Lookup — write
    * `SupervisorLookupId`, never free text (SharePoint scheme).
    */
   supervisor: "Supervisor",
+  /**
+   * Not a live Workforce column. Kept for read fallback only — never write
+   * this name to Graph.
+   */
+  supervisorText: "SupervisorText",
   email: "Email",
   candidateAddress: "CandidateAddress",
   contactNumber: "Contactnumber",
@@ -436,7 +446,9 @@ export const SHAREPOINT_LISTS = {
       departmentText: "Department (lookup)",
       status: "Status",
       trainingManager: "Training manager",
+      trainingManagerText: "Training manager (display fallback)",
       supervisor: "Supervisor",
+      supervisorText: "Supervisor (display fallback)",
       email: "Email",
       candidateAddress: "Candidate address",
       contactNumber: "Contact number",

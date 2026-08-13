@@ -6,14 +6,22 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
+  const sourceParam = url.searchParams.get("source");
   const query: AuditLogQuery = {
     search: url.searchParams.get("search"),
     action: url.searchParams.get("action"),
     success: (url.searchParams.get("success") as AuditLogQuery["success"]) ?? "all",
     entityType: url.searchParams.get("entityType"),
+    source:
+      sourceParam === "admin" ||
+      sourceParam === "customer" ||
+      sourceParam === "notification" ||
+      sourceParam === "sharepoint"
+        ? sourceParam
+        : "all",
     from: url.searchParams.get("from"),
     to: url.searchParams.get("to"),
-    top: Number(url.searchParams.get("top") ?? "200"),
+    top: Number(url.searchParams.get("top") ?? "8000"),
   };
 
   return withAdminApi(
@@ -25,6 +33,8 @@ export async function GET(request: Request) {
       );
       return {
         logs,
+        total: logs.length,
+        fetchedAt: new Date().toISOString(),
         configured,
         usingConsoleFallback: !configured,
         // Export intentionally disabled for now (admin-only + safe export later).

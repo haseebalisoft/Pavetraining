@@ -87,12 +87,14 @@ function mapWorkforceItem(
     trainingManager:
       asLookupOrString(fields[workforceFields.trainingManager]) ??
       asNullableString(fields[workforceFields.trainingManager]) ??
+      asNullableString(fields[workforceFields.trainingManagerText]) ??
       (trainingManagerLookupId && permissionNameById
         ? (permissionNameById.get(trainingManagerLookupId) ?? null)
         : null),
     supervisor:
       asLookupOrString(fields[workforceFields.supervisor]) ??
       asNullableString(fields[workforceFields.supervisor]) ??
+      asNullableString(fields[workforceFields.supervisorText]) ??
       (supervisorLookupId && permissionNameById
         ? (permissionNameById.get(supervisorLookupId) ?? null)
         : null),

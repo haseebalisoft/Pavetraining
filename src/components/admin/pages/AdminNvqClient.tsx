@@ -392,6 +392,7 @@ export function AdminNvqClient({
       createUrl="/api/admin/nvq"
       updateUrl={(id) => `/api/admin/nvq/${id}`}
       deleteUrl={(id) => `/api/admin/nvq/${id}`}
+      optimistic
       mapResponse={(payload) =>
         ((payload as { records?: AdminNvqRecord[] }).records ?? [])
       }

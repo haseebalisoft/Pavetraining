@@ -138,6 +138,7 @@ export function AdminDepartmentsClient({
       createUrl="/api/admin/departments"
       updateUrl={(id) => `/api/admin/departments/${id}`}
       deleteUrl={(id) => `/api/admin/departments/${id}`}
+      optimistic
       getCreateDefaults={() => ({ status: DEFAULT_DEPARTMENT_STATUS })}
       mapResponse={(payload) =>
         ((payload as { records?: AdminDepartmentRecord[] }).records ?? [])

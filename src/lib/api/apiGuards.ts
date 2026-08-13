@@ -19,12 +19,19 @@ import {
 } from "@/lib/services/securityService";
 import type { AdminContext, CustomerContext } from "@/types/models";
 
-export {
+import {
   AccessDeniedError,
   NotFoundError,
   UnauthorizedError,
   ValidationError,
 } from "@/lib/services/errorHandler";
+
+export {
+  AccessDeniedError,
+  NotFoundError,
+  UnauthorizedError,
+  ValidationError,
+};
 
 function entityFromRouteLabel(routeLabel: string): string {
   return routeLabel.replace(/^(GET|POST|PATCH|PUT|DELETE)\s+/i, "").trim();
@@ -77,17 +84,21 @@ export async function withCustomerApi<T>(
   },
 ): Promise<NextResponse> {
   let email = "unknown";
+  const method = request.method.toUpperCase();
+  const shouldAudit =
+    options?.audit ??
+    (method === "POST" || method === "PATCH" || method === "PUT" || method === "DELETE");
   try {
     const context = await requireCustomerAccess(request);
     email = context.loggedInEmail;
     const data = await handler(context, request);
 
-    if (options?.audit) {
+    if (shouldAudit) {
       await writeAuditLog({
         userEmail: email,
         action: actionFromRequest(request),
-        entityName: options.entityName ?? entityFromRouteLabel(routeLabel),
-        entityType: inferEntityType(routeLabel, options.entityName),
+        entityName: options?.entityName ?? entityFromRouteLabel(routeLabel),
+        entityType: inferEntityType(routeLabel, options?.entityName),
         itemId: extractItemId(data),
         success: true,
         roleType: context.roleLabel,
@@ -98,14 +109,15 @@ export async function withCustomerApi<T>(
 
     return NextResponse.json(data);
   } catch (error) {
-    if (options?.audit) {
+    if (shouldAudit) {
       await writeAuditLog({
         userEmail: email,
         action: actionFromRequest(request),
-        entityName: options.entityName ?? entityFromRouteLabel(routeLabel),
-        entityType: inferEntityType(routeLabel, options.entityName),
+        entityName: options?.entityName ?? entityFromRouteLabel(routeLabel),
+        entityType: inferEntityType(routeLabel, options?.entityName),
         success: false,
         errorMessage: sanitizeAuditError(error),
+        roleType: undefined,
         request,
       });
     }
@@ -176,7 +188,7 @@ export async function withAdminApi<T>(
           entityType,
           itemId,
           success: true,
-          roleType: "Admin",
+          roleType: context.roleLabel || "Admin",
           request,
         });
       }
@@ -206,6 +218,40 @@ export async function withAdminApi<T>(
 
     return handleApiError(routeLabel, error);
   }
+}
+
+/**
+ * Same as `withAdminApi` but rejects Training Managers with 403. Use for
+ * routes that only pure SharePoint Admins (or hardcoded protected admins)
+ * are allowed to hit — Bulk Upload commits, Permissions writes, etc.
+ *
+ * Non-SP admins hitting these routes get a normal AccessDeniedError JSON
+ * response with `status: 403`; the nav already hides these pages for them,
+ * so the API layer is defence-in-depth against direct HTTP requests.
+ */
+export async function withSharePointAdminApi<T>(
+  routeLabel: string,
+  handler: (context: AdminContext, request: Request) => Promise<T>,
+  options?: {
+    errorMessage?: string;
+    audit?: boolean;
+    entityName?: string;
+  },
+  request: Request = new Request("http://localhost"),
+): Promise<NextResponse> {
+  return withAdminApi(
+    routeLabel,
+    async (context, req) => {
+      if (!context.isSharePointAdmin) {
+        throw new AccessDeniedError(
+          "This action requires full Admin access. Training Managers cannot perform it.",
+        );
+      }
+      return handler(context, req);
+    },
+    options,
+    request,
+  );
 }
 
 export function handleApiError(
