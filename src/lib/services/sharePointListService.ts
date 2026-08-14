@@ -578,6 +578,7 @@ function fieldsForGraphWrite(
 export async function createListItemByKey(
   listKey: SharePointListKey,
   fields: SharePointFields,
+  options?: { skipCacheRevalidate?: boolean },
 ): Promise<SharePointListItem> {
   const siteRoot = getSharePointSiteApiRoot();
   const listId = getSharePointListId(listKey);
@@ -592,7 +593,9 @@ export async function createListItemByKey(
     fields?: SharePointFields;
   };
 
-  markListMutated(listKey);
+  if (!options?.skipCacheRevalidate) {
+    markListMutated(listKey);
+  }
 
   return {
     id: String(created.id),

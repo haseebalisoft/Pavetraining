@@ -242,7 +242,7 @@ export function AdminWorkforceClient({
   return (
     <AdminCrudPage<AdminWorkforceRecord>
       title="Workforce"
-      description="Manage candidates and link them to companies. After you pick a company, Training manager / Supervisor list only Active Permissions people for that company (RoleType Training Manager / Supervisor). Department is company-scoped (Admin → Departments). Upload a candidate photo from the row actions — it appears on their profile."
+      description="Manage candidates and link them to companies. After you pick a company, Training manager / Supervisor list Active Permissions people for that company (RoleType Training Manager / Supervisor). A name already saved on the candidate stays selected even if they are not in that Permissions list, and you can still pick someone else. Department is company-scoped (Admin → Departments). Upload a candidate photo from the row actions — it appears on their profile."
       columns={columns}
       fields={fields}
       companies={companies}

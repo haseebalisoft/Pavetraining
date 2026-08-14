@@ -272,7 +272,12 @@ export async function writeAuditEvent(input: AuditEventInput): Promise<void> {
       role: input.roleType ?? null,
     });
 
-    await createListItemByKey("trainingManagerLogs", fields);
+    // Append-only audit rows. Do not revalidateTag here — this writer is
+    // often called from RSC pages, where cache invalidation during render
+    // is unsupported.
+    await createListItemByKey("trainingManagerLogs", fields, {
+      skipCacheRevalidate: true,
+    });
   } catch (error) {
     console.error("[audit] Failed to write Training Manager Logs entry", error);
     console.info("[audit:fallback]", entry);

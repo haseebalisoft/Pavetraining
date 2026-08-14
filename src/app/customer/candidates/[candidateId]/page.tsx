@@ -1,7 +1,9 @@
+import { after } from "next/server";
 import { redirect } from "next/navigation";
 
 import { CandidateProfileView } from "@/components/customer/CandidateProfileView";
 import { auth } from "@/auth";
+import { logCandidateView } from "@/lib/services/auditLogService";
 import { assertCandidateAccess } from "@/lib/services/customerAccessService";
 import { getCustomerContext } from "@/lib/services/customerContextService";
 import { getCustomerMatrixRecords } from "@/lib/services/customerDashboardService";
@@ -23,6 +25,20 @@ export const dynamic = "force-dynamic";
 
 function nameKey(value: string | null | undefined): string {
   return (value ?? "").trim().toLowerCase();
+}
+
+function scheduleCandidateViewLog(input: {
+  userEmail: string;
+  roleType: string;
+  company: string | null;
+  candidateId: string;
+  candidateName: string | null;
+  success: boolean;
+  errorMessage?: string;
+}): void {
+  after(() => {
+    void logCandidateView(input);
+  });
 }
 
 function matchesCandidate(
@@ -70,8 +86,7 @@ export default async function CustomerCandidateProfilePage({
   try {
     assertCompanyMatch(candidate.companyName, context.companyName);
   } catch {
-    const { logCandidateView } = await import("@/lib/services/auditLogService");
-    await logCandidateView({
+    scheduleCandidateViewLog({
       userEmail: email,
       roleType: context.roleLabel,
       company: context.companyName,
@@ -84,8 +99,7 @@ export default async function CustomerCandidateProfilePage({
   }
 
   if (!assertCandidateAccess(candidate, context)) {
-    const { logCandidateView } = await import("@/lib/services/auditLogService");
-    await logCandidateView({
+    scheduleCandidateViewLog({
       userEmail: email,
       roleType: context.roleLabel,
       company: context.companyName,
@@ -97,8 +111,7 @@ export default async function CustomerCandidateProfilePage({
     redirect("/access-denied");
   }
 
-  const { logCandidateView } = await import("@/lib/services/auditLogService");
-  await logCandidateView({
+  scheduleCandidateViewLog({
     userEmail: email,
     roleType: context.roleLabel,
     company: context.companyName,

@@ -87,6 +87,99 @@ console.log(bold("\n1. strict sharePointRoleTypeFilter"));
   assert("TM dropdown for company 20 shows only that company's TMs", otherCompanyTms.map((p) => p.id), ["3"]);
 }
 
+// ---- 1b. Assigned Workforce name stays selectable even if not in the
+// Active+RoleType Permissions filter (AdminCrudPage
+// withAssignedWorkforcePersonOption).
+function withAssignedWorkforcePersonOption(
+  peopleOptions,
+  assignedRaw,
+  allPeople,
+  emptyLabel,
+) {
+  const assigned = String(assignedRaw ?? "").trim();
+  const assignedKey = assigned.toLowerCase();
+  const hasExactValue = peopleOptions.some(
+    (option) => option.value.trim().toLowerCase() === assignedKey,
+  );
+  let merged = peopleOptions;
+  if (assigned && !hasExactValue) {
+    const match = allPeople.find((person) => {
+      const name = (person.name || "").trim().toLowerCase();
+      const email = (person.userEmail || "").trim().toLowerCase();
+      return name === assignedKey || email === assignedKey;
+    });
+    merged = [
+      {
+        value: assigned,
+        label: match
+          ? `${match.name} (${match.userEmail || "no-email"})`
+          : assigned,
+      },
+      ...peopleOptions,
+    ];
+  }
+  if (merged.length === 0) {
+    return [{ value: "", label: emptyLabel }];
+  }
+  return [{ value: "", label: "— None —" }, ...merged];
+}
+
+console.log(bold("\n1b. assigned TM/Supervisor stays selected"));
+{
+  const emptyLabel = "No active Training Managers in Permissions for this company";
+  const activeTmOptions = sharePointRoleTypeFilter(people, "Training Manager", "10").map(
+    (p) => ({ value: p.name, label: p.name }),
+  );
+
+  const withAssignedAdmin = withAssignedWorkforcePersonOption(
+    activeTmOptions,
+    "Real Admin",
+    people,
+    emptyLabel,
+  );
+  assert(
+    "assigned Admin name is kept in TM dropdown without adding other Admins",
+    withAssignedAdmin.map((o) => o.value),
+    ["", "Real Admin", "Amelia TM", "Legacy TM"],
+  );
+
+  const withAssignedInactive = withAssignedWorkforcePersonOption(
+    activeTmOptions,
+    "Inactive TM",
+    people,
+    emptyLabel,
+  );
+  assert(
+    "assigned inactive TM is kept in TM dropdown",
+    withAssignedInactive.map((o) => o.value),
+    ["", "Inactive TM", "Amelia TM", "Legacy TM"],
+  );
+
+  const noneAssignedEmpty = withAssignedWorkforcePersonOption(
+    [],
+    "",
+    people,
+    emptyLabel,
+  );
+  assert(
+    "empty Permissions list still shows the empty label when nothing is assigned",
+    noneAssignedEmpty,
+    [{ value: "", label: emptyLabel }],
+  );
+
+  const assignedOnly = withAssignedWorkforcePersonOption(
+    [],
+    "Lewis Grant",
+    people,
+    emptyLabel,
+  );
+  assert(
+    "assigned name is shown even when Permissions has no matching TMs",
+    assignedOnly.map((o) => o.value),
+    ["", "Lewis Grant"],
+  );
+}
+
 // ---- 2. Sidecar text write path ----------------------------------------
 // Mirror of applyWorkforcePersonLookups (with the four new branches).
 

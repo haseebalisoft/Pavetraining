@@ -89,8 +89,11 @@ export interface AdminFieldConfig {
    * for pages that need to pick a specific SharePoint role (Training Manager
    * / Supervisor / Candidate / Admin) without the routing-bucket permissive
    * match. Also filters to Active-only rows and to the form's selected
-   * company. Setting this also enables the "+ Add new" quick-create button
-   * on the field (unless `allowQuickAdd={false}` overrides).
+   * company. A name already stored on the row (e.g. Workforce Training
+   * Manager) is still shown as the current selection even if that person is
+   * missing from the filtered Permissions list. Setting this also enables
+   * the "+ Add new" quick-create button on the field (unless
+   * `allowQuickAdd={false}` overrides).
    */
   sharePointRoleTypeFilter?:
     | "Admin"
@@ -117,6 +120,62 @@ export interface AdminFieldConfig {
   placeholder?: string;
   /** Optional section heading shown above this field group in the drawer. */
   section?: string;
+}
+
+type AdminSelectOption = { value: string; label: string };
+
+function permissionPersonToOption(
+  person: AdminPermissionPersonOption,
+): AdminSelectOption | null {
+  const value = person.name?.trim() || person.userEmail.trim();
+  if (!value) return null;
+  return {
+    value,
+    label: person.name?.trim()
+      ? `${person.name.trim()} (${person.userEmail})`
+      : person.userEmail,
+  };
+}
+
+/**
+ * Keep a Workforce (or similar) assignment visible in a Permissions-backed
+ * dropdown. Other options stay Active + role + company filtered; the stored
+ * name is injected when it is not in that list so the select can display it
+ * and the admin can still pick someone else.
+ */
+function withAssignedWorkforcePersonOption(
+  peopleOptions: AdminSelectOption[],
+  assignedRaw: string,
+  allPeople: AdminPermissionPersonOption[],
+  emptyLabel: string,
+): AdminSelectOption[] {
+  const assigned = assignedRaw.trim();
+  const assignedKey = assigned.toLowerCase();
+  const hasExactValue = peopleOptions.some(
+    (option) => option.value.trim().toLowerCase() === assignedKey,
+  );
+
+  let merged = peopleOptions;
+  if (assigned && !hasExactValue) {
+    const match = allPeople.find((person) => {
+      const name = (person.name || "").trim().toLowerCase();
+      const email = (person.userEmail || "").trim().toLowerCase();
+      return name === assignedKey || email === assignedKey;
+    });
+    const fromMatch = match ? permissionPersonToOption(match) : null;
+    merged = [
+      {
+        value: assigned,
+        label: fromMatch?.label ?? assigned,
+      },
+      ...peopleOptions,
+    ];
+  }
+
+  if (merged.length === 0) {
+    return [{ value: "", label: emptyLabel }];
+  }
+  return [{ value: "", label: "— None —" }, ...merged];
 }
 
 export interface AdminColumn<T> {
@@ -1905,10 +1964,12 @@ export function AdminCrudPage<T extends { id: string }>({
                         option !== null,
                     )
                     .sort((a, b) => a.label.localeCompare(b.label));
-                  options =
-                    peopleOptions.length === 0
-                      ? [{ value: "", label: emptyLabel }]
-                      : [{ value: "", label: "— None —" }, ...peopleOptions];
+                  options = withAssignedWorkforcePersonOption(
+                    peopleOptions,
+                    String(form[field.name] ?? ""),
+                    livePermissionPeople,
+                    emptyLabel,
+                  );
                 }
               } else if (field.permissionRoleFilter) {
                 const role = field.permissionRoleFilter;
@@ -1999,10 +2060,12 @@ export function AdminCrudPage<T extends { id: string }>({
                         option !== null,
                     )
                     .sort((a, b) => a.label.localeCompare(b.label));
-                  options =
-                    peopleOptions.length === 0
-                      ? [{ value: "", label: emptyLabel }]
-                      : [{ value: "", label: "— None —" }, ...peopleOptions];
+                  options = withAssignedWorkforcePersonOption(
+                    peopleOptions,
+                    String(form[field.name] ?? ""),
+                    livePermissionPeople,
+                    emptyLabel,
+                  );
                 }
               } else if (field.companyScopedDepartments === "all") {
                 const valueMode = field.departmentValueMode ?? "name";

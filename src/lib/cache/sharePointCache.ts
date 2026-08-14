@@ -1,6 +1,7 @@
 import "server-only";
 
 import { revalidateTag, unstable_cache } from "next/cache";
+import { after } from "next/server";
 
 import type { SharePointListKey } from "@/lib/schema/sharepointSchema";
 
@@ -35,7 +36,27 @@ export function cachedSharePointRead<T>(
 export function revalidateSharePointList(
   listKey: SharePointListKey | string,
 ): void {
-  revalidateTag(sharePointListTag(listKey), { expire: 0 });
+  const tag = sharePointListTag(listKey);
+  try {
+    revalidateTag(tag, { expire: 0 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // Next.js forbids revalidateTag during RSC render / cached functions.
+    // Defer until after the response so incidental writes (e.g. audit logs
+    // from a page) cannot crash the request.
+    if (!/during render|cached functions/i.test(message)) {
+      throw error;
+    }
+    try {
+      after(() => {
+        revalidateTag(tag, { expire: 0 });
+      });
+    } catch {
+      console.warn(
+        `[sharePoint] skipped revalidateTag(${tag}) outside a request`,
+      );
+    }
+  }
 }
 
 export function revalidateSharePointLists(
