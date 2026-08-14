@@ -5,6 +5,7 @@ import { CustomerTopNav } from "@/components/customer/CustomerTopNav";
 import { auth, signOut } from "@/auth";
 import { accessScopeBadgeLabel } from "@/lib/services/customerAccessService";
 import { getCustomerContext } from "@/lib/services/customerContextService";
+import { getAssignedManagersForCustomer } from "@/lib/services/workforceService";
 import type { CustomerContext } from "@/types/models";
 
 import styles from "../../components/customer/customer.module.css";
@@ -46,6 +47,13 @@ export default async function CustomerLayout({
     redirect("/access-denied");
   }
 
+  const assigned = await getAssignedManagersForCustomer({
+    companyName: context.companyName,
+    email: context.loggedInEmail,
+    displayName: context.candidateScopeName,
+    customerRole: context.customerRole,
+  });
+
   return (
     <div className={styles.shell}>
       <CustomerTopNav
@@ -54,6 +62,8 @@ export default async function CustomerLayout({
         roleLabel={context.roleLabel}
         accessLabel={accessScopeBadgeLabel(context)}
         canDownload={context.canDownload}
+        trainingManager={assigned.trainingManager}
+        supervisor={assigned.supervisor}
         signOutAction={signOutAction}
       />
       <main className={styles.main}>{children}</main>

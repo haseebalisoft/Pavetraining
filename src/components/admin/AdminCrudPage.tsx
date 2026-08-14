@@ -18,6 +18,7 @@ import type { AdminPermissionRecord } from "@/lib/services/adminCrudService";
 import { Breadcrumbs } from "@/components/ui/Breadcrumbs";
 import { LoadingState } from "@/components/ui/States";
 import { readPublicApiError } from "@/lib/errors/publicMessages";
+import { defaultPassExpiryIso } from "@/lib/utils/formatDate";
 import { isValidEmail } from "@/lib/validation/email";
 import type { Company } from "@/types/models";
 
@@ -328,6 +329,8 @@ function buildInitialForm(
       state[field.name] = "Admin";
     } else if (field.name === "trainingOutcome") {
       state[field.name] = "Pass";
+    } else if (field.name === "expiry" && field.type === "date") {
+      state[field.name] = defaultPassExpiryIso();
     } else if (field.name === "roleType") {
       state[field.name] = "Customer";
     } else {
@@ -1118,30 +1121,25 @@ export function AdminCrudPage<T extends { id: string }>({
       } | null;
       const sync = payload?.matrixSync?.summary;
       const syncItem = payload?.matrixSync?.items?.[0];
-      const syncWarnings = [
-        ...(syncItem?.warnings ?? []),
-        ...(syncItem?.errors ?? []),
-        syncItem?.skipped && syncItem.skipReason ? syncItem.skipReason : "",
-      ].filter(Boolean);
+      const hardErrors = [...(syncItem?.errors ?? [])];
+      const usefulWarnings = (syncItem?.warnings ?? []).filter(
+        (warning) =>
+          warning.trim() &&
+          !/no matrix field changes required/i.test(warning),
+      );
       const matrixTouched =
         (sync?.updated ?? 0) + (sync?.created ?? 0) > 0 ||
         (syncItem?.fieldsUpdated?.length ?? 0) > 0;
-      // Errors get their own red toast below — never folded into the green
-      // save toast, so a Matrix sync failure can't hide behind "success".
       const syncNote = sync
         ? matrixTouched
           ? ` Matrix sync: ${sync.updated ?? 0} updated, ${sync.created ?? 0} created.`
-          : syncWarnings.length
+          : hardErrors.length
             ? ` Matrix sync did not update the profile/matrix.`
-            : ` Matrix sync: no field changes.`
+            : ` Matrix already up to date.`
         : "";
-      const toastTone =
-        (sync?.errors ?? 0) > 0 || syncWarnings.length > 0
-          ? "error"
-          : "success";
       pushToast(
         (isCreate ? "Record created." : "Record updated.") + syncNote,
-        toastTone,
+        hardErrors.length > 0 ? "error" : "success",
       );
       if (sync?.errors) {
         pushToast(
@@ -1149,16 +1147,12 @@ export function AdminCrudPage<T extends { id: string }>({
           "error",
         );
       }
-      // Informational notes (e.g. NVQ's "no Matrix expiry target configured")
-      // — surfaced so the admin sees why, without implying failure.
-      for (const item of payload?.matrixSync?.items ?? []) {
-        if (item.skipReason?.trim()) pushToast(item.skipReason.trim());
-      }
       const warnings = [
         payload?.warning?.trim(),
         payload?.matrixSeedWarning?.trim(),
         ...(payload?.choiceWarnings ?? []).map((part) => part.trim()),
-        ...syncWarnings.slice(0, 4),
+        ...hardErrors,
+        ...usefulWarnings.slice(0, 3),
       ].filter(Boolean) as string[];
       for (const warning of warnings) {
         pushToast(warning, "error");
@@ -1177,7 +1171,16 @@ export function AdminCrudPage<T extends { id: string }>({
   }
 
   function requestSave() {
-    const error = validate(form);
+    const next: FormState = { ...form };
+    if (
+      String(next.trainingOutcome ?? "").trim().toLowerCase() === "pass" &&
+      fields.some((field) => field.name === "expiry") &&
+      !String(next.expiry ?? "").trim()
+    ) {
+      next.expiry = defaultPassExpiryIso(String(next.trainingDate ?? ""));
+      setForm(next);
+    }
+    const error = validate(next);
     if (error) {
       setFormError(error);
       return;
@@ -1185,15 +1188,15 @@ export function AdminCrudPage<T extends { id: string }>({
 
     if (
       confirmInactive &&
-      typeof form.status === "string" &&
-      form.status.toLowerCase() === "inactive"
+      typeof next.status === "string" &&
+      next.status.toLowerCase() === "inactive"
     ) {
-      setPendingSave(form);
+      setPendingSave(next);
       setConfirmOpen(true);
       return;
     }
 
-    void persist(form);
+    void persist(next);
   }
 
   return (
@@ -2204,7 +2207,20 @@ export function AdminCrudPage<T extends { id: string }>({
                       }
                       setForm((current) => {
                         if (field.type !== "company") {
-                          return { ...current, [field.name]: value };
+                          const next: FormState = {
+                            ...current,
+                            [field.name]: value,
+                          };
+                          if (
+                            field.name === "trainingOutcome" &&
+                            value.trim().toLowerCase() === "pass" &&
+                            !String(current.expiry ?? "").trim()
+                          ) {
+                            next.expiry = defaultPassExpiryIso(
+                              String(current.trainingDate ?? ""),
+                            );
+                          }
+                          return next;
                         }
 
                         const next: FormState = {
@@ -2338,12 +2354,25 @@ export function AdminCrudPage<T extends { id: string }>({
                     placeholder={field.placeholder}
                     readOnly={field.readOnly}
                     disabled={field.readOnly}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        [field.name]: event.target.value,
-                      }))
-                    }
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setForm((current) => {
+                        const next: FormState = {
+                          ...current,
+                          [field.name]: value,
+                        };
+                        if (
+                          field.name === "trainingDate" &&
+                          String(current.trainingOutcome ?? "")
+                            .trim()
+                            .toLowerCase() === "pass" &&
+                          !String(current.expiry ?? "").trim()
+                        ) {
+                          next.expiry = defaultPassExpiryIso(value);
+                        }
+                        return next;
+                      });
+                    }}
                   />
                 </label>
               );

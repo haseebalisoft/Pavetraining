@@ -5,6 +5,7 @@ import { allocateNextWorkforceNumber } from "@/lib/workforceNumber";
 import { NotFoundError } from "@/lib/services/errorHandler";
 import { ValidationError } from "@/lib/services/validationService";
 import { validateEmailField } from "@/lib/validation/email";
+import { defaultPassExpiryIso } from "@/lib/utils/formatDate";
 import { assertNotProtectedAdmin } from "@/lib/auth/protectedAdmins";
 import { getSharePointFields } from "@/lib/schema/sharepointSchema";
 import { isDepartmentActive } from "@/lib/services/departmentTypes";
@@ -1562,18 +1563,49 @@ export async function deleteAdminWorkforce(
       asString(existing.fields[workforceFields.workforceNumber]) ?? null;
     const companyItemId =
       extractLookupId(existing.fields, workforceFields.companyName) ?? null;
-    const { row: match, matchType } = findMatrixRowByWorkforce(exampleRows, {
-      candidateName: candidateName ?? "",
-      workforceItemId: trimmed,
-      workforceNumber,
-      companyItemId,
-    });
-    if (match) {
-      await deleteListItemByKey("trainingMatrixExample", match.id).catch(
-        () => null,
-      );
-    } else {
-      const nameKey = (candidateName ?? "").trim().toLowerCase();
+    const { row: match, matchType, candidates } = findMatrixRowByWorkforce(
+      exampleRows,
+      {
+        candidateName: candidateName ?? "",
+        workforceItemId: trimmed,
+        workforceNumber,
+        companyItemId,
+      },
+    );
+    const deleteIds = new Set<string>();
+    if (match) deleteIds.add(match.id);
+    // Same WorkforceItemId on more than one row (double import later linked).
+    if (matchType === "id") {
+      for (const row of candidates) deleteIds.add(row.id);
+    }
+    const nameKey = (candidateName ?? "").trim().toLowerCase();
+    const dob = asDateOnly(
+      asString(existing.fields[workforceFields.dateOfBirth]),
+    );
+    for (const row of exampleRows) {
+      if (deleteIds.has(row.id)) continue;
+      const owner = String(row.workforceItemId ?? "").trim();
+      if (owner === trimmed) {
+        deleteIds.add(row.id);
+        continue;
+      }
+      if (owner) continue;
+      // Unlinked leftover from a matrix sheet imported twice.
+      if (
+        nameKey &&
+        row.candidateName.trim().toLowerCase() === nameKey &&
+        dob &&
+        asDateOnly(row.dateOfBirth) === dob
+      ) {
+        deleteIds.add(row.id);
+      }
+    }
+    await Promise.all(
+      [...deleteIds].map((rowId) =>
+        deleteListItemByKey("trainingMatrixExample", rowId).catch(() => null),
+      ),
+    );
+    if (deleteIds.size === 0) {
       const sameNameCount = nameKey
         ? exampleRows.filter(
             (row) => row.candidateName.trim().toLowerCase() === nameKey,
@@ -1902,6 +1934,13 @@ export async function listAdminMatrix(
   // unchanged, but rows genuinely linked by id (e.g. a renamed candidate) are
   // now kept.
   const linkedWorkforceIds = new Set<string>();
+  const claimedWorkforceIds = new Set<string>();
+  for (const example of exampleRows) {
+    const linkedId = String(example.workforceItemId ?? "").trim();
+    if (linkedId && workforceById.has(linkedId)) {
+      claimedWorkforceIds.add(linkedId);
+    }
+  }
 
   const exampleRecords = exampleRows
     .map((example) => {
@@ -1912,14 +1951,23 @@ export async function listAdminMatrix(
       const linkedById = hasWorkforceItemId
         ? (workforceById.get(String(example.workforceItemId).trim()) ?? null)
         : null;
-      const wf = linkedById ?? workforceByName.get(nameKey) ?? null;
+      const nameHit = workforceByName.get(nameKey) ?? null;
+      // Second copy of a person already id-linked (matrix sheet imported twice)
+      // must not look Linked — deleting one copy used to leave this twin visible.
+      const leftoverDuplicate =
+        !linkedById &&
+        nameHit != null &&
+        claimedWorkforceIds.has(nameHit.id);
+      const wf = linkedById ?? (leftoverDuplicate ? null : nameHit);
       if (wf) linkedWorkforceIds.add(wf.id);
 
-      const matrixLinkStatus = deriveMatrixLinkStatus({
-        hasWorkforceItemId,
-        workforceResolved: Boolean(linkedById),
-        nameMatchCount: workforceNameCounts.get(nameKey) ?? 0,
-      });
+      const matrixLinkStatus = leftoverDuplicate
+        ? "Needs Review"
+        : deriveMatrixLinkStatus({
+            hasWorkforceItemId,
+            workforceResolved: Boolean(linkedById),
+            nameMatchCount: workforceNameCounts.get(nameKey) ?? 0,
+          });
 
       const columnValues = { ...example.columnValues };
       // Prefer Workforce card expiries when matrix cell is blank.
@@ -2962,6 +3010,14 @@ function registerWritePayload(
       ? null
       : undefined;
 
+  if (key === "nporsRegister" && normalizedOutcome === "Pass") {
+    const expiry =
+      input.expiry === undefined ? undefined : asDateInput(input.expiry);
+    if (mode === "create" && !expiry) {
+      input.expiry = defaultPassExpiryIso(optionalText(input.trainingDate));
+    }
+  }
+
   // CandidateName/CompanyName are Lookups — set LookupIds separately.
   if (key === "nporsRegister") {
     const values: Record<string, unknown> = {
@@ -2994,7 +3050,7 @@ function registerWritePayload(
                 .filter(Boolean)
                 .map((part) => {
                   const upper = part.toUpperCase();
-                  const match = upper.match(/\bN\d{3}\b/);
+                  const match = upper.match(/\bN\d+[A-Z]?\b/);
                   return match?.[0] ?? part;
                 });
             })(),
@@ -3287,15 +3343,30 @@ async function applyDeferredChoiceFields(
   const failures: string[] = [];
   for (const [field, value] of Object.entries(deferred)) {
     if (value === undefined) continue;
+    let writeValue: unknown = value;
     try {
-      await updateListItemFieldsByKey(key, itemId, { [field]: value });
+      if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) {
+        try {
+          const { ensureChoiceColumnValues } = await import(
+            "@/lib/services/sharePointListService"
+          );
+          writeValue = await ensureChoiceColumnValues(key, field, value);
+        } catch (error) {
+          console.warn(
+            `[${key}] could not add ${field} choice(s) on SharePoint; trying write anyway.`,
+            error,
+          );
+        }
+      }
+      await updateListItemFieldsByKey(key, itemId, { [field]: writeValue });
     } catch (error) {
       console.warn(
-        `[${key}] ${field} write failed for #${itemId}; row saved without that choice (update SharePoint choices).`,
+        `[${key}] ${field} write failed for #${itemId}; row saved without that choice.`,
+        { writeValue },
         error,
       );
       failures.push(
-        `${field} could not be saved — update SharePoint choice options (Site Owner pack), then edit this record.`,
+        `${field} could not be saved on SharePoint. The record was created — pick a listed NPORS category or ask a site owner to add this code.`,
       );
     }
   }

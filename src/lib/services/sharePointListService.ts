@@ -564,10 +564,22 @@ function fieldsForGraphWrite(
   fields: SharePointFields,
 ): SharePointFields {
   const omit = UNWRITABLE_GRAPH_FIELDS[listKey];
-  if (!omit?.length) return fields;
   const next: SharePointFields = { ...fields };
-  for (const name of omit) {
-    delete next[name];
+  if (omit?.length) {
+    for (const name of omit) {
+      delete next[name];
+    }
+  }
+  // MultiChoice (checkBoxes) rejects a bare string[] with 400 Invalid request.
+  // Graph requires the collection annotation on the same payload.
+  for (const [key, value] of Object.entries(next)) {
+    if (key.includes("@odata.type")) continue;
+    if (
+      Array.isArray(value) &&
+      value.every((entry) => typeof entry === "string")
+    ) {
+      next[`${key}@odata.type`] = "Collection(Edm.String)";
+    }
   }
   return next;
 }
@@ -755,6 +767,94 @@ export async function listHasColumn(
   const columns = await getListColumnNames(listKey);
   const target = columnName.trim().toLowerCase();
   return columns.some((name) => name.toLowerCase() === target);
+}
+
+type GraphChoiceColumn = {
+  id: string;
+  name: string;
+  displayName?: string;
+  choice?: {
+    allowTextEntry?: boolean;
+    choices?: string[];
+  };
+};
+
+async function getChoiceColumn(
+  listKey: SharePointListKey,
+  columnName: string,
+): Promise<GraphChoiceColumn | null> {
+  const siteRoot = getSharePointSiteApiRoot();
+  const listId = getSharePointListId(listKey);
+  const client = getGraphClient();
+  const target = columnName.trim().toLowerCase();
+  const response = (await withGraphReadRetry(() =>
+    client.api(`${siteRoot}/lists/${listId}/columns`).top(200).get(),
+  )) as { value?: GraphChoiceColumn[] };
+  return (
+    (response.value ?? []).find(
+      (column) =>
+        column.name?.trim().toLowerCase() === target ||
+        column.displayName?.trim().toLowerCase() === target,
+    ) ?? null
+  );
+}
+
+/**
+ * Make sure MultiChoice values exist on the SharePoint column before writing.
+ * Missing codes (and junk like "Choice 8") are why NPORS Category saves 400.
+ */
+export async function ensureChoiceColumnValues(
+  listKey: SharePointListKey,
+  columnName: string,
+  values: string[],
+): Promise<string[]> {
+  const wanted = [
+    ...new Set(values.map((value) => value.trim()).filter(Boolean)),
+  ];
+  if (wanted.length === 0) return [];
+
+  const column = await getChoiceColumn(listKey, columnName);
+  if (!column?.choice) return wanted;
+
+  const live = (column.choice.choices ?? [])
+    .map((choice) => String(choice).trim())
+    .filter(Boolean);
+  const resolved = wanted.map((code) => {
+    const exact = live.find(
+      (choice) => choice.toLowerCase() === code.toLowerCase(),
+    );
+    if (exact) return exact;
+    const byToken = live.find((choice) => {
+      const match = choice.toUpperCase().match(/\bN\d+[A-Z]?\b/);
+      return match?.[0] === code.toUpperCase();
+    });
+    return byToken ?? code;
+  });
+
+  const liveLower = new Set(live.map((choice) => choice.toLowerCase()));
+  const missing = resolved.filter(
+    (choice) =>
+      !liveLower.has(choice.toLowerCase()) &&
+      !/^choice\s*\d+$/i.test(choice),
+  );
+  if (missing.length === 0) return resolved;
+
+  const nextChoices = [
+    ...live.filter((choice) => !/^choice\s*\d+$/i.test(choice)),
+    ...missing,
+  ];
+  const siteRoot = getSharePointSiteApiRoot();
+  const listId = getSharePointListId(listKey);
+  const client = getGraphClient();
+  await client.api(`${siteRoot}/lists/${listId}/columns/${column.id}`).patch({
+    choice: {
+      allowTextEntry: false,
+      displayAs: "checkBoxes",
+      choices: nextChoices,
+    },
+  });
+  revalidateSharePointList(listKey);
+  return resolved;
 }
 
 /** Maps schema field keys to SharePoint internal names for write payloads. */

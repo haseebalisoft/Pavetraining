@@ -240,3 +240,81 @@ export async function getWorkforceIdByCandidateName(
 
   return map;
 }
+
+function namesMatch(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): boolean {
+  const a = (left ?? "").trim().toLowerCase();
+  const b = (right ?? "").trim().toLowerCase();
+  return Boolean(a && b && a === b);
+}
+
+function uniqueJoined(
+  values: Array<string | null | undefined>,
+): string | null {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const value of values) {
+    const text = value?.trim();
+    if (!text) continue;
+    const key = text.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    ordered.push(text);
+  }
+  return ordered.length > 0 ? ordered.join(", ") : null;
+}
+
+/**
+ * Training Manager + Supervisor assigned to the signed-in customer.
+ * Prefers their own Workforce row; otherwise infers from people they cover.
+ */
+export async function getAssignedManagersForCustomer(input: {
+  companyName: string;
+  email: string;
+  displayName: string | null;
+  customerRole: "TrainingManager" | "Supervisor" | "Candidate";
+}): Promise<{ trainingManager: string | null; supervisor: string | null }> {
+  const workforce = await getWorkforceByCompanyName(input.companyName);
+  const email = input.email.trim().toLowerCase();
+  const displayName = input.displayName?.trim() || null;
+
+  const self = workforce.find(
+    (row) =>
+      namesMatch(row.email, email) ||
+      namesMatch(row.candidateName, displayName),
+  );
+  if (self) {
+    return {
+      trainingManager: self.trainingManager,
+      supervisor: self.supervisor,
+    };
+  }
+
+  if (input.customerRole === "TrainingManager") {
+    const covered = workforce.filter(
+      (row) =>
+        namesMatch(row.trainingManager, displayName) ||
+        namesMatch(row.trainingManager, email),
+    );
+    return {
+      trainingManager: displayName,
+      supervisor: uniqueJoined(covered.map((row) => row.supervisor)),
+    };
+  }
+
+  if (input.customerRole === "Supervisor") {
+    const covered = workforce.filter(
+      (row) =>
+        namesMatch(row.supervisor, displayName) ||
+        namesMatch(row.supervisor, email),
+    );
+    return {
+      trainingManager: uniqueJoined(covered.map((row) => row.trainingManager)),
+      supervisor: displayName,
+    };
+  }
+
+  return { trainingManager: null, supervisor: null };
+}

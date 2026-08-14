@@ -516,6 +516,15 @@ export function CandidateProfileView({
                 DOB {formatDate(candidate.dateOfBirth)}
               </p>
             ) : null}
+            <p className={styles.profileAssignedLine}>
+              Training manager:{" "}
+              <strong>
+                {candidate.trainingManager?.trim() || "—"}
+              </strong>
+              {" · "}
+              Supervisor:{" "}
+              <strong>{candidate.supervisor?.trim() || "—"}</strong>
+            </p>
             <p className={styles.subtitle}>
               {isAdmin
                 ? "Full training history for audit — includes records hidden from customers."
