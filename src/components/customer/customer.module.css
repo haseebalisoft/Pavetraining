@@ -2179,6 +2179,17 @@
   letter-spacing: 0.01em;
 }
 
+.profileAssignedLine {
+  margin: 0.45rem 0 0;
+  font-size: 0.92rem;
+  color: var(--cust-muted);
+}
+
+.profileAssignedLine strong {
+  color: var(--cust-ink, var(--pave-charcoal));
+  font-weight: 650;
+}
+
 .certCell {
   display: flex;
   flex-direction: column;

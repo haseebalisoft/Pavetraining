@@ -1,4 +1,4 @@
-import { withAdminApi, ValidationError } from "@/lib/api/adminApi";
+import { withSharePointAdminApi, ValidationError } from "@/lib/api/adminApi";
 import { logBulkUpload } from "@/lib/services/auditLogService";
 import { commitBulkUpload } from "@/lib/services/bulkUpload/bulkUploadService";
 import { normalizeSourceRow } from "@/lib/services/bulkUpload/parseSpreadsheet";
@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 export async function POST(request: Request) {
-  return withAdminApi(
+  return withSharePointAdminApi(
     "POST /api/admin/bulk-upload/commit",
     async (context, req) => {
       let body: Record<string, unknown>;
@@ -34,11 +34,11 @@ export async function POST(request: Request) {
           : Boolean(body.suppressNotifications);
       const autoCreateMissingCompanies =
         body.autoCreateMissingCompanies === undefined
-          ? false
+          ? true
           : Boolean(body.autoCreateMissingCompanies);
       const autoCreateMissingDepartments =
         body.autoCreateMissingDepartments === undefined
-          ? false
+          ? true
           : Boolean(body.autoCreateMissingDepartments);
 
       if (!Array.isArray(body.rows)) {

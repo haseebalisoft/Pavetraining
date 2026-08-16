@@ -47,6 +47,8 @@ interface CustomerTopNavProps {
   roleLabel: string;
   accessLabel: string;
   canDownload: boolean;
+  trainingManager?: string | null;
+  supervisor?: string | null;
   signOutAction: () => Promise<void>;
 }
 
@@ -98,7 +100,7 @@ function ChevronIcon() {
 function AccountIcon({
   type,
 }: {
-  type: "company" | "role" | "access" | "downloads";
+  type: "company" | "role" | "access" | "downloads" | "manager" | "supervisor";
 }) {
   if (type === "company") {
     return <path d="M4 20V7l8-4 8 4v13M8 20v-5h8v5M8 9h.01M12 9h.01M16 9h.01" />;
@@ -119,6 +121,16 @@ function AccountIcon({
       </>
     );
   }
+  if (type === "manager" || type === "supervisor") {
+    return (
+      <>
+        <circle cx="9" cy="8" r="3" />
+        <path d="M3.5 20a5.5 5.5 0 0 1 11 0" />
+        <circle cx="17" cy="9" r="2.5" />
+        <path d="M14 20a4.5 4.5 0 0 1 7 0" />
+      </>
+    );
+  }
   return (
     <>
       <path d="M12 3v12M7 10l5 5 5-5" />
@@ -133,6 +145,8 @@ export function CustomerTopNav({
   roleLabel,
   accessLabel,
   canDownload,
+  trainingManager = null,
+  supervisor = null,
   signOutAction,
 }: CustomerTopNavProps) {
   const pathname = usePathname();
@@ -439,6 +453,16 @@ export function CustomerTopNav({
             [
               { type: "company" as const, label: "Company", value: companyName },
               { type: "role" as const, label: "Role", value: roleLabel },
+              {
+                type: "manager" as const,
+                label: "Training manager",
+                value: trainingManager?.trim() || "—",
+              },
+              {
+                type: "supervisor" as const,
+                label: "Supervisor",
+                value: supervisor?.trim() || "—",
+              },
               {
                 type: "access" as const,
                 label: "Access scope",

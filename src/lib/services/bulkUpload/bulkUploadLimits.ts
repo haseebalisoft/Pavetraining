@@ -5,20 +5,19 @@
  * server (preview/commit) AND the admin UI (client-side mirror), and exercised
  * by scripts/test-bulk-upload-limits.mjs under Node without Graph.
  *
- * Wayne's requirement: workforce imports accept at most 50 records per upload.
- * Only populated data rows count — the header row and blank rows are excluded.
+ * Per-type populated-row caps. An empty map means every import type is
+ * unlimited (header + blank rows never count). Add an entry here
+ * (e.g. `workforce: 200`) if a cap is ever required again — callers and the UI
+ * pick it up automatically.
  */
 import type { BulkImportType } from "@/types/bulkUpload";
 
 /**
  * Max populated data rows accepted per upload, by import type. A type with no
- * entry has no row limit. Company has no limit today; give it its own here
- * (e.g. `company: 200`) if a separate cap is ever required — callers and the UI
- * pick it up automatically.
+ * entry has no row limit.
  */
-export const BULK_UPLOAD_ROW_LIMITS: Partial<Record<BulkImportType, number>> = {
-  workforce: 50,
-};
+export const BULK_UPLOAD_ROW_LIMITS: Partial<Record<BulkImportType, number>> =
+  {};
 
 /** Human labels used when building the limit error message. */
 const IMPORT_TYPE_LABELS: Partial<Record<BulkImportType, string>> = {

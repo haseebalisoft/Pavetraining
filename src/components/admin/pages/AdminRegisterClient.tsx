@@ -99,7 +99,12 @@ function fieldsFor(
       type: "date",
       section: "Outcome",
     },
-    { name: "expiry", label: "Expiry", type: "date", section: "Outcome" },
+    {
+      name: "expiry",
+      label: "Expiry (5 years from training date if left blank)",
+      type: "date",
+      section: "Outcome",
+    },
     {
       name: "assessorTrainer",
       label: "Assessor / trainer",
@@ -261,7 +266,12 @@ function fieldsFor(
         type: "date",
         section: "Outcome",
       },
-      { name: "expiry", label: "Expiry", type: "date", section: "Outcome" },
+      {
+      name: "expiry",
+      label: "Expiry (5 years from training date if left blank)",
+      type: "date",
+      section: "Outcome",
+    },
       {
         name: "assessorTrainer",
         label: "Assessor / trainer",
@@ -424,6 +434,7 @@ export function AdminRegisterClient({
       createUrl={`/api/admin/training-records/${kind}`}
       updateUrl={(id) => `/api/admin/training-records/${kind}/${id}`}
       deleteUrl={(id) => `/api/admin/training-records/${kind}/${id}`}
+      optimistic
       mapResponse={(payload) =>
         ((payload as { records?: AdminTrainingRecord[] }).records ?? [])
       }

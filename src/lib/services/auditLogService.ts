@@ -19,6 +19,7 @@ import type {
   AuditAction,
   AuditLogQuery,
   AuditLogRecord,
+  AuditLogSource,
 } from "@/types/audit";
 
 /** @deprecated Prefer structured log* helpers; kept for existing call sites. */
@@ -271,7 +272,12 @@ export async function writeAuditEvent(input: AuditEventInput): Promise<void> {
       role: input.roleType ?? null,
     });
 
-    await createListItemByKey("trainingManagerLogs", fields);
+    // Append-only audit rows. Do not revalidateTag here — this writer is
+    // often called from RSC pages, where cache invalidation during render
+    // is unsupported.
+    await createListItemByKey("trainingManagerLogs", fields, {
+      skipCacheRevalidate: true,
+    });
   } catch (error) {
     console.error("[audit] Failed to write Training Manager Logs entry", error);
     console.info("[audit:fallback]", entry);
@@ -386,29 +392,132 @@ export function extractItemName(payload: unknown): string | null {
   return pickName(record);
 }
 
+type NotificationNotesPayload = {
+  kind: "notification";
+  type?: string;
+  status?: string;
+  recipientEmail?: string | null;
+  companyName?: string | null;
+  subject?: string | null;
+  itemId?: string | null;
+  errorMessage?: string | null;
+  detail?: string | null;
+};
+
+function parseNotificationNotes(
+  notes: string | null | undefined,
+): NotificationNotesPayload | null {
+  if (!notes?.trim()) return null;
+  try {
+    const parsed = JSON.parse(notes) as Record<string, unknown>;
+    if (parsed.kind !== "notification") return null;
+    return {
+      kind: "notification",
+      type: typeof parsed.type === "string" ? parsed.type : undefined,
+      status: typeof parsed.status === "string" ? parsed.status : undefined,
+      recipientEmail:
+        typeof parsed.recipientEmail === "string" ? parsed.recipientEmail : null,
+      companyName:
+        typeof parsed.companyName === "string" ? parsed.companyName : null,
+      subject: typeof parsed.subject === "string" ? parsed.subject : null,
+      itemId: typeof parsed.itemId === "string" ? parsed.itemId : null,
+      errorMessage:
+        typeof parsed.errorMessage === "string" ? parsed.errorMessage : null,
+      detail: typeof parsed.detail === "string" ? parsed.detail : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function classifyAuditSource(input: {
+  parsedAudit: AuditNotesPayload | null;
+  notification: NotificationNotesPayload | null;
+  roleType: string | null;
+  action: string;
+}): AuditLogSource {
+  if (input.notification) return "notification";
+  if (!input.parsedAudit) return "sharepoint";
+
+  const action = input.action.toUpperCase();
+  if (action.startsWith("NOTIFICATION_")) return "notification";
+  if (action.startsWith("ADMIN_") || action === "SETTINGS_UPDATE") {
+    return "admin";
+  }
+
+  const role = (input.roleType ?? "").trim().toLowerCase();
+  if (role === "admin") return "admin";
+  if (
+    role === "customer" ||
+    role === "training manager" ||
+    role === "trainingmanager" ||
+    role === "supervisor" ||
+    role === "candidate"
+  ) {
+    return "customer";
+  }
+
+  if (
+    action.startsWith("DOCUMENT_") ||
+    action === "CANDIDATE_VIEW" ||
+    action === "ACCESS_DENIED"
+  ) {
+    return "customer";
+  }
+
+  return "admin";
+}
+
 function mapSharePointItemToRecord(item: {
   id: string;
   fields: Record<string, unknown>;
   createdDateTime?: string | null;
-}): AuditLogRecord | null {
+}): AuditLogRecord {
   const notes = asNullableString(item.fields.Notes);
   const parsed = parseNotes(notes);
-  const legacy = parsed ? null : mapLegacyNotes(notes);
+  const notification = parsed ? null : parseNotificationNotes(notes);
+  const legacy = parsed || notification ? null : mapLegacyNotes(notes);
 
-  const action =
+  let action =
     parsed?.action ||
     legacy?.action ||
     asString(item.fields.Area_x0020_Viewed) ||
     asString(item.fields.Title) ||
     "UNKNOWN";
+  let entityType =
+    parsed?.entityType ||
+    asString(item.fields.ListName) ||
+    "Unknown";
+  let entityName = parsed?.entityName || asString(item.fields.Title) || null;
+  let entityId =
+    parsed?.entityId || asNullableString(item.fields.ItemsId) || null;
+  let success = parsed ? parsed.success : legacy?.success !== false;
+  let errorMessage = parsed?.errorMessage || legacy?.errorMessage || null;
+  let company =
+    parsed?.company || asNullableString(item.fields.Company) || null;
+  let metadata = parsed?.metadata || null;
 
-  // Skip pure notification-kind rows from notificationLogService in main audit UI
-  // unless they also carry audit kind (notification logs use kind:notification).
-  if (notes?.includes('"kind":"notification"') && !parsed) {
-    // Still show notification failures/success as system events if desired —
-    // include them with entityType Notifications.
+  if (notification) {
+    const status = (notification.status ?? "unknown").toUpperCase();
+    action = `NOTIFICATION_${status}`;
+    entityType = "Notifications";
+    entityName = notification.subject || entityName;
+    entityId = notification.itemId || entityId;
+    success = notification.status === "sent" || notification.status === "queued";
+    errorMessage = notification.errorMessage || errorMessage;
+    company = notification.companyName || company;
+    metadata = sanitizeAuditMetadata({
+      type: notification.type ?? null,
+      status: notification.status ?? null,
+      recipientEmail: notification.recipientEmail ?? null,
+      detail: notification.detail ?? null,
+    });
+  } else if (!parsed && notes && !metadata) {
+    metadata = sanitizeAuditMetadata({ notes: notes.slice(0, 300) });
   }
 
+  const roleType =
+    parsed?.roleType || asNullableString(item.fields.Role) || null;
   const timestamp =
     parsed?.timestamp ||
     asNullableString(item.fields.Timestamp) ||
@@ -421,26 +530,44 @@ function mapSharePointItemToRecord(item: {
     userEmail:
       asString(item.fields.User_x0020_Email)?.toLowerCase() ||
       asString(item.fields.UserEmail)?.toLowerCase() ||
+      (typeof notification?.recipientEmail === "string"
+        ? notification.recipientEmail.toLowerCase()
+        : "") ||
       "unknown",
-    roleType:
-      parsed?.roleType || asNullableString(item.fields.Role) || null,
-    company:
-      parsed?.company || asNullableString(item.fields.Company) || null,
+    roleType,
+    company,
     action,
-    entityType:
-      parsed?.entityType ||
-      asString(item.fields.ListName) ||
-      "Unknown",
-    entityId:
-      parsed?.entityId || asNullableString(item.fields.ItemsId) || null,
-    entityName: parsed?.entityName || null,
-    success: parsed ? parsed.success : legacy?.success !== false,
-    errorMessage: parsed?.errorMessage || legacy?.errorMessage || null,
+    entityType,
+    entityId,
+    entityName,
+    success,
+    errorMessage,
     ipAddress: parsed?.ipAddress || null,
     userAgent: parsed?.userAgent || null,
-    metadata: parsed?.metadata || null,
+    metadata,
     title: asString(item.fields.Title) || action,
+    source: classifyAuditSource({
+      parsedAudit: parsed,
+      notification,
+      roleType,
+      action,
+    }),
   };
+}
+
+const AUDIT_LIST_FETCH_CAP = 8000;
+
+async function fetchTrainingManagerLogItems(top: number) {
+  const requested = Math.min(Math.max(top, 1), AUDIT_LIST_FETCH_CAP);
+  // Small callers (dashboard) still read a window of rows so in-memory
+  // newest-first sort has something recent to show.
+  const cap = requested < 500 ? 500 : requested;
+  // Do not use Graph `$orderby` here: SharePoint list items + `$expand=fields`
+  // often hang or time out (~10s), which blocked /admin after login.
+  return getListItemsByKey("trainingManagerLogs", {
+    top: cap,
+    skipCache: requested >= 500,
+  });
 }
 
 export async function listAuditLogs(
@@ -456,22 +583,33 @@ export async function listAuditLogs(
   }
 
   try {
-    const top = Math.min(Math.max(query.top ?? 200, 1), 500);
-    const items = await getListItemsByKey("trainingManagerLogs", { top: 500 });
-    let rows = items
-      .map((item) =>
-        mapSharePointItemToRecord({
-          id: item.id,
-          fields: item.fields,
-          createdDateTime: item.createdDateTime,
-        }),
-      )
-      .filter((row): row is AuditLogRecord => Boolean(row));
+    const top = Math.min(Math.max(query.top ?? 2000, 1), AUDIT_LIST_FETCH_CAP);
+    const items = await fetchTrainingManagerLogItems(top);
+    let rows = items.map((item) =>
+      mapSharePointItemToRecord({
+        id: item.id,
+        fields: item.fields,
+        createdDateTime: item.createdDateTime,
+      }),
+    );
 
-    // Prefer structured audit + compatible legacy rows; keep notification logs too.
     const search = query.search?.trim().toLowerCase();
     if (search) {
-      rows = rows.filter((row) => row.userEmail.includes(search));
+      rows = rows.filter((row) => {
+        const haystack = [
+          row.userEmail,
+          row.action,
+          row.entityType,
+          row.entityName,
+          row.company,
+          row.roleType,
+          row.title,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(search);
+      });
     }
     if (query.action?.trim()) {
       const action = query.action.trim().toLowerCase();
@@ -482,6 +620,9 @@ export async function listAuditLogs(
       rows = rows.filter((row) =>
         row.entityType.toLowerCase().includes(entityType),
       );
+    }
+    if (query.source && query.source !== "all") {
+      rows = rows.filter((row) => row.source === query.source);
     }
     if (query.success === "true") {
       rows = rows.filter((row) => row.success);
@@ -503,10 +644,12 @@ export async function listAuditLogs(
       }
     }
 
-    rows.sort(
-      (a, b) =>
-        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
-    );
+    rows.sort((a, b) => {
+      const timeDiff =
+        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+      if (timeDiff !== 0) return timeDiff;
+      return Number(b.id) - Number(a.id);
+    });
     return rows.slice(0, top);
   } catch (error) {
     console.error("[audit] Failed to list logs", error);

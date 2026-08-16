@@ -2,7 +2,7 @@ import { ValidationError } from "@/lib/api/adminApi";
 import { logBulkUpload } from "@/lib/services/auditLogService";
 import { commitBulkUpload } from "@/lib/services/bulkUpload/bulkUploadService";
 import { normalizeSourceRow } from "@/lib/services/bulkUpload/parseSpreadsheet";
-import { requireAdminAccess } from "@/lib/services/securityService";
+import { requireSharePointAdminAccess } from "@/lib/services/securityService";
 import { AccessDeniedError, UnauthorizedError } from "@/lib/services/errorHandler";
 import type { BulkCommitRowInput } from "@/types/bulkUpload";
 
@@ -32,16 +32,19 @@ export async function POST(request: Request): Promise<Response> {
   // client can surface them before any streaming starts.
   let loggedInEmail: string;
   try {
-    const context = await requireAdminAccess();
+    const context = await requireSharePointAdminAccess();
     loggedInEmail = context.loggedInEmail;
   } catch (error) {
     if (error instanceof UnauthorizedError) {
       return jsonError("You must be signed in.", 401);
     }
     if (error instanceof AccessDeniedError) {
-      return jsonError("Admin access is required.", 403);
+      return jsonError(
+        error.message || "Full Admin access is required.",
+        403,
+      );
     }
-    return jsonError("Admin access is required.", 403);
+    return jsonError("Full Admin access is required.", 403);
   }
 
   let body: Record<string, unknown>;
@@ -66,11 +69,11 @@ export async function POST(request: Request): Promise<Response> {
       : Boolean(body.suppressNotifications);
   const autoCreateMissingCompanies =
     body.autoCreateMissingCompanies === undefined
-      ? false
+      ? true
       : Boolean(body.autoCreateMissingCompanies);
   const autoCreateMissingDepartments =
     body.autoCreateMissingDepartments === undefined
-      ? false
+      ? true
       : Boolean(body.autoCreateMissingDepartments);
 
   if (!Array.isArray(body.rows)) {

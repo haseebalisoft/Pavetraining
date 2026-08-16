@@ -91,6 +91,20 @@ const COMPANY_CASCADE_TARGETS: ReadonlyArray<{
     deleteMode: "workforce",
   },
   {
+    // Training Matrix Update ("trainingMatrixExample") carries its own real
+    // "Company" Lookup column (sibling CompanyLookupId) as well as the plain
+    // CompanyItemId Number column added for the Workforce<->Matrix link work.
+    // Rows linked to a Workforce record are already cleared by the
+    // "workforce" cascade step above (deleteAdminWorkforce clears/deletes its
+    // matched matrix row); this step catches unlinked/Needs Review rows that
+    // still reference this company directly and would otherwise leave a
+    // SharePoint Restrict Delete block on the company.
+    listKey: "trainingMatrixExample",
+    lookupIdFields: ["CompanyLookupId", "CompanyItemId"],
+    lookupDisplayFields: ["Company"],
+    label: "Training Matrix Update",
+  },
+  {
     listKey: "departments",
     lookupIdFields: ["CompanyLookupId"],
     lookupDisplayFields: ["Company"],
@@ -180,6 +194,42 @@ async function deleteCascadeItem(
   await deleteListItemByKey(listKey, itemId);
 }
 
+/**
+ * Bounded concurrency helper — runs `worker` for each item, up to `concurrency`
+ * in-flight at a time. Prevents SharePoint from throttling us when a company
+ * has hundreds of related rows (e.g. large Workforce lists).
+ */
+async function runBounded<Item>(
+  items: Item[],
+  concurrency: number,
+  worker: (item: Item) => Promise<void>,
+): Promise<void> {
+  if (items.length === 0) return;
+  const cap = Math.max(1, Math.min(concurrency, items.length));
+  let cursor = 0;
+  const runners: Promise<void>[] = [];
+  for (let i = 0; i < cap; i += 1) {
+    runners.push(
+      (async () => {
+        while (true) {
+          const index = cursor;
+          cursor += 1;
+          if (index >= items.length) return;
+          await worker(items[index]!);
+        }
+      })(),
+    );
+  }
+  await Promise.all(runners);
+}
+
+/**
+ * How many item deletions to run in parallel inside one cascade step.
+ * SharePoint tolerates this comfortably per-list; keeps the tail latency
+ * of the Workforce / Departments / Permissions cascade short.
+ */
+const CASCADE_ITEM_CONCURRENCY = 6;
+
 async function deleteByLookupId(
   listKey: SharePointListKey,
   lookupIdFields: string[],
@@ -193,6 +243,20 @@ async function deleteByLookupId(
   const seen = new Set<string>();
   let deletedCount = 0;
 
+  const deleteItem = async (itemId: string) => {
+    try {
+      await deleteCascadeItem(listKey, itemId, deleteMode);
+      deletedCount += 1;
+      result.relatedDeleted += 1;
+    } catch (error) {
+      result.errors.push(
+        `${label} #${itemId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  };
+
   for (const field of lookupIdFields) {
     try {
       // Uncached — company delete must see latest children.
@@ -201,21 +265,13 @@ async function deleteByLookupId(
         top: 5000,
       });
 
+      const fresh: string[] = [];
       for (const item of items) {
         if (seen.has(item.id)) continue;
         seen.add(item.id);
-        try {
-          await deleteCascadeItem(listKey, item.id, deleteMode);
-          deletedCount += 1;
-          result.relatedDeleted += 1;
-        } catch (error) {
-          result.errors.push(
-            `${label} #${item.id}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-        }
+        fresh.push(item.id);
       }
+      await runBounded(fresh, CASCADE_ITEM_CONCURRENCY, deleteItem);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (!message.toLowerCase().includes("not found")) {
@@ -230,6 +286,7 @@ async function deleteByLookupId(
       const all = await getListItems(getSharePointListId(listKey), {
         top: 5000,
       });
+      const fresh: string[] = [];
       for (const item of all) {
         if (seen.has(item.id)) continue;
         if (
@@ -243,18 +300,9 @@ async function deleteByLookupId(
           continue;
         }
         seen.add(item.id);
-        try {
-          await deleteCascadeItem(listKey, item.id, deleteMode);
-          deletedCount += 1;
-          result.relatedDeleted += 1;
-        } catch (error) {
-          result.errors.push(
-            `${label} #${item.id}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-        }
+        fresh.push(item.id);
       }
+      await runBounded(fresh, CASCADE_ITEM_CONCURRENCY, deleteItem);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (!message.toLowerCase().includes("not found")) {
@@ -296,7 +344,47 @@ export async function deleteCompanyWithRelatedData(
     asString(company?.fields.Title) ||
     `#${companyId}`;
 
-  for (const target of COMPANY_CASCADE_TARGETS) {
+  // Speed: the leaf cascade targets are independent (different SharePoint
+  // lists) and each `deleteByLookupId` awaits its own item deletions
+  // sequentially. Running the leaf scans in parallel drops a real-world
+  // delete from ~2 min to ~15–30 s. Rows are pushed to `result.details` /
+  // `result.errors` inside each call — safe under Node's single-thread
+  // event loop (no interleaved writes to the same array cell).
+  //
+  // We keep the CROSS-LINKED chain (workforce → trainingMatrixExample →
+  // departments → permissions) SEQUENTIAL in the exact previous order so
+  // ordering guarantees inside their per-entity deleters (deleteAdminWorkforce
+  // clearing linked matrix rows, deleteAdminDepartment clearing Workforce/
+  // Permissions refs, deleteAdminPermission's protected-admin unlink) are
+  // preserved bit-for-bit.
+  const sequentialListKeys = new Set([
+    "workforce",
+    "trainingMatrixExample",
+    "departments",
+    "permissions",
+  ]);
+  const parallelTargets = COMPANY_CASCADE_TARGETS.filter(
+    (target) => !sequentialListKeys.has(target.listKey),
+  );
+  const sequentialTargets = COMPANY_CASCADE_TARGETS.filter((target) =>
+    sequentialListKeys.has(target.listKey),
+  );
+
+  await Promise.all(
+    parallelTargets.map((target) =>
+      deleteByLookupId(
+        target.listKey,
+        target.lookupIdFields,
+        numericId,
+        target.label,
+        result,
+        target.deleteMode,
+        target.lookupDisplayFields,
+      ),
+    ),
+  );
+
+  for (const target of sequentialTargets) {
     await deleteByLookupId(
       target.listKey,
       target.lookupIdFields,
@@ -354,19 +442,32 @@ export async function deleteCompanyWithRelatedData(
   return result;
 }
 
+/**
+ * Bulk delete concurrency: how many companies to cascade-delete at the same
+ * time. Each single-company delete is already up to 6-concurrent at the item
+ * level, so the effective peak in-flight Graph calls is roughly
+ * `BULK_COMPANY_CONCURRENCY * CASCADE_ITEM_CONCURRENCY` (~12). SharePoint
+ * handles that comfortably without throttling.
+ */
+const BULK_COMPANY_CONCURRENCY = 2;
+
 export async function deleteCompaniesWithRelatedData(companyIds: string[]) {
-  const results: CompanyCascadeResult[] = [];
+  const orderedResults: CompanyCascadeResult[] = new Array(companyIds.length);
   let companiesDeleted = 0;
   let relatedDeleted = 0;
 
-  for (const id of companyIds) {
-    const one = await deleteCompanyWithRelatedData(id);
-    results.push(one);
-    if (one.companyDeleted) companiesDeleted += 1;
-    relatedDeleted += one.relatedDeleted;
-  }
+  await runBounded(
+    companyIds.map((id, index) => ({ id, index })),
+    BULK_COMPANY_CONCURRENCY,
+    async ({ id, index }) => {
+      const one = await deleteCompanyWithRelatedData(id);
+      orderedResults[index] = one;
+      if (one.companyDeleted) companiesDeleted += 1;
+      relatedDeleted += one.relatedDeleted;
+    },
+  );
 
-  return { companiesDeleted, relatedDeleted, results };
+  return { companiesDeleted, relatedDeleted, results: orderedResults };
 }
 
 export const COMPANY_CASCADE_LABELS = COMPANY_CASCADE_TARGETS.map(

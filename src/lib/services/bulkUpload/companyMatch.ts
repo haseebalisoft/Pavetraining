@@ -122,14 +122,13 @@ export function resolveWorkforceCompanyMatch(
       };
     }
 
-    // Number supplied but not found in the Company List.
+    // Number supplied but not found in the Company List — auto-create silently.
     if (options.autoCreateMissing) {
       return {
         kind: "create",
         report: makeReport({
           matchedCompanyNumber: number,
-          matchedCompanyName: name || null,
-          warning: `Company Number "${number}" not found — a new company will be created on import.`,
+          matchedCompanyName: name || number,
         }),
       };
     }
@@ -178,13 +177,12 @@ export function resolveWorkforceCompanyMatch(
       };
     }
 
-    // No name match.
+    // No name match — auto-create silently.
     if (options.autoCreateMissing) {
       return {
         kind: "create",
         report: makeReport({
           matchedCompanyName: name,
-          warning: `Company "${name}" not found — a new company will be created on import.`,
         }),
       };
     }

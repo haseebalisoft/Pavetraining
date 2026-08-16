@@ -510,19 +510,19 @@ test("CompanyNumber + name + DOB links a matrix-first row (no CompanyItemId)", (
   assert.equal(hit.row.id, "M-1");
 });
 
-test("same name AND same DOB on two unlinked rows is ambiguous, never linked", () => {
+test("same name AND same DOB on two unlinked rows links the oldest (no freeze)", () => {
   const rows = [
-    { id: "M-1", candidateName: "Sam Same", dateOfBirth: "1990-01-01" },
     { id: "M-2", candidateName: "Sam Same", dateOfBirth: "1990-01-01" },
+    { id: "M-1", candidateName: "Sam Same", dateOfBirth: "1990-01-01" },
   ];
   const hit = findMatrixRowByWorkforce(rows, {
     workforceItemId: 55,
     candidateName: "Sam Same",
     dateOfBirth: "1990-01-01",
   });
-  assert.equal(hit.row, null);
-  assert.equal(hit.ambiguous, true);
-  assert.equal(hit.ambiguousAt, "nameDob");
+  assert.equal(hit.ambiguous, false);
+  assert.equal(hit.matchType, "nameDob");
+  assert.equal(hit.row.id, "M-1");
   assert.equal(hit.candidates.length, 2);
 });
 

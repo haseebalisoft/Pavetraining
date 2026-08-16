@@ -1,3 +1,5 @@
+import { redirect } from "next/navigation";
+
 import { AdminPermissionsClient } from "@/components/admin/pages/AdminPermissionsClient";
 import {
   listAdminCompanies,
@@ -7,10 +9,17 @@ import {
   isDepartmentActive,
   listAdminDepartments,
 } from "@/lib/services/departmentService";
+import { requireAdminAccess } from "@/lib/services/securityService";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminPermissionsPage() {
+  // Permissions can grant/revoke portal access — pure SharePoint Admins only.
+  const context = await requireAdminAccess();
+  if (!context.isSharePointAdmin) {
+    redirect("/admin");
+  }
+
   const [companies, records, departments] = await Promise.all([
     listAdminCompanies(),
     listAdminPermissions(),

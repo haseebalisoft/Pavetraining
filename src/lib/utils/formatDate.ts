@@ -134,3 +134,15 @@ export function formatShortMonth(
     ? UK_SHORT_MONTH_FORMATTER.format(parsed)
     : invalidValueFallback(value, fallback);
 }
+
+/** Default register expiry for a Pass: 5 years from the training date (or today). */
+export function defaultPassExpiryIso(trainingDate?: string | null): string {
+  const source = trainingDate?.trim() || new Date().toISOString().slice(0, 10);
+  const iso = ISO_DATE_ONLY.exec(source);
+  const now = new Date();
+  const year = iso ? Number(iso[1]) : now.getUTCFullYear();
+  const month = iso ? Number(iso[2]) : now.getUTCMonth() + 1;
+  const day = iso ? Number(iso[3]) : now.getUTCDate();
+  const expiry = new Date(Date.UTC(year + 5, month - 1, day));
+  return `${expiry.getUTCFullYear()}-${String(expiry.getUTCMonth() + 1).padStart(2, "0")}-${String(expiry.getUTCDate()).padStart(2, "0")}`;
+}

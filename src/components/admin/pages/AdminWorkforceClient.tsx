@@ -178,15 +178,19 @@ const fields: AdminFieldConfig[] = [
     name: "trainingManager",
     label: "Training manager",
     type: "select",
-    /** Permissions Training Manager (Admin form role), scoped to selected company. */
-    permissionRoleFilter: "Admin",
+    /**
+     * STRICT SharePoint RoleType filter — only rows where
+     * `RoleType = Training Manager` (Active, matching company). "+ Add new"
+     * quick-create appears next to the dropdown.
+     */
+    sharePointRoleTypeFilter: "Training Manager",
   },
   {
     name: "supervisor",
     label: "Supervisor",
     type: "select",
-    /** Permissions Supervisor (Customer form role), scoped to selected company. */
-    permissionRoleFilter: "Customer",
+    /** STRICT SharePoint RoleType = Supervisor only. */
+    sharePointRoleTypeFilter: "Supervisor",
   },
   { name: "candidateAddress", label: "Candidate Address", type: "text" },
   { name: "email", label: "Email", type: "email" },
@@ -238,7 +242,7 @@ export function AdminWorkforceClient({
   return (
     <AdminCrudPage<AdminWorkforceRecord>
       title="Workforce"
-      description="Manage candidates and link them to companies. After you pick a company, Training manager / Supervisor list only Active Permissions people for that company (RoleType Training Manager / Supervisor). Department is company-scoped (Admin → Departments). Upload a candidate photo from the row actions — it appears on their profile."
+      description="Manage candidates and link them to companies. After you pick a company, Training manager / Supervisor list Active Permissions people for that company (RoleType Training Manager / Supervisor). A name already saved on the candidate stays selected even if they are not in that Permissions list, and you can still pick someone else. Department is company-scoped (Admin → Departments). Upload a candidate photo from the row actions — it appears on their profile."
       columns={columns}
       fields={fields}
       companies={companies}
@@ -255,6 +259,7 @@ export function AdminWorkforceClient({
       createUrl="/api/admin/workforce"
       updateUrl={(id) => `/api/admin/workforce/${id}`}
       deleteUrl={(id) => `/api/admin/workforce/${id}`}
+      optimistic
       deleteConfirmExtra="This removes the candidate from Workforce and the Training Matrix. Past NPORS / EUSR / Streetworks / In-House / NVQ records are kept for history."
       mapResponse={(payload) =>
         ((payload as { records?: AdminWorkforceRecord[] }).records ?? [])

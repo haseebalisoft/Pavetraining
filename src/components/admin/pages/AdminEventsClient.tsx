@@ -437,6 +437,7 @@ export function AdminEventsClient({
         createUrl="/api/admin/events"
         updateUrl={(id) => `/api/admin/events/${id}`}
         deleteUrl={(id) => `/api/admin/events/${id}`}
+        optimistic
         deleteConfirmExtra="This also tries to remove the event from Outlook."
         mapResponse={(payload) =>
           ((payload as { records?: AdminEventRecord[] }).records ?? [])

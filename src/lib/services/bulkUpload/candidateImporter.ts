@@ -82,7 +82,19 @@ const WF_ALIASES = [
 ];
 const STATUS_ALIASES = ["Status"];
 const TM_ALIASES = ["Training Manager", "Training manager", "TrainingManager"];
+const TM_EMAIL_ALIASES = [
+  "Training manager email",
+  "Training Manager Email",
+  "TrainingManagerEmail",
+  "TM Email",
+  "Manager Email",
+];
 const SUPERVISOR_ALIASES = ["Supervisor"];
+const SUPERVISOR_EMAIL_ALIASES = [
+  "Supervisor email",
+  "Supervisor Email",
+  "SupervisorEmail",
+];
 
 function emptySummary(): BulkImportSummary {
   return {
@@ -138,7 +150,9 @@ function mapCandidateFields(
     workforceNumber: pickField(raw, WF_ALIASES),
     status: pickField(raw, STATUS_ALIASES),
     trainingManager: pickField(raw, TM_ALIASES),
+    trainingManagerEmail: pickField(raw, TM_EMAIL_ALIASES),
     supervisor: pickField(raw, SUPERVISOR_ALIASES),
+    supervisorEmail: pickField(raw, SUPERVISOR_EMAIL_ALIASES),
     candidateAddress: pickField(raw, [
       "Candidate Address",
       "CandidateAddress",
@@ -197,7 +211,12 @@ function workforceWritePayload(
   // SharePoint Workforce Status choices: Active | inactive (blank Excel → Active).
   payload.status = fields.status?.trim() || "Active";
   assign("trainingManager", fields.trainingManager);
+  // Emails travel alongside the name so the workforce writer can auto-create
+  // a Permissions row (real email, or a pending.{tm|sp}.{name}@pave.local
+  // placeholder when the spreadsheet has a name only).
+  assign("trainingManagerEmail", fields.trainingManagerEmail);
   assign("supervisor", fields.supervisor);
+  assign("supervisorEmail", fields.supervisorEmail);
   assign("candidateAddress", fields.candidateAddress);
   assign("email", fields.email);
   assign("contactNumber", fields.contactNumber);
@@ -233,14 +252,15 @@ function validateCandidateRow(
   fields: Record<string, string | null>,
   companies: Company[],
   workforce: AdminWorkforceRecord[],
-  people: PermissionPersonRef[],
   departments: DepartmentLookupRef[],
   allocatedWorkforceNumbers: string[] = [],
   options: {
     autoCreateMissing: boolean;
     autoCreateMissingDepartments?: boolean;
-  } = { autoCreateMissing: false },
+  } = { autoCreateMissing: true },
 ): BulkPreviewRow {
+  const autoCreateMissingDepartments =
+    options.autoCreateMissingDepartments !== false;
   const messages: string[] = [];
   const candidateName = fields.candidateName?.trim() ?? "";
   const companyInput = fields.company?.trim() ?? "";
@@ -259,7 +279,7 @@ function validateCandidateRow(
 
   // Company matching: Company Number first, then a UNIQUE Company Name. Never
   // assign by fuzzy name when a number is present; never auto-match ambiguous
-  // names into a silent duplicate company.
+  // names into a silent duplicate company. Missing companies auto-create.
   const match = resolveWorkforceCompanyMatch(
     companies,
     { companyNumber: companyNumberInput, companyName: companyInput },
@@ -267,7 +287,9 @@ function validateCandidateRow(
   );
   const report = match.report;
   const matchedCompany = match.kind === "matched" ? match.company : null;
-  const resolvedCompanyName = matchedCompany?.companyName ?? companyInput;
+  const fallbackCompanyName = companyInput || companyNumberInput;
+  const resolvedCompanyName =
+    matchedCompany?.companyName ?? fallbackCompanyName;
   const companyMatchedBy: BulkPreviewRow["companyMatchedBy"] =
     match.kind === "matched"
       ? match.matchedBy
@@ -283,22 +305,11 @@ function validateCandidateRow(
     matchedCompanyName: report.matchedCompanyName ?? resolvedCompanyName ?? null,
     companyMatchedBy,
   };
-  if (report.warning) messages.push(report.warning);
+  // Name/number mismatch on a matched company is worth surfacing. Auto-create
+  // of a missing company is silent — the row just imports.
+  if (report.warning && match.kind !== "create") messages.push(report.warning);
 
   const department = fields.department?.trim();
-
-  const tm = fields.trainingManager?.trim();
-  if (tm && !findPermissionPerson(people, tm)) {
-    messages.push(
-      `Training manager "${tm}" not in Permissions — will be created on import.`,
-    );
-  }
-  const supervisor = fields.supervisor?.trim();
-  if (supervisor && !findPermissionPerson(people, supervisor)) {
-    messages.push(
-      `Supervisor "${supervisor}" not in Permissions — will be created on import.`,
-    );
-  }
 
   const hasCompanyInput = Boolean(companyInput || companyNumberInput);
   if (!workforceNumber && candidateName && hasCompanyInput) {
@@ -343,27 +354,15 @@ function validateCandidateRow(
   }
 
   if (department) {
-    if (match.kind === "create") {
-      messages.push(
-        `Department "${department}" will be created for the new company.`,
-      );
-    } else if (matchedCompany) {
+    if (match.kind !== "create" && matchedCompany && !autoCreateMissingDepartments) {
       const key = deptKey(department);
       const sameCompanyMatches = departments.filter(
         (row) =>
           deptKey(row.name) === key &&
           (!row.companyId || row.companyId === matchedCompany.id),
       );
-      // Only an Active department counts as a real match — an Inactive one
-      // is treated the same as "not found" unless auto-create is enabled.
       const sameCompanyHit = sameCompanyMatches.find(isDepartmentActive);
-      if (sameCompanyHit) {
-        messages.push(`Department "${department}" matched.`);
-      } else if (options.autoCreateMissingDepartments) {
-        messages.push(
-          `Department "${department}" will be created for this company.`,
-        );
-      } else {
+      if (!sameCompanyHit) {
         const inactiveSameCompanyHit = sameCompanyMatches.find(
           (row) => !isDepartmentActive(row),
         );
@@ -445,23 +444,9 @@ function validateCandidateRow(
     };
   }
 
-  if (match.kind === "create") {
-    // Auto-create mode: company will be created on commit.
-    return {
-      rowNumber,
-      status: "Warning",
-      messages,
-      fields: fieldsWithNumber,
-      resolvedCompanyName,
-      matchedEntityId: null,
-      matchedEntityName: null,
-      duplicateMatch: null,
-      ...reportFields,
-    };
-  }
-
   // Informative notes (not blockers): keep status Ready unless a real risk
-  // was already flagged above (soft name match / company create).
+  // was already flagged above (soft name match). Missing companies auto-create
+  // and stay Ready.
   if (!autoAssignedWorkforceNumber && !workforceNumber) {
     messages.push("Workforce Number is missing (optional) — can be auto-assigned.");
   }
@@ -517,9 +502,12 @@ async function resolveOrCreateCompany(
   }
 
   // match.kind === "create" — auto-create the missing company. Preserve a
-  // supplied Company Number; otherwise allocate a fresh one.
+  // supplied Company Number; otherwise allocate a fresh one. If the row only
+  // had a number, use that as the display name so createAdminCompany has a name.
+  const createdName =
+    companyName.trim() || companyNumber?.trim() || "New Company";
   const created = await createAdminCompany({
-    companyName,
+    companyName: createdName,
     companyNumber:
       companyNumber?.trim() || allocateNextCompanyNumber(companies),
     status: "Active",
@@ -533,8 +521,8 @@ async function resolveOrCreateCompany(
 /** Local error carrier so the commit loop reports the matcher message per row. */
 class ValidationErrorLike extends Error {}
 
-/** Bound parallel Graph POSTs — ~5× faster than serial for workforce creates. */
-const BULK_CREATE_CONCURRENCY = 5;
+/** Bound parallel Graph POSTs for workforce, permissions, and folders. */
+const BULK_CREATE_CONCURRENCY = 12;
 
 async function mapPool<T, R>(
   items: T[],
@@ -567,13 +555,12 @@ export async function previewCandidateImport(
     autoCreateMissingDepartments?: boolean;
   } = {},
 ): Promise<BulkPreviewRow[]> {
-  const autoCreateMissing = options.autoCreateMissingCompanies ?? false;
+  const autoCreateMissing = options.autoCreateMissingCompanies ?? true;
   const autoCreateMissingDepartments =
-    options.autoCreateMissingDepartments ?? false;
-  const [companies, workforce, people, departmentRows] = await Promise.all([
+    options.autoCreateMissingDepartments ?? true;
+  const [companies, workforce, departmentRows] = await Promise.all([
     listAdminCompanies(),
     listAdminWorkforce(),
-    loadPermissionPeople(),
     // Inactive rows are loaded on purpose: matching still requires Active (see
     // validateCandidateRow), but the preview can only say "exists but is
     // Inactive — reactivate it" if it can actually see that row.
@@ -595,7 +582,6 @@ export async function previewCandidateImport(
       fields,
       companies,
       workforce,
-      people,
       departments,
       allocatedWorkforceNumbers,
       { autoCreateMissing, autoCreateMissingDepartments },
@@ -614,9 +600,9 @@ export async function commitCandidateImport(input: {
   autoCreateMissingDepartments?: boolean;
   log?: BulkLogger;
 }): Promise<BulkPreviewRow[]> {
-  const autoCreateMissing = input.autoCreateMissingCompanies ?? false;
+  const autoCreateMissing = input.autoCreateMissingCompanies ?? true;
   const autoCreateMissingDepartments =
-    input.autoCreateMissingDepartments ?? false;
+    input.autoCreateMissingDepartments ?? true;
   const log = input.log ?? createBulkLogger("commit:workforce");
   // Load all reference data in one parallel round-trip (companies used to be a
   // separate serial read before this Promise.all).
@@ -703,7 +689,6 @@ export async function commitCandidateImport(input: {
       fields,
       companies,
       liveWorkforce,
-      people,
       departmentRecords,
       allocatedWorkforceNumbers,
       { autoCreateMissing, autoCreateMissingDepartments },
@@ -840,77 +825,144 @@ export async function commitCandidateImport(input: {
   });
 
   await withBulkSharePointWrites(async () => {
-    // Phase 2: pre-create unique TMs / supervisors / departments (serial).
+    // Phase 2: pre-create unique TMs / supervisors / departments in parallel.
     const phase2 = log.phase("phase2:permissions+departments");
     const { createAdminDepartment, updateAdminDepartment } = await import(
       "@/lib/services/departmentService"
     );
 
+    const pendingPeople: Array<{
+      displayName: string;
+      roleType: "Admin" | "Customer";
+      userEmail: string | null;
+      companyId: string;
+    }> = [];
+    const seenPeople = new Set<string>();
+    const queuePerson = (
+      name: string | null | undefined,
+      email: string | null,
+      roleType: "Admin" | "Customer",
+      companyId: string,
+    ) => {
+      const displayName = name?.trim();
+      if (!displayName) return;
+      const existing =
+        (email ? findPermissionPerson(people, email) : null) ??
+        findPermissionPerson(people, displayName);
+      if (existing) return;
+      const key = email
+        ? `email:${email}`
+        : `name:${roleType}:${displayName.toLowerCase()}`;
+      if (seenPeople.has(key)) return;
+      seenPeople.add(key);
+      pendingPeople.push({
+        displayName,
+        roleType,
+        userEmail: email,
+        companyId,
+      });
+    };
+
     for (const job of [...pendingCreates, ...pendingUpdates]) {
-      const tm = job.validated.fields.trainingManager?.trim();
-      if (tm && !findPermissionPerson(people, tm)) {
-        const ensured = await ensurePermissionPerson({
-          displayName: tm,
-          roleType: "Admin",
-          companyId: job.company.id,
+      queuePerson(
+        job.validated.fields.trainingManager,
+        job.validated.fields.trainingManagerEmail?.trim().toLowerCase() ||
+          null,
+        "Admin",
+        job.company.id,
+      );
+      queuePerson(
+        job.validated.fields.supervisor,
+        job.validated.fields.supervisorEmail?.trim().toLowerCase() || null,
+        "Customer",
+        job.company.id,
+      );
+    }
+
+    const createdPeople = await mapPool(
+      pendingPeople,
+      BULK_CREATE_CONCURRENCY,
+      async (person) =>
+        ensurePermissionPerson({
+          displayName: person.displayName,
+          roleType: person.roleType,
+          companyId: person.companyId,
           people,
-        });
-        people = ensured.people;
-      }
-      const supervisor = job.validated.fields.supervisor?.trim();
-      if (supervisor && !findPermissionPerson(people, supervisor)) {
-        const ensured = await ensurePermissionPerson({
-          displayName: supervisor,
-          roleType: "Customer",
-          companyId: job.company.id,
-          people,
-        });
-        people = ensured.people;
-      }
-      const department = job.validated.fields.department?.trim();
-      if (department) {
+          userEmail: person.userEmail,
+        }),
+    );
+    for (const ensured of createdPeople) {
+      if (ensured.created) people = [...people, ensured.person];
+    }
+
+    const pendingDepartments: Array<{
+      name: string;
+      companyId: string;
+      companyName: string;
+    }> = [];
+    const seenDepartments = new Set<string>();
+    if (autoCreateMissingDepartments) {
+      for (const job of [...pendingCreates, ...pendingUpdates]) {
+        const department = job.validated.fields.department?.trim();
+        if (!department) continue;
         const hit = departmentRecords.find(
           (row) =>
             deptKey(row.name) === deptKey(department) &&
             (!row.companyId || row.companyId === job.company.id) &&
             isDepartmentActive(row),
         );
-        if (!hit && autoCreateMissingDepartments) {
-          // Reactivate before creating: the company may already own this
-          // department as Inactive, and skipDuplicateScan means SharePoint
-          // would happily accept a second row with the same name.
-          const inactive = departmentRecords.find(
-            (row) =>
-              deptKey(row.name) === deptKey(department) &&
-              (!row.companyId || row.companyId === job.company.id) &&
-              !isDepartmentActive(row),
-          );
-          const resolved = inactive
-            ? (await updateAdminDepartment(inactive.id, { status: "Active" }))
-                .record
-            : await createAdminDepartment({
-                name: department,
-                companyId: job.company.id,
-                companyName: job.companyName,
-                skipDuplicateScan: true,
-              });
-          departmentRecords = [
-            ...departmentRecords.filter((row) => row.id !== resolved.id),
-            {
-              id: resolved.id,
-              name: resolved.name,
-              companyId: resolved.companyId,
-              companyName: resolved.companyName,
-              status: resolved.status,
-            },
-          ];
-        }
+        if (hit) continue;
+        const key = `${job.company.id}:${deptKey(department)}`;
+        if (seenDepartments.has(key)) continue;
+        seenDepartments.add(key);
+        pendingDepartments.push({
+          name: department,
+          companyId: job.company.id,
+          companyName: job.companyName,
+        });
       }
+    }
+
+    const createdDepartments = await mapPool(
+      pendingDepartments,
+      BULK_CREATE_CONCURRENCY,
+      async (dept) => {
+        const inactive = departmentRecords.find(
+          (row) =>
+            deptKey(row.name) === deptKey(dept.name) &&
+            (!row.companyId || row.companyId === dept.companyId) &&
+            !isDepartmentActive(row),
+        );
+        if (inactive) {
+          return (await updateAdminDepartment(inactive.id, { status: "Active" }))
+            .record;
+        }
+        return createAdminDepartment({
+          name: dept.name,
+          companyId: dept.companyId,
+          companyName: dept.companyName,
+          skipDuplicateScan: true,
+        });
+      },
+    );
+    for (const resolved of createdDepartments) {
+      departmentRecords = [
+        ...departmentRecords.filter((row) => row.id !== resolved.id),
+        {
+          id: resolved.id,
+          name: resolved.name,
+          companyId: resolved.companyId,
+          companyName: resolved.companyName,
+          status: resolved.status,
+        },
+      ];
     }
 
     phase2.end({
       people: people.length,
       departments: departmentRecords.length,
+      createdPeople: createdPeople.filter((row) => row.created).length,
+      createdDepartments: createdDepartments.length,
     });
 
     // Phase 3a: updates stay sequential (rarer path).
@@ -1228,7 +1280,7 @@ export async function commitCandidateImport(input: {
     // NVQ Documents / Other Documents. Reuses ensureCandidateDocumentFolders,
     // which is idempotent (resolve-first, number-prefix match) and never
     // throws — folder issues are reported per row, never blocking the import.
-    // Bounded concurrency keeps 50 candidates well under the route timeout.
+    // Bounded concurrency keeps large batches under the route timeout.
     if (importedTargets.length) {
       const phase3d = log.phase("phase3d:documentFolders");
       let foldersDone = 0;

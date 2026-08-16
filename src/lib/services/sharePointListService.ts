@@ -54,6 +54,21 @@ type ListQueryOptions = {
   filter?: string;
   top?: number;
   selectFields?: string[];
+  /**
+   * Graph `$orderby`, e.g. `"id desc"` or `"createdDateTime desc"`.
+   * Newest-first reads (audit logs) must set this — SharePoint default order
+   * is oldest id first, so a `top` cap would otherwise hide recent rows.
+   */
+  orderBy?: string;
+  /**
+   * Skip the `unstable_cache` wrapper for this read. Use when the expected
+   * payload is likely to exceed Next.js's 2 MB per-item cache limit — bulk
+   * imports that scan a whole Workforce / Matrix list, for example. The read
+   * itself still succeeds without this flag, but the cache write triggers a
+   * noisy unhandledRejection. Setting `skipCache: true` avoids both the
+   * failed write attempt and the log noise.
+   */
+  skipCache?: boolean;
 };
 
 function fieldsAreEmpty(fields: SharePointFields | null | undefined): boolean {
@@ -142,6 +157,9 @@ async function fetchListItemsUncached(
       // GraphRequest.filter() does not encode; encode here so & and other
       // reserved URL characters inside literal values stay inside $filter.
       request = request.filter(encodeODataFilter(options.filter));
+    }
+    if (options?.orderBy?.trim()) {
+      request = request.orderby(options.orderBy.trim());
     }
     return request.get();
   };
@@ -242,13 +260,22 @@ export async function getListItemsByKey(
   options?: ListQueryOptions,
 ): Promise<SharePointListItem[]> {
   const listId = getSharePointListId(listKey);
+  // Bypass unstable_cache for reads the caller has flagged as too big to
+  // cache (e.g. Workforce / Matrix scans during bulk import). Cached reads
+  // over ~2 MB otherwise throw `Failed to set Next.js data cache … items over
+  // 2MB can not be cached` as an unhandledRejection, even though the read
+  // itself succeeds.
+  if (options?.skipCache) {
+    return fetchListItemsUncached(listId, options);
+  }
   const filter = options?.filter ?? "";
   const top = String(options?.top ?? "");
   const select = options?.selectFields?.join(",") ?? "";
+  const orderBy = options?.orderBy ?? "";
 
   // Cache key bump: wide lists previously cached empty `fields` from Graph expand.
   return cachedSharePointRead(
-    ["sp-list-items", listKey, listId, filter, top, select, "hydrate-v1"],
+    ["sp-list-items", listKey, listId, filter, top, select, orderBy, "hydrate-v1"],
     [sharePointListTag(listKey)],
     () => fetchListItemsUncached(listId, options),
   );
@@ -525,29 +552,67 @@ function markListMutated(listKey: SharePointListKey): void {
 }
 
 /**
+ * Live Workforce List has Lookup columns (`Trainingmanager`, `Supervisor`)
+ * but no sidecar text columns. Graph rejects the whole create if these names
+ * are present.
+ */
+const UNWRITABLE_GRAPH_FIELDS: Partial<Record<SharePointListKey, string[]>> = {
+  workforce: ["TrainingManagerText", "SupervisorText"],
+};
+
+function fieldsForGraphWrite(
+  listKey: SharePointListKey,
+  fields: SharePointFields,
+): SharePointFields {
+  const omit = UNWRITABLE_GRAPH_FIELDS[listKey];
+  const next: SharePointFields = { ...fields };
+  if (omit?.length) {
+    for (const name of omit) {
+      delete next[name];
+    }
+  }
+  // MultiChoice (checkBoxes) rejects a bare string[] with 400 Invalid request.
+  // Graph requires the collection annotation on the same payload.
+  for (const [key, value] of Object.entries(next)) {
+    if (key.includes("@odata.type")) continue;
+    if (
+      Array.isArray(value) &&
+      value.every((entry) => typeof entry === "string")
+    ) {
+      next[`${key}@odata.type`] = "Collection(Edm.String)";
+    }
+  }
+  return next;
+}
+
+/**
  * Creates a SharePoint list item. `fields` must use SharePoint internal names.
  */
 export async function createListItemByKey(
   listKey: SharePointListKey,
   fields: SharePointFields,
+  options?: { skipCacheRevalidate?: boolean },
 ): Promise<SharePointListItem> {
   const siteRoot = getSharePointSiteApiRoot();
   const listId = getSharePointListId(listKey);
   const client = getGraphClient();
+  const graphFields = fieldsForGraphWrite(listKey, fields);
 
   const created = (await withGraphMutationRetry(() =>
-    client.api(`${siteRoot}/lists/${listId}/items`).post({ fields }),
+    client.api(`${siteRoot}/lists/${listId}/items`).post({ fields: graphFields }),
   )) as {
     id: string;
     createdDateTime?: string;
     fields?: SharePointFields;
   };
 
-  markListMutated(listKey);
+  if (!options?.skipCacheRevalidate) {
+    markListMutated(listKey);
+  }
 
   return {
     id: String(created.id),
-    fields: created.fields ?? fields,
+    fields: created.fields ?? graphFields,
     createdDateTime: created.createdDateTime ?? null,
   };
 }
@@ -565,11 +630,12 @@ export async function updateListItemFieldsByKey(
   const siteRoot = getSharePointSiteApiRoot();
   const listId = getSharePointListId(listKey);
   const client = getGraphClient();
+  const graphFields = fieldsForGraphWrite(listKey, fields);
 
   await withGraphMutationRetry(() =>
     client
       .api(`${siteRoot}/lists/${listId}/items/${itemId}/fields`)
-      .patch(fields),
+      .patch(graphFields),
   );
 
   markListMutated(listKey);
@@ -705,6 +771,94 @@ export async function listHasColumn(
   return columns.some((name) => name.toLowerCase() === target);
 }
 
+type GraphChoiceColumn = {
+  id: string;
+  name: string;
+  displayName?: string;
+  choice?: {
+    allowTextEntry?: boolean;
+    choices?: string[];
+  };
+};
+
+async function getChoiceColumn(
+  listKey: SharePointListKey,
+  columnName: string,
+): Promise<GraphChoiceColumn | null> {
+  const siteRoot = getSharePointSiteApiRoot();
+  const listId = getSharePointListId(listKey);
+  const client = getGraphClient();
+  const target = columnName.trim().toLowerCase();
+  const response = (await withGraphReadRetry(() =>
+    client.api(`${siteRoot}/lists/${listId}/columns`).top(200).get(),
+  )) as { value?: GraphChoiceColumn[] };
+  return (
+    (response.value ?? []).find(
+      (column) =>
+        column.name?.trim().toLowerCase() === target ||
+        column.displayName?.trim().toLowerCase() === target,
+    ) ?? null
+  );
+}
+
+/**
+ * Make sure MultiChoice values exist on the SharePoint column before writing.
+ * Missing codes (and junk like "Choice 8") are why NPORS Category saves 400.
+ */
+export async function ensureChoiceColumnValues(
+  listKey: SharePointListKey,
+  columnName: string,
+  values: string[],
+): Promise<string[]> {
+  const wanted = [
+    ...new Set(values.map((value) => value.trim()).filter(Boolean)),
+  ];
+  if (wanted.length === 0) return [];
+
+  const column = await getChoiceColumn(listKey, columnName);
+  if (!column?.choice) return wanted;
+
+  const live = (column.choice.choices ?? [])
+    .map((choice) => String(choice).trim())
+    .filter(Boolean);
+  const resolved = wanted.map((code) => {
+    const exact = live.find(
+      (choice) => choice.toLowerCase() === code.toLowerCase(),
+    );
+    if (exact) return exact;
+    const byToken = live.find((choice) => {
+      const match = choice.toUpperCase().match(/\bN\d+[A-Z]?\b/);
+      return match?.[0] === code.toUpperCase();
+    });
+    return byToken ?? code;
+  });
+
+  const liveLower = new Set(live.map((choice) => choice.toLowerCase()));
+  const missing = resolved.filter(
+    (choice) =>
+      !liveLower.has(choice.toLowerCase()) &&
+      !/^choice\s*\d+$/i.test(choice),
+  );
+  if (missing.length === 0) return resolved;
+
+  const nextChoices = [
+    ...live.filter((choice) => !/^choice\s*\d+$/i.test(choice)),
+    ...missing,
+  ];
+  const siteRoot = getSharePointSiteApiRoot();
+  const listId = getSharePointListId(listKey);
+  const client = getGraphClient();
+  await client.api(`${siteRoot}/lists/${listId}/columns/${column.id}`).patch({
+    choice: {
+      allowTextEntry: false,
+      displayAs: "checkBoxes",
+      choices: nextChoices,
+    },
+  });
+  revalidateSharePointList(listKey);
+  return resolved;
+}
+
 /** Maps schema field keys to SharePoint internal names for write payloads. */
 export function toSharePointFields(
   listKey: SharePointListKey,
@@ -719,6 +873,9 @@ export function toSharePointFields(
     }
     const internal = schema[key];
     if (!internal || internal === "ID") {
+      continue;
+    }
+    if (UNWRITABLE_GRAPH_FIELDS[listKey]?.includes(internal)) {
       continue;
     }
     payload[internal] = value;

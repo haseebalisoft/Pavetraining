@@ -165,6 +165,8 @@ test("Auto-create ON: unknown Company Number yields a create action", () => {
   assert.equal(result.kind, "create");
   assert.equal(result.report.matchedCompanyNumber, "C40000");
   assert.equal(result.report.matchedCompanyName, "New Ventures Ltd");
+  assert.equal(result.report.warning, null);
+  assert.equal(result.report.error, null);
 });
 
 // 7b. Auto-create: unknown name → create.

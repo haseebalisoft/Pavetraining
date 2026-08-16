@@ -3,7 +3,7 @@ import path from "path";
 
 import { NextResponse } from "next/server";
 
-import { withAdminApi, ValidationError } from "@/lib/api/adminApi";
+import { withSharePointAdminApi, ValidationError } from "@/lib/api/adminApi";
 import { listBulkUploadTemplates } from "@/lib/services/bulkUpload/bulkUploadService";
 import {
   buildTemplateCsv,
@@ -23,7 +23,7 @@ export async function GET(request: Request) {
   if (download && format !== "csv") {
     const excelRelative = getClientExcelTemplatePath(download as BulkImportType);
     if (excelRelative) {
-      return withAdminApi(
+      return withSharePointAdminApi(
         "GET /api/admin/bulk-upload/templates?download=xlsx",
         async () => {
           const filePath = path.join(process.cwd(), "public", excelRelative);
@@ -73,7 +73,7 @@ export async function GET(request: Request) {
     }
   }
 
-  return withAdminApi(
+  return withSharePointAdminApi(
     "GET /api/admin/bulk-upload/templates",
     async (_context, req) => {
       const reqUrl = new URL(req.url);

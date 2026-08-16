@@ -40,6 +40,13 @@ export type AuditAction =
   | "PERMISSION_DEPARTMENT_SCOPE_UPDATE"
   | string;
 
+/** Where the row originated — used to split Admin vs SharePoint/customer views. */
+export type AuditLogSource =
+  | "admin"
+  | "customer"
+  | "notification"
+  | "sharepoint";
+
 export interface AuditLogRecord {
   id: string;
   timestamp: string;
@@ -56,6 +63,7 @@ export interface AuditLogRecord {
   userAgent: string | null;
   metadata: Record<string, unknown> | null;
   title: string;
+  source: AuditLogSource;
 }
 
 export interface AuditLogQuery {
@@ -63,6 +71,7 @@ export interface AuditLogQuery {
   action?: string | null;
   success?: "all" | "true" | "false" | null;
   entityType?: string | null;
+  source?: AuditLogSource | "all" | null;
   from?: string | null;
   to?: string | null;
   top?: number;

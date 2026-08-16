@@ -11,6 +11,7 @@ import {
 } from "@/components/admin/AdminCrudPage";
 import styles from "@/components/admin/admin.module.css";
 import { useAdminToast } from "@/components/admin/AdminToast";
+import { LinkMatrixToWorkforceModal } from "@/components/admin/LinkMatrixToWorkforceModal";
 import { ExpiryDateBadge } from "@/components/ui/ExpiryDateBadge";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { readPublicApiError } from "@/lib/errors/publicMessages";
@@ -273,15 +274,26 @@ const fields: AdminFieldConfig[] = [
   },
 ];
 
+type LinkFilter = "all" | "linked" | "needs-review" | "orphan";
+
+function matchesLinkFilter(
+  row: AdminMatrixRecord,
+  linkFilter: LinkFilter,
+): boolean {
+  if (linkFilter === "all") return true;
+  const status = row.matrixLinkStatus;
+  if (linkFilter === "linked") return status === "Linked";
+  if (linkFilter === "needs-review") return status === "Needs Review";
+  if (linkFilter === "orphan") return status === "Orphan";
+  return true;
+}
+
 function matchesFilter(
   row: AdminMatrixRecord,
   filter: string | null,
-  showAll: boolean,
+  linkFilter: LinkFilter,
 ): boolean {
-  // Orphan rows (candidate not in Workforce) are hidden by default so the
-  // matrix only shows people who exist in Workforce; "Show all" reveals them
-  // for auditing. Needs Review / Linked always pass this gate.
-  if (!showAll && row.matrixLinkStatus === "Orphan") return false;
+  if (!matchesLinkFilter(row, linkFilter)) return false;
   if (!filter || filter === "all") return true;
   if (filter === "review" || filter === "missing") return row.needsReview;
   if (filter === "expiring") {
@@ -375,12 +387,38 @@ export function AdminMatrixClient({
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<MatrixSyncResult | null>(null);
   const [syncCompanyId, setSyncCompanyId] = useState("");
-  // Orphan rows (matrix rows with no Workforce candidate) are hidden by default;
-  // this toggle reveals them for auditing/cleanup.
-  const [showAll, setShowAll] = useState(false);
+  // New behaviour (client sign-off requirement): Admin sees ALL rows by
+  // default — Linked, Needs Review, and Orphan. A tab strip narrows the view.
+  const [linkFilter, setLinkFilter] = useState<LinkFilter>("all");
+  // Row currently being linked to a Workforce candidate via the repair modal.
+  // Null when the modal is closed.
+  const [linkTarget, setLinkTarget] = useState<AdminMatrixRecord | null>(null);
+
   const orphanCount = initialRows.filter(
     (row) => row.matrixLinkStatus === "Orphan",
   ).length;
+  const needsReviewCount = initialRows.filter(
+    (row) => row.matrixLinkStatus === "Needs Review",
+  ).length;
+  const unlinkedCount = orphanCount + needsReviewCount;
+  const linkTabs: Array<{
+    id: LinkFilter;
+    label: string;
+    count?: number;
+  }> = [
+    { id: "all", label: "All", count: initialRows.length },
+    {
+      id: "linked",
+      label: "Linked",
+      count: initialRows.length - unlinkedCount,
+    },
+    {
+      id: "needs-review",
+      label: "Needs Review",
+      count: needsReviewCount,
+    },
+    { id: "orphan", label: "Orphan / Missing Workforce", count: orphanCount },
+  ];
 
   function setExpiryFilter(next: string) {
     const params = new URLSearchParams(searchParams.toString());
@@ -442,6 +480,44 @@ export function AdminMatrixClient({
           />
         ))}
       </div>
+
+      {unlinkedCount > 0 ? (
+        <div className={styles.matrixUnlinkedBanner} role="status">
+          <span aria-hidden="true">⚠</span>
+          <span>
+            {unlinkedCount} Matrix row
+            {unlinkedCount === 1 ? "" : "s"} not linked to Workforce yet
+            ({needsReviewCount} need review, {orphanCount} orphan
+            {orphanCount === 1 ? "" : "s"}). Visible to Admin but hidden from
+            Customer until linked. Use <strong>Link to Workforce</strong> on
+            the row or click <strong>Sync candidate</strong> after fixing the
+            name.
+          </span>
+        </div>
+      ) : null}
+
+      <div className={styles.matrixLinkTabs} role="tablist" aria-label="Filter matrix by link status">
+        {linkTabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            aria-selected={linkFilter === tab.id}
+            className={
+              linkFilter === tab.id
+                ? `${styles.matrixLinkTab} ${styles.matrixLinkTabActive}`
+                : styles.matrixLinkTab
+            }
+            onClick={() => setLinkFilter(tab.id)}
+          >
+            {tab.label}
+            {typeof tab.count === "number" ? (
+              <span className={styles.matrixLinkTabCount}>{tab.count}</span>
+            ) : null}
+          </button>
+        ))}
+      </div>
+
       <AdminCrudPage<AdminMatrixRecord>
         title="Training Matrix"
         description="Register sync (NPORS / EUSR / Streetworks / In-House Asbestos → N031) and direct admin edits both update this matrix. Cells marked Manual are not overwritten by register sync. Pass updates expiry when newer; Fail never extends."
@@ -458,11 +534,12 @@ export function AdminMatrixClient({
         listUrl="/api/admin/training-matrix"
         updateUrl={(id) => `/api/admin/training-matrix/${id}`}
         deleteUrl={(id) => `/api/admin/training-matrix/${id}`}
+        optimistic
         allowCreate={false}
         mapResponse={(payload) =>
           ((payload as { records?: AdminMatrixRecord[] }).records ?? [])
         }
-        rowFilter={(row) => matchesFilter(row, filter, showAll)}
+        rowFilter={(row) => matchesFilter(row, filter, linkFilter)}
         rowClassName={(row) => (row.needsReview ? styles.reviewRow : undefined)}
         searchKeys={[
           (row) => row.candidateName,
@@ -486,22 +563,6 @@ export function AdminMatrixClient({
                 <option value="6m-plus">6 months or more / in date (181+ days, green)</option>
                 <option value="review">Records to Review (missing dates)</option>
               </select>
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Link status</span>
-              <span className={styles.checkboxRow}>
-                <input
-                  type="checkbox"
-                  checked={showAll}
-                  onChange={(event) => setShowAll(event.target.checked)}
-                />
-                <span>
-                  Show all
-                  {orphanCount > 0
-                    ? ` (incl. ${orphanCount} orphan${orphanCount === 1 ? "" : "s"})`
-                    : " (incl. orphans)"}
-                </span>
-              </span>
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Sync company</span>
@@ -551,28 +612,49 @@ export function AdminMatrixClient({
           </div>
         }
         extraActions={(row, { reload }) => (
-          <button
-            type="button"
-            className={styles.linkButton}
-            disabled={syncing || !row.companyName}
-            onClick={() => {
-              void (async () => {
-                await runSync(
-                  {
-                    candidateName: row.candidateName,
-                    companyName: row.companyName,
-                  },
-                  `Sync ${row.candidateName}`,
-                );
-                await reload();
-              })();
-            }}
-          >
-            Sync candidate
-          </button>
+          <>
+            {row.matrixLinkStatus !== "Linked" ? (
+              <button
+                type="button"
+                className={styles.linkButton}
+                onClick={() => setLinkTarget(row)}
+              >
+                Link to Workforce
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className={styles.linkButton}
+              disabled={syncing || !row.companyName}
+              onClick={() => {
+                void (async () => {
+                  await runSync(
+                    {
+                      candidateName: row.candidateName,
+                      companyName: row.companyName,
+                    },
+                    `Sync ${row.candidateName}`,
+                  );
+                  await reload();
+                })();
+              }}
+            >
+              Sync candidate
+            </button>
+          </>
         )}
       />
       {syncResult ? <SyncResultsPanel result={syncResult} /> : null}
+      <LinkMatrixToWorkforceModal
+        open={linkTarget !== null}
+        matrixRow={linkTarget}
+        onClose={() => setLinkTarget(null)}
+        onLinked={() => {
+          setLinkTarget(null);
+          router.refresh();
+          pushToast("Matrix row linked to Workforce.", "success");
+        }}
+      />
     </>
   );
 }

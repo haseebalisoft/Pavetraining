@@ -122,9 +122,9 @@ export async function previewBulkUpload(input: {
   const template = getBulkImportTemplate(importType);
   const { fileName, bytes } = await readUploadFile(input.file);
   const suppressNotifications = input.suppressNotifications ?? true;
-  const autoCreateMissingCompanies = input.autoCreateMissingCompanies ?? false;
+  const autoCreateMissingCompanies = input.autoCreateMissingCompanies ?? true;
   const autoCreateMissingDepartments =
-    input.autoCreateMissingDepartments ?? false;
+    input.autoCreateMissingDepartments ?? true;
 
   if (!template?.implemented) {
     return {
@@ -187,9 +187,7 @@ export async function previewBulkUpload(input: {
       summary: summarizeBulkRows(rows),
       suppressNotifications,
       implemented: true,
-      message: autoCreateMissingCompanies
-        ? null
-        : "Workforce rows are matched to existing companies (Company Number first). Upload companies first, or enable auto-create for missing companies.",
+      message: null,
     };
   }
 
@@ -251,11 +249,11 @@ export async function commitBulkUpload(input: {
   const suppressNotifications = asBool(input.suppressNotifications, true);
   const autoCreateMissingCompanies = asBool(
     input.autoCreateMissingCompanies,
-    false,
+    true,
   );
   const autoCreateMissingDepartments = asBool(
     input.autoCreateMissingDepartments,
-    false,
+    true,
   );
   const fileName = input.fileName?.trim() || "upload.csv";
 

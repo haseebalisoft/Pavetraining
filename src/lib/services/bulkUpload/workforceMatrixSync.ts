@@ -473,9 +473,19 @@ export function findMatrixRowByWorkforce<T extends MatrixRowRef>(
     if (nameDobPeers > 1) return tie(byNameDob, "nameDob");
     return found(byNameDob[0]!, "nameDob");
   }
-  // Same name AND same DOB across several unlinked rows cannot be resolved
-  // without company info — leave them Needs Review.
-  if (byNameDob.length > 1) return tie(byNameDob, "nameDob");
+  // Same name AND same DOB across several unlinked rows is duplicate matrix
+  // data (e.g. the sheet was imported twice). Picking the oldest row lets
+  // Workforce import still link; going ambiguous froze all 50 candidates.
+  if (byNameDob.length > 1) {
+    if (nameDobPeers > 1) return tie(byNameDob, "nameDob");
+    const pick = [...byNameDob].sort((a, b) => {
+      const na = toNumericId(a.id) ?? Number.POSITIVE_INFINITY;
+      const nb = toNumericId(b.id) ?? Number.POSITIVE_INFINITY;
+      if (na !== nb) return na - nb;
+      return String(a.id ?? "").localeCompare(String(b.id ?? ""));
+    })[0]!;
+    return found(pick, "nameDob", byNameDob);
+  }
 
   // 5. Name alone, ONLY when there is no DOB to contradict: the name is unique
   //    across the whole matrix, the row is claimable and carries no DOB, and no
@@ -489,7 +499,8 @@ export function findMatrixRowByWorkforce<T extends MatrixRowRef>(
     return found(nameRows[0]!, "name");
   }
 
-  if (nameRows.length > 1) return tie(nameRows, "name");
+  // Several same-name rows with no safe DOB match: do not freeze. Caller
+  // creates this candidate's own linked row.
   return NONE;
 }
 

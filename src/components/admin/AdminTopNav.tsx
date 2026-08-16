@@ -4,47 +4,35 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import type { CustomerRoleType } from "@/types/models";
+
 import { BrandLogo } from "@/components/brand/BrandLogo";
 import styles from "./admin.module.css";
-
-type TopLink = { href: string; label: string; exact?: boolean };
-
-const PRIMARY_LINKS: TopLink[] = [
-  { href: "/admin", label: "Home", exact: true },
-  { href: "/admin/companies", label: "Companies" },
-  { href: "/admin/departments", label: "Departments" },
-  { href: "/admin/workforce", label: "Workforce" },
-  { href: "/admin/training-matrix", label: "Matrix" },
-  { href: "/admin/documents", label: "Documents" },
-  { href: "/admin/events", label: "Calendar" },
-];
-
-const REGISTER_LINKS: TopLink[] = [
-  { href: "/admin/training-records", label: "All registers" },
-  { href: "/admin/training-records/npors", label: "NPORS" },
-  { href: "/admin/training-records/eusr", label: "EUSR" },
-  { href: "/admin/training-records/streetworks", label: "Streetworks" },
-  { href: "/admin/training-records/in-house", label: "In-House" },
-  { href: "/admin/nvq", label: "NVQ" },
-];
-
-const MORE_LINKS: TopLink[] = [
-  { href: "/admin/permissions", label: "Permissions" },
-  { href: "/admin/offers", label: "Offers" },
-  { href: "/admin/notifications", label: "Notifications" },
-  { href: "/admin/bulk-upload", label: "Bulk Upload" },
-  { href: "/admin/logs", label: "Audit Log" },
-  { href: "/admin/settings", label: "Settings" },
-];
-
-const MOBILE_ALL_LINKS: TopLink[] = [
-  ...PRIMARY_LINKS,
-  ...REGISTER_LINKS,
-  ...MORE_LINKS,
-];
+import {
+  ADMIN_MORE_LINKS,
+  ADMIN_PRIMARY_LINKS,
+  ADMIN_REGISTER_LINKS,
+  type AdminNavItem,
+  canSeeAdminNavItem,
+} from "./adminNavItems";
 
 interface AdminTopNavProps {
   email: string;
+  /** Human role label ("Admin" / "Training Manager") for the diagnostic panel. */
+  roleLabel: string;
+  /**
+   * True iff this user should have full SharePoint-Admin power (literal SP
+   * "Admin" OR hardcoded protected-admin email). Training Managers who only
+   * have `canAccessAdmin` will get `false` and will not see SharePoint-admin-only
+   * items like Bulk Upload.
+   */
+  isSharePointAdmin: boolean;
+  /** Raw SharePoint RoleType value ("Admin" / "Training Manager"). Debug-only. */
+  sharePointRoleType: string;
+  /** Customer sub-role ("TrainingManager" / …); null for pure Admins. Debug-only. */
+  customerRole: CustomerRoleType | null;
+  /** True when the user is kept as admin by the hardcoded protected list. Debug-only. */
+  isAlwaysAdminEmail: boolean;
   signOutAction: () => Promise<void>;
 }
 
@@ -62,8 +50,8 @@ function isRegistersPath(pathname: string): boolean {
   );
 }
 
-function isMorePath(pathname: string): boolean {
-  return MORE_LINKS.some((link) => isActive(pathname, link.href));
+function isMorePathFor(items: AdminNavItem[], pathname: string): boolean {
+  return items.some((link) => isActive(pathname, link.href));
 }
 
 function ChevronIcon() {
@@ -86,17 +74,54 @@ function ChevronIcon() {
   );
 }
 
-export function AdminTopNav({ email, signOutAction }: AdminTopNavProps) {
+export function AdminTopNav({
+  email,
+  roleLabel,
+  isSharePointAdmin,
+  sharePointRoleType,
+  customerRole,
+  isAlwaysAdminEmail,
+  signOutAction,
+}: AdminTopNavProps) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [registersOpen, setRegistersOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [debugOpen, setDebugOpen] = useState(false);
   const navRef = useRef<HTMLElement | null>(null);
   const ignoreScrimClickRef = useRef(false);
 
+  const navContext = useMemo(
+    () => ({ isSharePointAdmin }),
+    [isSharePointAdmin],
+  );
+  const primaryLinks = useMemo(
+    () => ADMIN_PRIMARY_LINKS.filter((item) => canSeeAdminNavItem(item, navContext)),
+    [navContext],
+  );
+  const registerLinks = useMemo(
+    () => ADMIN_REGISTER_LINKS.filter((item) => canSeeAdminNavItem(item, navContext)),
+    [navContext],
+  );
+  const moreLinks = useMemo(
+    () => ADMIN_MORE_LINKS.filter((item) => canSeeAdminNavItem(item, navContext)),
+    [navContext],
+  );
+  const mobileAllLinks = useMemo(
+    () => [...primaryLinks, ...registerLinks, ...moreLinks],
+    [primaryLinks, registerLinks, moreLinks],
+  );
+  const allowedNavHrefs = useMemo(
+    () => mobileAllLinks.map((item) => item.href),
+    [mobileAllLinks],
+  );
+
   const registersActive = useMemo(() => isRegistersPath(pathname), [pathname]);
-  const moreActive = useMemo(() => isMorePath(pathname), [pathname]);
+  const moreActive = useMemo(
+    () => isMorePathFor(moreLinks, pathname),
+    [moreLinks, pathname],
+  );
   const profileInitial = email.trim().charAt(0).toUpperCase() || "A";
 
   useEffect(() => {
@@ -104,6 +129,7 @@ export function AdminTopNav({ email, signOutAction }: AdminTopNavProps) {
     setRegistersOpen(false);
     setMoreOpen(false);
     setProfileOpen(false);
+    setDebugOpen(false);
   }, [pathname]);
 
   useEffect(() => {
@@ -173,7 +199,7 @@ export function AdminTopNav({ email, signOutAction }: AdminTopNavProps) {
         </div>
 
         <nav className={styles.topNavLinksDesktop} aria-label="Admin">
-          {PRIMARY_LINKS.map((link) => (
+          {primaryLinks.map((link) => (
             <Link
               key={link.href}
               href={link.href}
@@ -187,77 +213,81 @@ export function AdminTopNav({ email, signOutAction }: AdminTopNavProps) {
             </Link>
           ))}
 
-          <div className={styles.topNavDropdown}>
-            <button
-              type="button"
-              className={`${styles.topNavLink} ${styles.topNavDropdownToggle} ${
-                registersActive ? styles.topNavLinkActive : ""
-              }`}
-              aria-expanded={registersOpen}
-              onClick={() => {
-                setRegistersOpen((value) => !value);
-                setMoreOpen(false);
-                setProfileOpen(false);
-              }}
-            >
-              Registers
-              <ChevronIcon />
-            </button>
-            {registersOpen ? (
-              <div className={styles.topNavDropdownMenu} role="menu">
-                {REGISTER_LINKS.map((link) => (
-                  <Link
-                    key={link.href}
-                    href={link.href}
-                    className={`${styles.topNavDropdownItem} ${
-                      isActive(pathname, link.href)
-                        ? styles.topNavDropdownItemActive
-                        : ""
-                    }`}
-                    role="menuitem"
-                  >
-                    {link.label}
-                  </Link>
-                ))}
-              </div>
-            ) : null}
-          </div>
+          {registerLinks.length > 0 ? (
+            <div className={styles.topNavDropdown}>
+              <button
+                type="button"
+                className={`${styles.topNavLink} ${styles.topNavDropdownToggle} ${
+                  registersActive ? styles.topNavLinkActive : ""
+                }`}
+                aria-expanded={registersOpen}
+                onClick={() => {
+                  setRegistersOpen((value) => !value);
+                  setMoreOpen(false);
+                  setProfileOpen(false);
+                }}
+              >
+                Registers
+                <ChevronIcon />
+              </button>
+              {registersOpen ? (
+                <div className={styles.topNavDropdownMenu} role="menu">
+                  {registerLinks.map((link) => (
+                    <Link
+                      key={link.href}
+                      href={link.href}
+                      className={`${styles.topNavDropdownItem} ${
+                        isActive(pathname, link.href)
+                          ? styles.topNavDropdownItemActive
+                          : ""
+                      }`}
+                      role="menuitem"
+                    >
+                      {link.label}
+                    </Link>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
 
-          <div className={styles.topNavDropdown}>
-            <button
-              type="button"
-              className={`${styles.topNavLink} ${styles.topNavDropdownToggle} ${
-                moreActive ? styles.topNavLinkActive : ""
-              }`}
-              aria-expanded={moreOpen}
-              onClick={() => {
-                setMoreOpen((value) => !value);
-                setRegistersOpen(false);
-                setProfileOpen(false);
-              }}
-            >
-              More
-              <ChevronIcon />
-            </button>
-            {moreOpen ? (
-              <div className={styles.topNavDropdownMenu} role="menu">
-                {MORE_LINKS.map((link) => (
-                  <Link
-                    key={link.href}
-                    href={link.href}
-                    className={`${styles.topNavDropdownItem} ${
-                      isActive(pathname, link.href)
-                        ? styles.topNavDropdownItemActive
-                        : ""
-                    }`}
-                    role="menuitem"
-                  >
-                    {link.label}
-                  </Link>
-                ))}
-              </div>
-            ) : null}
-          </div>
+          {moreLinks.length > 0 ? (
+            <div className={styles.topNavDropdown}>
+              <button
+                type="button"
+                className={`${styles.topNavLink} ${styles.topNavDropdownToggle} ${
+                  moreActive ? styles.topNavLinkActive : ""
+                }`}
+                aria-expanded={moreOpen}
+                onClick={() => {
+                  setMoreOpen((value) => !value);
+                  setRegistersOpen(false);
+                  setProfileOpen(false);
+                }}
+              >
+                More
+                <ChevronIcon />
+              </button>
+              {moreOpen ? (
+                <div className={styles.topNavDropdownMenu} role="menu">
+                  {moreLinks.map((link) => (
+                    <Link
+                      key={link.href}
+                      href={link.href}
+                      className={`${styles.topNavDropdownItem} ${
+                        isActive(pathname, link.href)
+                          ? styles.topNavDropdownItemActive
+                          : ""
+                      }`}
+                      role="menuitem"
+                    >
+                      {link.label}
+                    </Link>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </nav>
 
         <div className={styles.topNavTrailing}>
@@ -289,8 +319,47 @@ export function AdminTopNav({ email, signOutAction }: AdminTopNavProps) {
                   <div>
                     <p className={styles.profileMenuTitle}>Signed in</p>
                     <p className={styles.profileMenuEmail}>{email}</p>
+                    <p className={styles.profileMenuRole}>
+                      {roleLabel}
+                      {isSharePointAdmin ? "" : " · limited admin"}
+                    </p>
                   </div>
                 </div>
+                <button
+                  type="button"
+                  className={styles.profileDebugToggle}
+                  aria-expanded={debugOpen}
+                  onClick={() => setDebugOpen((value) => !value)}
+                >
+                  {debugOpen ? "Hide debug info" : "Show debug info"}
+                </button>
+                {debugOpen ? (
+                  <dl className={styles.profileDebugList}>
+                    <dt>Email</dt>
+                    <dd>{email}</dd>
+                    <dt>Resolved role</dt>
+                    <dd>{roleLabel}</dd>
+                    <dt>SharePoint RoleType</dt>
+                    <dd>{sharePointRoleType || "—"}</dd>
+                    <dt>Customer sub-role</dt>
+                    <dd>{customerRole ?? "none (pure admin)"}</dd>
+                    <dt>SharePoint Admin</dt>
+                    <dd>
+                      {isSharePointAdmin ? "yes" : "no"}
+                      {isAlwaysAdminEmail
+                        ? " · via hardcoded protected list"
+                        : ""}
+                    </dd>
+                    <dt>Allowed nav items ({allowedNavHrefs.length})</dt>
+                    <dd>
+                      <ul className={styles.profileDebugItems}>
+                        {allowedNavHrefs.map((href) => (
+                          <li key={href}>{href}</li>
+                        ))}
+                      </ul>
+                    </dd>
+                  </dl>
+                ) : null}
                 <form action={signOutAction}>
                   <button
                     className={styles.profileSignOut}
@@ -357,7 +426,7 @@ export function AdminTopNav({ email, signOutAction }: AdminTopNavProps) {
           </button>
         </div>
         <nav className={styles.mobileDrawerNav} aria-label="Admin mobile">
-          {MOBILE_ALL_LINKS.map((link) => (
+          {mobileAllLinks.map((link) => (
             <Link
               key={`${link.href}-${link.label}`}
               href={link.href}

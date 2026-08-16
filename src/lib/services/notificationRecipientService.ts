@@ -118,7 +118,7 @@ function mapActiveCustomerPermission(
       customerRole === "TrainingManager"
         ? "Training Manager"
         : customerRole === "Supervisor"
-          ? "Supervisor"
+          ? "Customer"
           : "Candidate",
     companyId,
     companyDisplayName:
@@ -134,6 +134,11 @@ function mapActiveCustomerPermission(
     canView: asBoolean(fields[permissionFields.canView]),
     canDownload: asBoolean(fields[permissionFields.canDownload]),
     canEdit: asBoolean(fields[permissionFields.canEdit]),
+    // Local to notification recipient shaping only — this is NOT the
+    // authoritative auth flag. Notification code marks TMs as "admin
+    // recipients" so they receive expiry / document emails for their
+    // company, even though under the strict auth model TMs cannot access
+    // /admin. Do not consume this field for portal access decisions.
     canAccessAdmin: customerRole === "TrainingManager",
     canAccessCustomer: true,
     receiveDocumentNotifications: preferenceOrDefault(

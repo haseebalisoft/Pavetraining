@@ -42,7 +42,17 @@ export type BulkCandidateFields = {
   workforceNumber: string | null;
   status: string | null;
   trainingManager: string | null;
+  /**
+   * Optional email of the Training Manager. When present in the spreadsheet,
+   * the importer will (a) try to match this email against existing Permissions
+   * rows first, and (b) use it as the real UserEmail when auto-creating a new
+   * Permissions row. When omitted, a pending.{tm|sp}.{name}@pave.local
+   * placeholder is used so the person still appears on the Permissions list.
+   */
+  trainingManagerEmail: string | null;
   supervisor: string | null;
+  /** Same as trainingManagerEmail, for the Supervisor column. */
+  supervisorEmail: string | null;
 };
 
 /**

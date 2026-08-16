@@ -1,5 +1,5 @@
 /**
- * Unit tests for the bulk-upload hard row limits.
+ * Unit tests for the bulk-upload row-limit helpers.
  *
  * Runs with the built-in Node test runner + native TypeScript type-stripping
  * (Node >= 22); bulkUploadLimits.ts has only a type-only import, so it loads
@@ -7,9 +7,8 @@
  *
  *   node --test scripts/test-bulk-upload-limits.mjs
  *
- * Wayne's requirement: workforce bulk upload accepts at most 50 records per
- * upload; blank rows and the header do not count; the error is clear; and
- * company can carry its own separate limit (or none) without affecting this.
+ * Workforce (and every other type) is unlimited today. The helper still
+ * enforces a cap if one is configured, and blank rows never count.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -22,9 +21,6 @@ const {
   countPopulatedRows,
   isEmptyFieldSet,
 } = await import(BASE + "services/bulkUpload/bulkUploadLimits.ts");
-
-const WORKFORCE_ERROR =
-  "Workforce bulk upload supports a maximum of 50 records per upload.";
 
 /** Build N populated commit-style rows, then M blank ones. */
 function rows(populated, blank = 0) {
@@ -43,35 +39,37 @@ function rows(populated, blank = 0) {
 
 // --- Limit configuration --------------------------------------------------
 
-test("workforce limit is 50; company has its own (no) limit", () => {
-  assert.equal(bulkUploadRowLimit("workforce"), 50);
+test("workforce and company have no row cap", () => {
+  assert.equal(bulkUploadRowLimit("workforce"), null);
   assert.equal(bulkUploadRowLimit("company"), null);
 });
 
-test("error message matches the required client wording exactly", () => {
-  assert.equal(bulkUploadRowLimitError("workforce", 50), WORKFORCE_ERROR);
+test("error helper still formats a clear message if a cap is configured later", () => {
+  assert.equal(
+    bulkUploadRowLimitError("workforce", 50),
+    "Workforce bulk upload supports a maximum of 50 records per upload.",
+  );
 });
 
-// --- Accept / reject boundary --------------------------------------------
+// --- Unlimited: any populated count is accepted --------------------------
 
 test("50 workforce rows are accepted", () => {
   const check = checkBulkUploadRowLimit("workforce", 50);
   assert.equal(check.ok, true);
   assert.equal(check.error, null);
-  assert.equal(check.limit, 50);
+  assert.equal(check.limit, null);
 });
 
-test("51 workforce rows are rejected with the clear error", () => {
+test("51 workforce rows are accepted (no cap)", () => {
   const check = checkBulkUploadRowLimit("workforce", 51);
-  assert.equal(check.ok, false);
-  assert.equal(check.error, WORKFORCE_ERROR);
-  assert.equal(check.limit, 50);
+  assert.equal(check.ok, true);
+  assert.equal(check.error, null);
 });
 
-test("far-over (e.g. 1000) workforce rows are rejected", () => {
+test("large workforce batches are accepted (no cap)", () => {
   const check = checkBulkUploadRowLimit("workforce", 1000);
-  assert.equal(check.ok, false);
-  assert.equal(check.error, WORKFORCE_ERROR);
+  assert.equal(check.ok, true);
+  assert.equal(check.error, null);
 });
 
 // --- Empty rows do not count ---------------------------------------------
@@ -83,29 +81,20 @@ test("isEmptyFieldSet treats null/blank/whitespace-only field sets as empty", ()
   assert.equal(isEmptyFieldSet({ a: null, b: "x" }), false);
 });
 
-test("blank rows do not count toward the limit (50 populated + 20 blank = OK)", () => {
+test("blank rows do not count toward populated-row totals", () => {
   const count = countPopulatedRows(rows(50, 20));
   assert.equal(count, 50);
   assert.equal(checkBulkUploadRowLimit("workforce", count).ok, true);
 });
 
-test("51 populated rows are rejected even with no blank rows", () => {
-  const count = countPopulatedRows(rows(51, 0));
-  assert.equal(count, 51);
-  assert.equal(checkBulkUploadRowLimit("workforce", count).ok, false);
+test("populated-row count ignores blank padding", () => {
+  assert.equal(countPopulatedRows(rows(51, 0)), 51);
+  assert.equal(countPopulatedRows(rows(51, 30)), 51);
 });
 
-test("51 populated + blank padding still counts 51 and is rejected", () => {
-  const count = countPopulatedRows(rows(51, 30));
-  assert.equal(count, 51);
-  const check = checkBulkUploadRowLimit("workforce", count);
-  assert.equal(check.ok, false);
-  assert.equal(check.error, WORKFORCE_ERROR);
-});
+// --- Company stays unlimited ---------------------------------------------
 
-// --- Company keeps its own behaviour (separate limit / no cap) ------------
-
-test("company upload is not limited by the workforce cap", () => {
+test("company upload is unlimited", () => {
   assert.equal(checkBulkUploadRowLimit("company", 500).ok, true);
   assert.equal(checkBulkUploadRowLimit("company", 5000).ok, true);
 });
