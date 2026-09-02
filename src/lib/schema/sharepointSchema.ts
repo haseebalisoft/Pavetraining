@@ -219,6 +219,8 @@ const inHouseCertificatesFields = {
   customerVisible: "CustomerVisible",
   outcomeNotes: "OutcomeNotes",
   notes: "Notes",
+  /** Per-course reference — optional; not the Workforce lookup projection. */
+  certificationNumber: "CertificationNumber",
 } as const;
 
 const nvqRegisterFields = {
@@ -226,15 +228,16 @@ const nvqRegisterFields = {
   candidateName: "CandidateName",
   nvqCompany: "NVQCompany",
   companyName: "Company_x0020_Name",
+  /** Projected lookup from Workforce — display only, never written. */
   niNumber: "NINumber",
   ulnNumber: "ULNNumber",
   nvqTitle: "NvqTitle",
   boltonNvq: "BoltonNvq",
   poNumber: "PONumber",
   cardSchemeCategory: "CardSchemeCategory",
-  cardExtensionDateNeeded: "CardExtensionDateNeeded",
+  cardExtensionDateNeeded: "CardExtensiondateneeded",
   siteAddress: "SiteAddress",
-  siteContact: "SiteContactNameNumber",
+  siteContact: "SiteContactName_x002f_Number",
   englishUnderstandingConfirmed: "EnglishUnderstandingConfirmed",
   tcAcknowledged: "TCAcknowledged",
   gdprConsent: "GDPRConsent",
@@ -604,6 +607,7 @@ export const SHAREPOINT_LISTS = {
       customerVisible: "Customer visible",
       outcomeNotes: "Outcome notes",
       notes: "Notes",
+      certificationNumber: "Certification number",
     },
   } satisfies SharePointListDefinition<typeof inHouseCertificatesFields>,
 

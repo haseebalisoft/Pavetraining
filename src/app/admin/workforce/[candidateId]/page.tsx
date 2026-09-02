@@ -13,6 +13,7 @@ import {
 } from "@/lib/services/adminCrudService";
 import type { AdminDocumentRecord } from "@/types/adminDocuments";
 import { toCustomerOutcome } from "@/lib/training/customerOutcome";
+import { listEusrCategoryMatrixCells } from "@/lib/training/eusrOptions";
 import { earliestExpiryDate } from "@/lib/training/expiryFilters";
 import { getWorkforceById } from "@/lib/services/workforceService";
 import type {
@@ -35,12 +36,18 @@ function matchesCandidate(
   row: {
     candidateName?: string | null;
     candidate?: string | null;
+    candidateId?: string | null;
     candidateLookupId?: string | null;
   },
   candidateName: string,
   candidateId?: string,
 ): boolean {
-  if (candidateId && row.candidateLookupId === candidateId) return true;
+  if (
+    candidateId &&
+    (row.candidateId === candidateId || row.candidateLookupId === candidateId)
+  ) {
+    return true;
+  }
   const key = nameKey(candidateName);
   if (!key) return false;
   return nameKey(row.candidateName) === key || nameKey(row.candidate) === key;
@@ -82,6 +89,14 @@ function mapMatrix(
     swqrExpiry: row.columnValues?.["NRSWA Expiry"] ?? null,
     eusrNumber: null,
     eusrExpiry: row.columnValues?.["EUSR Expiry"] ?? null,
+    eusrCategoryRows: listEusrCategoryMatrixCells(
+      row.columnValues,
+      row.categoryTrainingDates,
+    ).map(({ category, trainingDate, expiry }) => ({
+      category,
+      trainingDate,
+      expiry,
+    })),
     inHouseCourse: null,
     inHouseExpiry: row.n031Expiry ?? row.columnValues?.["N031 - Asbestos Awareness"] ?? null,
     n001Expiry: row.n001Expiry,
@@ -92,6 +107,8 @@ function mapMatrix(
     n021Expiry: row.n021Expiry,
     n027Expiry: row.n027Expiry,
     n100Expiry: row.n100Expiry,
+    columnValues: row.columnValues,
+    categoryTrainingDates: row.categoryTrainingDates,
   };
 }
 
@@ -159,6 +176,7 @@ function mapInHouse(
     candidateName: row.candidateName,
     workforceId,
     course: row.certificateCategory ?? row.courseCategory ?? null,
+    certificationNumber: row.inHouseCertificationNumber ?? null,
     trainingDate: row.trainingDate,
     trainingAddress: row.trainingAddress,
     outcome: toCustomerOutcome(row.trainingOutcome),
@@ -190,6 +208,7 @@ function mapDocument(row: AdminDocumentRecord): CustomerDocumentRecord {
     name: row.name,
     documentType: row.documentType,
     candidate: row.candidate,
+    candidateId: row.candidateId,
     uploadedDate: row.modifiedDate ?? row.uploadedDate,
     canDownload: row.canDownload,
     viewPath: row.previewPath,

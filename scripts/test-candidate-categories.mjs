@@ -116,6 +116,7 @@ test("matrix-only categories appear only when a date is present, never duplicati
       swqrExpiry: null,
       eusrNumber: null,
       eusrExpiry: null,
+      eusrCategoryRows: [],
       inHouseCourse: null,
       inHouseExpiry: null,
       n001Expiry: isoDaysFromNow(50),
@@ -137,4 +138,170 @@ test("matrix-only categories appear only when a date is present, never duplicati
 test("no matrix row and no records produces an empty list", () => {
   const rows = buildCandidateCategoryRows({});
   assert.deepEqual(rows, []);
+});
+
+test("hides register and matrix rows when both training date and expiry are blank", () => {
+  const rows = buildCandidateCategoryRows({
+    nporsRecords: [
+      {
+        id: "blank",
+        candidateName: "A",
+        workforceId: "1",
+        nporsNumber: "1",
+        trainingDate: null,
+        trainingAddress: null,
+        noviceOrEwt: null,
+        nporsCategory: "Empty Plant",
+        outcome: "Pass",
+        expiry: null,
+      },
+    ],
+    matrixRow: {
+      id: "m1",
+      candidateId: "1",
+      candidateName: "A",
+      companyName: "Co",
+      dateOfBirth: null,
+      department: null,
+      trainingManager: null,
+      supervisor: null,
+      overallStatus: null,
+      needsReview: false,
+      nextExpiryDate: null,
+      nporsCategories: null,
+      nporsExpiry: null,
+      nporsNumber: null,
+      cscsNumber: null,
+      cscsExpiry: null,
+      swqrNumber: null,
+      swqrExpiry: null,
+      eusrNumber: null,
+      eusrExpiry: null,
+      eusrCategoryRows: [
+        { category: "SHEA Gas", trainingDate: null, expiry: null },
+      ],
+      inHouseCourse: null,
+      inHouseExpiry: null,
+      n001Expiry: null,
+      n003Expiry: null,
+      n004Expiry: null,
+      n010Expiry: null,
+      n020Expiry: null,
+      n021Expiry: null,
+      n027Expiry: null,
+      n100Expiry: null,
+    },
+  });
+  assert.deepEqual(rows, []);
+});
+
+test("keeps expired and training-date-only categories, including extra matrix headers", () => {
+  const rows = buildCandidateCategoryRows({
+    nporsRecords: [
+      {
+        id: "expired",
+        candidateName: "A",
+        workforceId: "1",
+        nporsNumber: "1",
+        trainingDate: "2020-01-01",
+        trainingAddress: null,
+        noviceOrEwt: null,
+        nporsCategory: "Old Plant",
+        outcome: "Pass",
+        expiry: isoDaysFromNow(-400),
+      },
+    ],
+    matrixRow: {
+      id: "m1",
+      candidateId: "1",
+      candidateName: "A",
+      companyName: "Co",
+      dateOfBirth: null,
+      department: null,
+      trainingManager: null,
+      supervisor: null,
+      overallStatus: null,
+      needsReview: false,
+      nextExpiryDate: null,
+      nporsCategories: null,
+      nporsExpiry: null,
+      nporsNumber: null,
+      cscsNumber: null,
+      cscsExpiry: null,
+      swqrNumber: null,
+      swqrExpiry: null,
+      eusrNumber: null,
+      eusrExpiry: null,
+      eusrCategoryRows: [],
+      inHouseCourse: null,
+      inHouseExpiry: null,
+      n001Expiry: null,
+      n003Expiry: null,
+      n004Expiry: null,
+      n010Expiry: null,
+      n020Expiry: null,
+      n021Expiry: null,
+      n027Expiry: null,
+      n100Expiry: null,
+      columnValues: {
+        "SSSTS Expiry": isoDaysFromNow(-20),
+      },
+      categoryTrainingDates: {
+        "N009 - Rough Terrain Lift Truck": "2024-03-01",
+      },
+    },
+  });
+
+  const byCategory = Object.fromEntries(
+    rows.map((row) => [row.category, row]),
+  );
+  assert.equal(byCategory["Old Plant"].expiryStatus.status, "expired");
+  assert.equal(byCategory.SSSTS.expiryStatus.status, "expired");
+  assert.equal(
+    byCategory["N009 - Rough Terrain Lift Truck"].trainingDate,
+    "2024-03-01",
+  );
+  assert.equal(byCategory["N009 - Rough Terrain Lift Truck"].expiryDate, null);
+});
+
+test("EUSR categories on one record split into independent profile rows", () => {
+  const rows = buildCandidateCategoryRows({
+    eusrRecords: [
+      {
+        id: "e1",
+        candidateName: "A",
+        workforceId: "1",
+        eusrNumber: "1",
+        eusrCategory: "Water Hygiene; SHEA Water",
+        cardType: null,
+        trainingDate: "2026-01-01",
+        trainingAddress: null,
+        outcome: "Pass",
+        expiry: "2029-01-01",
+      },
+      {
+        id: "e2",
+        candidateName: "A",
+        workforceId: "1",
+        eusrNumber: "1",
+        eusrCategory: "SHEA Gas",
+        cardType: null,
+        trainingDate: "2026-06-06",
+        trainingAddress: null,
+        outcome: "Pass",
+        expiry: "2029-06-06",
+      },
+    ],
+  });
+
+  assert.equal(rows.length, 3);
+  const byCategory = Object.fromEntries(
+    rows.map((row) => [row.category, row]),
+  );
+  assert.equal(byCategory["Water Hygiene"].trainingDate, "2026-01-01");
+  assert.equal(byCategory["Water Hygiene"].expiryDate, "2029-01-01");
+  assert.equal(byCategory["SHEA Water"].trainingDate, "2026-01-01");
+  assert.equal(byCategory["SHEA Water"].expiryDate, "2029-01-01");
+  assert.equal(byCategory["SHEA Gas"].trainingDate, "2026-06-06");
+  assert.equal(byCategory["SHEA Gas"].expiryDate, "2029-06-06");
 });

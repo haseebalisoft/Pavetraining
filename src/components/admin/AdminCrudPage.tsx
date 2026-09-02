@@ -18,7 +18,7 @@ import type { AdminPermissionRecord } from "@/lib/services/adminCrudService";
 import { Breadcrumbs } from "@/components/ui/Breadcrumbs";
 import { LoadingState } from "@/components/ui/States";
 import { readPublicApiError } from "@/lib/errors/publicMessages";
-import { defaultPassExpiryIso } from "@/lib/utils/formatDate";
+import { addCalendarYearsIso, defaultPassExpiryIso } from "@/lib/utils/formatDate";
 import { isValidEmail } from "@/lib/validation/email";
 import type { Company } from "@/types/models";
 
@@ -46,6 +46,7 @@ export interface AdminWorkforceOption {
   swqrNumber?: string | null;
   inHouseCertificationNumber?: string | null;
   workforceNumber?: string | null;
+  niNumber?: string | null;
 }
 
 /** Minimal Permissions row for company-scoped TM/Supervisor selects. */
@@ -54,7 +55,7 @@ export interface AdminPermissionPersonOption {
   userEmail: string;
   name: string | null;
   status: string;
-  permissionRole: "Admin" | "Customer" | "Candidate";
+  permissionRole: "Admin" | "Manager" | "Supervisor" | "Customer" | "Candidate";
   /** Live SharePoint RoleType (Training Manager / Supervisor / …). */
   sharePointRoleType?: string | null;
   companyId: string | null;
@@ -121,6 +122,11 @@ export interface AdminFieldConfig {
   placeholder?: string;
   /** Optional section heading shown above this field group in the drawer. */
   section?: string;
+  /**
+   * When set on the `expiry` field, a blank expiry is filled as
+   * trainingDate + this many calendar years (NPORS / EUSR = 3, Streetworks = 5).
+   */
+  defaultExpiryYears?: number;
 }
 
 type AdminSelectOption = { value: string; label: string };
@@ -265,6 +271,31 @@ const EMPTY_PERMISSION_PEOPLE: AdminPermissionPersonOption[] = [];
 const EMPTY_DEPARTMENTS: AdminDepartmentOption[] = [];
 const EMPTY_WARNINGS: string[] = [];
 
+function expiryYearsFromFields(fields: AdminFieldConfig[]): number | null {
+  const years = fields.find((field) => field.name === "expiry")?.defaultExpiryYears;
+  return typeof years === "number" && years > 0 ? years : null;
+}
+
+function autoExpiryIso(
+  fields: AdminFieldConfig[],
+  trainingDate: string,
+): string | null {
+  const years = expiryYearsFromFields(fields);
+  if (years != null) {
+    return addCalendarYearsIso(trainingDate, years);
+  }
+  const trimmed = trainingDate.trim();
+  return trimmed ? defaultPassExpiryIso(trimmed) : null;
+}
+
+function shouldAutoFillBlankExpiry(
+  fields: AdminFieldConfig[],
+  outcome: string,
+): boolean {
+  if (expiryYearsFromFields(fields) != null) return true;
+  return outcome.trim().toLowerCase() === "pass";
+}
+
 function toFormValue(value: unknown, type: AdminFieldType): string | boolean {
   if (typeof value === "boolean") return value;
   if (value === null || value === undefined) return "";
@@ -326,11 +357,16 @@ function buildInitialForm(
     } else if (field.name === "accessScope" && field.type === "select") {
       state[field.name] = "Full Company";
     } else if (field.name === "permissionRole" && field.type === "select") {
-      state[field.name] = "Admin";
+      state[field.name] = "Manager";
     } else if (field.name === "trainingOutcome") {
       state[field.name] = "Pass";
     } else if (field.name === "expiry" && field.type === "date") {
-      state[field.name] = defaultPassExpiryIso();
+      // NPORS (and any field with defaultExpiryYears) stays blank until a
+      // training date is entered, then fills as training date + N years.
+      state[field.name] =
+        typeof field.defaultExpiryYears === "number"
+          ? ""
+          : defaultPassExpiryIso();
     } else if (field.name === "roleType") {
       state[field.name] = "Customer";
     } else {
@@ -340,23 +376,122 @@ function buildInitialForm(
   return state;
 }
 
+function idsEqual(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): boolean {
+  const a = String(left ?? "").trim();
+  const b = String(right ?? "").trim();
+  return Boolean(a) && a === b;
+}
+
+/**
+ * Native <select> placeholder. An empty-string option is treated as "already
+ * selected" in some browsers, so picking the first real company never fires
+ * onChange. A sentinel value makes that first pick a real value change.
+ */
+const SELECT_NONE = "__none__";
+
+function isSelectNone(value: string | null | undefined): boolean {
+  const text = String(value ?? "").trim();
+  return !text || text === SELECT_NONE;
+}
+
+function findCompanyById(
+  companies: Company[],
+  id: string | null | undefined,
+): Company | undefined {
+  const key = String(id ?? "").trim();
+  if (!key || isSelectNone(key)) return undefined;
+  return companies.find((company) => idsEqual(company.id, key));
+}
+
+function resolveFormCompany(
+  form: FormState,
+  companies: Company[],
+): { id: string; name: string } {
+  const selectedId = String(form.companyId ?? "").trim();
+  const selectedName = String(form.companyName ?? "").trim();
+  const byId = selectedId
+    ? companies.find((company) => idsEqual(company.id, selectedId))
+    : undefined;
+  if (byId) {
+    return { id: byId.id, name: byId.companyName };
+  }
+  if (/^\d+$/.test(selectedName)) {
+    const numeric = companies.find((company) => idsEqual(company.id, selectedName));
+    if (numeric) {
+      return { id: numeric.id, name: numeric.companyName };
+    }
+  }
+  const byName = selectedName
+    ? companies.find(
+        (company) =>
+          company.companyName.trim().toLowerCase() === selectedName.toLowerCase(),
+      )
+    : undefined;
+  return {
+    id: byName?.id ?? "",
+    name: byName?.companyName ?? selectedName,
+  };
+}
+
+function workforceMatchesCompany(
+  row: AdminWorkforceOption,
+  companyId: string,
+  companyName: string,
+): boolean {
+  if (idsEqual(row.companyId, companyId)) return true;
+  const name = companyName.trim().toLowerCase();
+  return Boolean(name) && row.companyName.trim().toLowerCase() === name;
+}
+
+function applyCompanyLinkToForm(
+  state: FormState,
+  companies: Company[],
+  row?: Record<string, unknown>,
+): FormState {
+  const lookupId = String(
+    row?.companyLookupId ?? row?.companyId ?? state.companyId ?? "",
+  ).trim();
+  if (lookupId) {
+    state.companyId = lookupId;
+  }
+  const resolved = resolveFormCompany(state, companies);
+  if (resolved.id) {
+    state.companyId = resolved.id;
+  }
+  if (resolved.name) {
+    state.companyName = resolved.name;
+  }
+  if (resolved.id && !String(state.companyNumber ?? "").trim()) {
+    const match = companies.find((company) => idsEqual(company.id, resolved.id));
+    if (match?.companyNumber?.trim()) {
+      state.companyNumber = match.companyNumber.trim();
+    }
+  }
+  return state;
+}
+
 function matchWorkforceId(
   form: FormState,
   workforce: AdminWorkforceOption[],
+  companies: Company[] = [],
 ): string {
   const name = String(form.candidateName ?? "").trim().toLowerCase();
-  const company = String(form.companyName ?? "").trim().toLowerCase();
   if (!name) return "";
-  const exact =
-    workforce.find(
-      (row) =>
-        row.candidateName.trim().toLowerCase() === name &&
-        row.companyName.trim().toLowerCase() === company,
-    ) ??
-    workforce.find(
-      (row) => row.candidateName.trim().toLowerCase() === name,
-    );
-  return exact?.id ?? "";
+  const company = resolveFormCompany(form, companies);
+  const inCompany = workforce.filter((row) =>
+    workforceMatchesCompany(row, company.id, company.name),
+  );
+  const pool = company.id || company.name ? inCompany : workforce;
+  return (
+    pool.find((row) => row.candidateName.trim().toLowerCase() === name)?.id ??
+    (company.id || company.name
+      ? ""
+      : (workforce.find((row) => row.candidateName.trim().toLowerCase() === name)
+          ?.id ?? ""))
+  );
 }
 
 async function readError(response: Response): Promise<string> {
@@ -610,6 +745,10 @@ export function AdminCrudPage<T extends { id: string }>({
     for (const [key, value] of Object.entries(defaults)) {
       if (value !== undefined) next[key] = value;
     }
+    if (enableCompanyFilter && companyFilter.trim()) {
+      next.companyName = companyFilter.trim();
+    }
+    applyCompanyLinkToForm(next, companies);
     setForm(next);
     setFormError(null);
     setWorkforceQuery("");
@@ -730,37 +869,14 @@ export function AdminCrudPage<T extends { id: string }>({
   }
 
   /**
-   * Runs the DELETE fetch and applies post-success side effects (toast,
-   * training-matrix recompute notes). Shared between the synchronous path
-   * and the optimistic (background) path.
+   * Runs the DELETE fetch. Shared between the synchronous path and the
+   * optimistic (background) path.
    */
   async function performDeleteRequest(id: string) {
     if (!deleteUrl) return;
     const response = await fetch(deleteUrl(id), { method: "DELETE" });
     if (!response.ok) throw new Error(await readError(response));
-    const payload = (await response.json().catch(() => null)) as {
-      matrixSync?: {
-        summary?: {
-          updated?: number;
-          created?: number;
-          skipped?: number;
-          errors?: number;
-        };
-        items?: Array<{ warnings?: string[]; skipReason?: string }>;
-      };
-    } | null;
-    const sync = payload?.matrixSync?.summary;
-    if (sync?.errors) {
-      pushToast(
-        `Training Matrix recompute failed (${sync.errors} error(s)) after delete — check the Training Matrix for this candidate.`,
-        "error",
-      );
-    }
-    for (const item of payload?.matrixSync?.items ?? []) {
-      for (const note of [item.skipReason, ...(item.warnings ?? [])]) {
-        if (note?.trim()) pushToast(note.trim());
-      }
-    }
+    await response.json().catch(() => null);
   }
 
   async function deleteOne(id: string) {
@@ -791,6 +907,7 @@ export function AdminCrudPage<T extends { id: string }>({
       if (editing?.id === id) {
         setDrawerOpen(false);
         setEditing(null);
+        openedFromQueryRef.current = false;
       }
       // Immediate confirmation for the user — same tone as the sync path.
       pushToast("Record deleted", "success");
@@ -842,33 +959,8 @@ export function AdminCrudPage<T extends { id: string }>({
     try {
       const response = await fetch(deleteUrl(id), { method: "DELETE" });
       if (!response.ok) throw new Error(await readError(response));
-      const payload = (await response.json().catch(() => null)) as {
-        matrixSync?: {
-          summary?: {
-            updated?: number;
-            created?: number;
-            skipped?: number;
-            errors?: number;
-          };
-          items?: Array<{ warnings?: string[]; skipReason?: string }>;
-        };
-      } | null;
+      await response.json().catch(() => null);
       pushToast("Record deleted", "success");
-      const sync = payload?.matrixSync?.summary;
-      if (sync?.errors) {
-        pushToast(
-          `Training Matrix recompute failed (${sync.errors} error(s)) after delete — check the Training Matrix for this candidate.`,
-          "error",
-        );
-      }
-      // Delete-recompute notes are rare and always meaningful (recomputed /
-      // cleared / "Manual Override / Source Deleted") — unlike a routine
-      // save's warnings, so surface every one of them here.
-      for (const item of payload?.matrixSync?.items ?? []) {
-        for (const note of [item.skipReason, ...(item.warnings ?? [])]) {
-          if (note?.trim()) pushToast(note.trim());
-        }
-      }
       setSelectedIds((current) => {
         const next = new Set(current);
         next.delete(id);
@@ -883,6 +975,7 @@ export function AdminCrudPage<T extends { id: string }>({
       if (editing?.id === id) {
         setDrawerOpen(false);
         setEditing(null);
+        openedFromQueryRef.current = false;
       }
       // Reload, then force-drop the id again (guards against cache races).
       await load();
@@ -1036,9 +1129,12 @@ export function AdminCrudPage<T extends { id: string }>({
 
   function openEdit(row: T) {
     setEditing(row);
-    setForm(
+    const next = applyCompanyLinkToForm(
       buildInitialForm(fields, row as unknown as Record<string, unknown>),
+      companies,
+      row as unknown as Record<string, unknown>,
     );
+    setForm(next);
     setFormError(null);
     setWorkforceQuery("");
     void refreshPermissionPeople();
@@ -1049,7 +1145,12 @@ export function AdminCrudPage<T extends { id: string }>({
     for (const field of fields) {
       const value = next[field.name];
       if (field.required && field.type !== "boolean") {
-        if (value === "" || value === null || value === undefined) {
+        if (
+          value === "" ||
+          value === null ||
+          value === undefined ||
+          isSelectNone(String(value))
+        ) {
           return `${field.label} is required.`;
         }
       }
@@ -1070,13 +1171,79 @@ export function AdminCrudPage<T extends { id: string }>({
     setFormError(null);
     try {
       const body: Record<string, unknown> = { ...next };
-      if (body.companyId && companies.length) {
-        const company = companies.find((item) => item.id === body.companyId);
-        if (company) {
-          body.companyName = company.companyName;
-        }
+      if (typeof body.permissionRole === "string") {
+        body.permissionRole = body.permissionRole.trim();
       }
-      const workforceId = matchWorkforceId(next, workforce);
+      if (
+        body.permissionRole === "Customer" ||
+        body.permissionRole === "Candidate"
+      ) {
+        body.accessScope = "Candidate Only";
+      }
+      // Routing bucket RoleType is Admin | Customer. Never send it as the
+      // form role — it made every Supervisor save as Customer.
+      delete body.roleType;
+      if (
+        shouldAutoFillBlankExpiry(fields, String(body.trainingOutcome ?? "")) &&
+        !String(body.expiry ?? "").trim()
+      ) {
+        const filled = autoExpiryIso(fields, String(body.trainingDate ?? ""));
+        if (filled) body.expiry = filled;
+      }
+      if (typeof body.companyId === "string" && isSelectNone(body.companyId)) {
+        body.companyId = "";
+      }
+      if (
+        !String(body.accessScope ?? "")
+          .toLowerCase()
+          .includes("department")
+      ) {
+        body.departmentsAllowed = "";
+      }
+
+      // Cross-check: if the form declares a companyId, force companyName to
+      // match the current companies list. This defends against two failure
+      // modes at once: (a) a stale companyName lingering from a previous
+      // edit session while a fresh companyId was picked, and (b) a mismatch
+      // between the displayed dropdown label and the underlying id (which
+      // could happen if the browser dropdown ever failed to register a click
+      // and left the form partially updated).
+      const linkedCompany = resolveFormCompany(next, companies);
+      if (linkedCompany.id) {
+        body.companyId = linkedCompany.id;
+        body.companyName = linkedCompany.name;
+      } else if (body.companyId && companies.length) {
+        const company = companies.find((item) =>
+          idsEqual(item.id, String(body.companyId)),
+        );
+        if (!company) {
+          throw new Error(
+            "Selected company is no longer available. Refresh the page and pick a company again.",
+          );
+        }
+        body.companyName = company.companyName;
+      } else if (
+        fields.some(
+          (field) => field.type === "company" && field.name === "companyId" && field.required,
+        ) &&
+        !body.companyId
+      ) {
+        // Required-company field somehow reached persist without a value — hard
+        // stop so we never write a permission row that could be assigned to the
+        // wrong company via a fallback lookup on companyName alone.
+        throw new Error(
+          "Please pick a company from the Company dropdown before saving.",
+        );
+      }
+      const workforceId = matchWorkforceId(
+        {
+          ...next,
+          companyId: String(body.companyId ?? next.companyId ?? ""),
+          companyName: String(body.companyName ?? next.companyName ?? ""),
+        },
+        workforce,
+        companies,
+      );
       if (workforceId) {
         body.workforceId = workforceId;
       }
@@ -1121,44 +1288,24 @@ export function AdminCrudPage<T extends { id: string }>({
       } | null;
       const sync = payload?.matrixSync?.summary;
       const syncItem = payload?.matrixSync?.items?.[0];
-      const hardErrors = [...(syncItem?.errors ?? [])];
-      const usefulWarnings = (syncItem?.warnings ?? []).filter(
-        (warning) =>
-          warning.trim() &&
-          !/no matrix field changes required/i.test(warning),
-      );
       const matrixTouched =
         (sync?.updated ?? 0) + (sync?.created ?? 0) > 0 ||
         (syncItem?.fieldsUpdated?.length ?? 0) > 0;
       const syncNote = sync
         ? matrixTouched
           ? ` Matrix sync: ${sync.updated ?? 0} updated, ${sync.created ?? 0} created.`
-          : hardErrors.length
-            ? ` Matrix sync did not update the profile/matrix.`
-            : ` Matrix already up to date.`
+          : ` Matrix already up to date.`
         : "";
       pushToast(
         (isCreate ? "Record created." : "Record updated.") + syncNote,
-        hardErrors.length > 0 ? "error" : "success",
+        "success",
       );
-      if (sync?.errors) {
-        pushToast(
-          `Training Matrix sync failed (${sync.errors} error(s)). The record was saved — fix the Matrix issue and it will sync again on the next save.`,
-          "error",
-        );
-      }
-      const warnings = [
-        payload?.warning?.trim(),
-        payload?.matrixSeedWarning?.trim(),
-        ...(payload?.choiceWarnings ?? []).map((part) => part.trim()),
-        ...hardErrors,
-        ...usefulWarnings.slice(0, 3),
-      ].filter(Boolean) as string[];
-      for (const warning of warnings) {
-        pushToast(warning, "error");
-      }
       setDrawerOpen(false);
+      // Release the one-shot ?action=add guard so subsequent
+      // "+ Add …" URL-driven opens still work in the same session.
+      openedFromQueryRef.current = false;
       await load();
+      router.refresh();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Save failed.";
       setFormError(message);
@@ -1170,14 +1317,123 @@ export function AdminCrudPage<T extends { id: string }>({
     }
   }
 
+  function commitSelectValue(field: AdminFieldConfig, rawValue: string) {
+    const value = isSelectNone(rawValue) ? "" : rawValue;
+    if (
+      field.type === "company" &&
+      (field.name === "companyName" || field.name === "companyId")
+    ) {
+      setWorkforceQuery("");
+      void refreshPermissionPeople();
+    }
+    setForm((current) => {
+      if (field.type !== "company") {
+        const next: FormState = {
+          ...current,
+          [field.name]: value,
+        };
+        if (
+          field.name === "trainingOutcome" &&
+          shouldAutoFillBlankExpiry(fields, value) &&
+          !String(current.expiry ?? "").trim()
+        ) {
+          const filled = autoExpiryIso(
+            fields,
+            String(current.trainingDate ?? ""),
+          );
+          if (filled) next.expiry = filled;
+        }
+        if (
+          field.name === "permissionRole" &&
+          (value === "Customer" || value === "Candidate")
+        ) {
+          next.accessScope = "Candidate Only";
+        }
+        return next;
+      }
+
+      const next: FormState = {
+        ...current,
+        [field.name]: value,
+      };
+
+      if (field.name === "companyName" || field.name === "companyId") {
+        next.trainingManager = "";
+        next.supervisor = "";
+        next.department = "";
+        next.departmentsAllowed = "";
+      }
+
+      if (field.name === "companyName") {
+        const companyMatch = companies.find(
+          (company) =>
+            company.companyName.trim().toLowerCase() ===
+            value.trim().toLowerCase(),
+        );
+        next.companyId = companyMatch?.id ?? "";
+        next.companyNumber = companyMatch?.companyNumber?.trim() || "";
+      }
+
+      if (field.name === "companyId") {
+        const companyMatch = findCompanyById(companies, value);
+        next.companyNumber = companyMatch?.companyNumber?.trim() || "";
+        next.companyName = companyMatch?.companyName ?? "";
+      }
+
+      if (field.name !== "companyName") {
+        return next;
+      }
+
+      const candidateName = String(current.candidateName ?? "")
+        .trim()
+        .toLowerCase();
+      const currentCompany = String(current.companyName ?? "")
+        .trim()
+        .toLowerCase();
+      const selectedCandidate =
+        workforce.find(
+          (row) =>
+            row.candidateName.trim().toLowerCase() === candidateName &&
+            row.companyName.trim().toLowerCase() === currentCompany,
+        ) ??
+        workforce.find(
+          (row) => row.candidateName.trim().toLowerCase() === candidateName,
+        );
+      const candidateStillMatches =
+        !selectedCandidate ||
+        !value ||
+        selectedCandidate.companyName.trim().toLowerCase() ===
+          value.trim().toLowerCase();
+
+      if (!candidateStillMatches) {
+        next.candidateName = "";
+        next.nporsNumber = "";
+        next.eusrNumber = "";
+        next.swqrNumber = "";
+        next.inHouseCertificationNumber = "";
+        next.workforceNumber = "";
+        next.niNumber = "";
+      }
+
+      return next;
+    });
+  }
+
   function requestSave() {
     const next: FormState = { ...form };
     if (
-      String(next.trainingOutcome ?? "").trim().toLowerCase() === "pass" &&
       fields.some((field) => field.name === "expiry") &&
-      !String(next.expiry ?? "").trim()
+      !String(next.expiry ?? "").trim() &&
+      shouldAutoFillBlankExpiry(
+        fields,
+        String(next.trainingOutcome ?? ""),
+      )
     ) {
-      next.expiry = defaultPassExpiryIso(String(next.trainingDate ?? ""));
+      const filled = autoExpiryIso(
+        fields,
+        String(next.trainingDate ?? ""),
+      );
+      if (filled) next.expiry = filled;
       setForm(next);
     }
     const error = validate(next);
@@ -1494,7 +1750,14 @@ export function AdminCrudPage<T extends { id: string }>({
       <AdminDrawer
         open={drawerOpen}
         title={editing ? `Edit ${title}` : `Add ${title}`}
-        onClose={() => setDrawerOpen(false)}
+        onClose={() => {
+          setDrawerOpen(false);
+          // Release the one-shot ?action=add URL guard so the next
+          // "+ Add Training Manager" / "+ Add Customer" button click re-opens
+          // the drawer. Without this reset the guard stayed true for the
+          // whole page lifetime and subsequent button clicks silently no-op.
+          openedFromQueryRef.current = false;
+        }}
         wide={drawerWide}
         footer={
           <>
@@ -1513,7 +1776,10 @@ export function AdminCrudPage<T extends { id: string }>({
             <button
               type="button"
               className={styles.secondaryButton}
-              onClick={() => setDrawerOpen(false)}
+              onClick={() => {
+                setDrawerOpen(false);
+                openedFromQueryRef.current = false;
+              }}
               disabled={saving || deleting}
             >
               Cancel
@@ -1576,38 +1842,22 @@ export function AdminCrudPage<T extends { id: string }>({
                 </label>
               );
             } else if (field.type === "workforce") {
-              const selectedId = matchWorkforceId(form, workforce);
-              const selectedCompanyName = String(form.companyName ?? "")
-                .trim()
-                .toLowerCase();
-              const selectedCompanyId = String(form.companyId ?? "").trim();
-              const resolvedCompanyId =
-                selectedCompanyId ||
-                companies.find(
-                  (company) =>
-                    company.companyName.trim().toLowerCase() ===
-                    selectedCompanyName,
-                )?.id ||
-                "";
+              const selectedId = matchWorkforceId(form, workforce, companies);
+              const resolvedCompany = resolveFormCompany(form, companies);
+              const selectedCompanyName = resolvedCompany.name.trim().toLowerCase();
+              const resolvedCompanyId = resolvedCompany.id;
               const hasCompany = Boolean(
                 selectedCompanyName || resolvedCompanyId,
               );
               const query = workforceQuery.trim().toLowerCase();
               const companyWorkforce = hasCompany
-                ? workforce.filter((row) => {
-                    if (
-                      resolvedCompanyId &&
-                      row.companyId &&
-                      row.companyId === resolvedCompanyId
-                    ) {
-                      return true;
-                    }
-                    return (
-                      Boolean(selectedCompanyName) &&
-                      row.companyName.trim().toLowerCase() ===
-                        selectedCompanyName
-                    );
-                  })
+                ? workforce.filter((row) =>
+                    workforceMatchesCompany(
+                      row,
+                      resolvedCompanyId,
+                      resolvedCompany.name,
+                    ),
+                  )
                 : [];
               const filteredWorkforce = query
                 ? companyWorkforce.filter((row) => {
@@ -1619,6 +1869,7 @@ export function AdminCrudPage<T extends { id: string }>({
                       row.eusrNumber,
                       row.swqrNumber,
                       row.inHouseCertificationNumber,
+                      row.niNumber,
                     ]
                       .filter(Boolean)
                       .join(" ")
@@ -1673,18 +1924,24 @@ export function AdminCrudPage<T extends { id: string }>({
                           swqrNumber: "",
                           inHouseCertificationNumber: "",
                           workforceNumber: "",
+                          niNumber: "",
                         }));
                         return;
                       }
-                      const companyMatch = companies.find(
-                        (company) =>
-                          company.companyName.trim().toLowerCase() ===
-                          hit.companyName.trim().toLowerCase(),
-                      );
+                      const companyMatch =
+                        companies.find((company) =>
+                          idsEqual(company.id, hit.companyId),
+                        ) ??
+                        companies.find(
+                          (company) =>
+                            company.companyName.trim().toLowerCase() ===
+                            hit.companyName.trim().toLowerCase(),
+                        );
                       setForm((current) => ({
                         ...current,
                         candidateName: hit.candidateName,
                         companyName: hit.companyName,
+                        companyId: hit.companyId || current.companyId,
                         companyNumber:
                           companyMatch?.companyNumber?.trim() ||
                           String(current.companyNumber ?? ""),
@@ -1695,6 +1952,7 @@ export function AdminCrudPage<T extends { id: string }>({
                         inHouseCertificationNumber:
                           hit.inHouseCertificationNumber || "",
                         workforceNumber: hit.workforceNumber || "",
+                        niNumber: hit.niNumber || "",
                       }));
                     }}
                   >
@@ -1758,8 +2016,7 @@ export function AdminCrudPage<T extends { id: string }>({
                     .filter((dept) => {
                       if (
                         selectedCompanyId &&
-                        dept.companyId &&
-                        dept.companyId === selectedCompanyId
+                        idsEqual(dept.companyId, selectedCompanyId)
                       ) {
                         return true;
                       }
@@ -1777,12 +2034,11 @@ export function AdminCrudPage<T extends { id: string }>({
                     }));
                 }
               }
-              if (scopeMode) {
-                // Keep already-selected values visible even when the caller
-                // only passed Active departments (e.g. one was deactivated
-                // after being assigned) — otherwise the checkbox for it just
-                // vanishes and looks like the assignment silently dropped.
-                // Applies to both "scoped" and "all" modes.
+              if (scopeMode && editing) {
+                // Keep already-selected values visible on edit even when the
+                // caller only passed Active departments. Do not do this on
+                // create — leftover ids from another company (e.g. CVA while
+                // DBS is selected) would reappear and fail save.
                 for (const value of selected) {
                   const key = value.trim().toLowerCase();
                   if (
@@ -1799,17 +2055,28 @@ export function AdminCrudPage<T extends { id: string }>({
                   }
                 }
               }
+              const hideDeptCoverage =
+                field.name === "departmentsAllowed" &&
+                !String(form.accessScope ?? "")
+                  .toLowerCase()
+                  .includes("department");
               control = (
                 <fieldset className={styles.field}>
                   <legend className={styles.fieldLabel}>{field.label}</legend>
-                  {field.companyScopedDepartments === true &&
-                  !selectedCompanyName &&
-                  !selectedCompanyId ? (
+                  {hideDeptCoverage ? (
+                    <p className={styles.helpText}>
+                      Only used when Access scope is Department Only. Full
+                      Company covers every department in the selected company.
+                    </p>
+                  ) : field.companyScopedDepartments === true &&
+                    !selectedCompanyName &&
+                    !selectedCompanyId ? (
                     <p className={styles.helpText}>
                       Select a company first to choose departments.
                     </p>
                   ) : null}
-                  {field.companyScopedDepartments === true &&
+                  {!hideDeptCoverage &&
+                  field.companyScopedDepartments === true &&
                   (selectedCompanyName || selectedCompanyId) &&
                   multiOptions.length === 0 ? (
                     <p className={styles.helpText}>
@@ -1817,13 +2084,15 @@ export function AdminCrudPage<T extends { id: string }>({
                       Departments.
                     </p>
                   ) : null}
-                  {field.companyScopedDepartments === "all" &&
+                  {!hideDeptCoverage &&
+                  field.companyScopedDepartments === "all" &&
                   multiOptions.length === 0 ? (
                     <p className={styles.helpText}>
                       No active departments exist yet. Add them under
                       Departments.
                     </p>
                   ) : null}
+                  {hideDeptCoverage ? null : (
                   <div className={styles.multiSelectList}>
                     {multiOptions.map((option) => {
                       const checked =
@@ -1870,7 +2139,22 @@ export function AdminCrudPage<T extends { id: string }>({
                       );
                     })}
                   </div>
+                  )}
                 </fieldset>
+              );
+            } else if (
+              field.name === "accessScope" &&
+              (String(form.permissionRole ?? "") === "Customer" ||
+                String(form.permissionRole ?? "") === "Candidate")
+            ) {
+              control = (
+                <label className={styles.field}>
+                  <span className={styles.fieldLabel}>{field.label}</span>
+                  <p className={styles.helpText}>
+                    Customer accounts see their own profile only (matched to
+                    Workforce by email).
+                  </p>
+                </label>
               );
             } else if (field.type === "company" || field.type === "select") {
               const selectedCompanyName = String(form.companyName ?? "")
@@ -1883,7 +2167,7 @@ export function AdminCrudPage<T extends { id: string }>({
                 options = companies.map((company) => ({
                   value:
                     field.name === "companyId"
-                      ? company.id
+                      ? String(company.id)
                       : company.companyName,
                   label: company.companyName,
                 }));
@@ -2027,13 +2311,13 @@ export function AdminCrudPage<T extends { id: string }>({
                       return (
                         spRole === "training manager" ||
                         spRole === "trainingmanager" ||
-                        (!spRole && person.permissionRole === "Admin")
+                        (!spRole && person.permissionRole === "Manager")
                       );
                     }
                     if (role === "Customer") {
                       return (
                         spRole === "supervisor" ||
-                        (!spRole && person.permissionRole === "Customer")
+                        (!spRole && person.permissionRole === "Supervisor")
                       );
                     }
                     return person.permissionRole === role;
@@ -2118,8 +2402,7 @@ export function AdminCrudPage<T extends { id: string }>({
                   const scoped = departments.filter((dept) => {
                     if (
                       selectedCompanyId &&
-                      dept.companyId &&
-                      dept.companyId === selectedCompanyId
+                      idsEqual(dept.companyId, selectedCompanyId)
                     ) {
                       return true;
                     }
@@ -2185,126 +2468,40 @@ export function AdminCrudPage<T extends { id: string }>({
                 "";
               const quickAddCompanyName =
                 String(form.companyName ?? "").trim() ||
-                companies.find((company) => company.id === selectedCompanyId)
-                  ?.companyName ||
+                findCompanyById(companies, selectedCompanyId)?.companyName ||
                 "";
+              const selectValue = isSelectNone(String(form[field.name] ?? ""))
+                ? field.permissionRoleFilter || field.sharePointRoleTypeFilter
+                  ? String(form[field.name] ?? "")
+                  : SELECT_NONE
+                : String(form[field.name] ?? "");
               control = (
                 <label className={styles.field}>
                   <span className={styles.fieldLabel}>{field.label}</span>
                   <select
+                    key={`${field.name}-${editing?.id ?? "new"}-${drawerOpen ? "open" : "closed"}`}
                     className={styles.select}
-                    value={String(form[field.name] ?? "")}
-                    disabled={field.readOnly}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      if (
-                        field.type === "company" &&
-                        (field.name === "companyName" ||
-                          field.name === "companyId")
-                      ) {
-                        setWorkforceQuery("");
-                        void refreshPermissionPeople();
-                      }
-                      setForm((current) => {
-                        if (field.type !== "company") {
-                          const next: FormState = {
-                            ...current,
-                            [field.name]: value,
-                          };
-                          if (
-                            field.name === "trainingOutcome" &&
-                            value.trim().toLowerCase() === "pass" &&
-                            !String(current.expiry ?? "").trim()
-                          ) {
-                            next.expiry = defaultPassExpiryIso(
-                              String(current.trainingDate ?? ""),
-                            );
-                          }
-                          return next;
-                        }
-
-                        const next: FormState = {
-                          ...current,
-                          [field.name]: value,
-                        };
-
-                        // Clear company-scoped people / departments when company changes.
-                        if (
-                          field.name === "companyName" ||
-                          field.name === "companyId"
-                        ) {
-                          next.trainingManager = "";
-                          next.supervisor = "";
-                          next.department = "";
-                          next.departmentsAllowed = "";
-                        }
-
-                        if (field.name === "companyName") {
-                          const companyMatch = companies.find(
-                            (company) =>
-                              company.companyName.trim().toLowerCase() ===
-                              value.trim().toLowerCase(),
-                          );
-                          next.companyNumber =
-                            companyMatch?.companyNumber?.trim() || "";
-                        }
-
-                        if (field.name === "companyId") {
-                          const companyMatch = companies.find(
-                            (company) => company.id === value,
-                          );
-                          next.companyNumber =
-                            companyMatch?.companyNumber?.trim() || "";
-                          if (companyMatch) {
-                            next.companyName = companyMatch.companyName;
-                          }
-                        }
-
-                        if (field.name !== "companyName") {
-                          return next;
-                        }
-
-                        const candidateName = String(
-                          current.candidateName ?? "",
-                        ).trim().toLowerCase();
-                        const currentCompany = String(
-                          current.companyName ?? "",
-                        ).trim().toLowerCase();
-                        const selectedCandidate =
-                          workforce.find(
-                            (row) =>
-                              row.candidateName.trim().toLowerCase() ===
-                                candidateName &&
-                              row.companyName.trim().toLowerCase() ===
-                                currentCompany,
-                          ) ??
-                          workforce.find(
-                            (row) =>
-                              row.candidateName.trim().toLowerCase() ===
-                              candidateName,
-                          );
-                        const candidateStillMatches =
-                          !selectedCandidate ||
-                          !value ||
-                          selectedCandidate.companyName.trim().toLowerCase() ===
-                            value.trim().toLowerCase();
-
-                        if (!candidateStillMatches) {
-                          next.candidateName = "";
-                          next.nporsNumber = "";
-                          next.eusrNumber = "";
-                          next.swqrNumber = "";
-                          next.inHouseCertificationNumber = "";
-                          next.workforceNumber = "";
-                        }
-
-                        return next;
-                      });
-                    }}
+                    value={selectValue}
+                    disabled={false}
+                    aria-disabled={field.readOnly ? true : undefined}
+                    style={
+                      field.readOnly
+                        ? { pointerEvents: "none", opacity: 0.85 }
+                        : undefined
+                    }
+                    onChange={(event) =>
+                      commitSelectValue(field, event.target.value)
+                    }
+                    onInput={(event) =>
+                      commitSelectValue(
+                        field,
+                        (event.target as HTMLSelectElement).value,
+                      )
+                    }
                   >
                     {field.permissionRoleFilter ||
                     field.sharePointRoleTypeFilter ? null : (
-                      <option value="">Select…</option>
+                      <option value={SELECT_NONE}>Select…</option>
                     )}
                     {options.map((option) => (
                       <option key={`${option.value}-${option.label}`} value={option.value}>
@@ -2312,6 +2509,25 @@ export function AdminCrudPage<T extends { id: string }>({
                       </option>
                     ))}
                   </select>
+                  {field.type === "company" && field.name === "companyId" ? (
+                    (() => {
+                      const currentId = String(form.companyId ?? "").trim();
+                      const currentLabel = !isSelectNone(currentId)
+                        ? findCompanyById(companies, currentId)?.companyName
+                        : null;
+                      return (
+                        <span
+                          className={styles.fieldConfirmPill}
+                          data-empty={currentLabel ? "false" : "true"}
+                          aria-live="polite"
+                        >
+                          {currentLabel
+                            ? `Selected company: ${currentLabel}`
+                            : "No company selected yet"}
+                        </span>
+                      );
+                    })()
+                  ) : null}
                   {quickAddEnabled && quickAddCompanyId && quickAddCompanyName ? (
                     <button
                       type="button"
@@ -2365,12 +2581,14 @@ export function AdminCrudPage<T extends { id: string }>({
                         };
                         if (
                           field.name === "trainingDate" &&
-                          String(current.trainingOutcome ?? "")
-                            .trim()
-                            .toLowerCase() === "pass" &&
+                          shouldAutoFillBlankExpiry(
+                            fields,
+                            String(current.trainingOutcome ?? ""),
+                          ) &&
                           !String(current.expiry ?? "").trim()
                         ) {
-                          next.expiry = defaultPassExpiryIso(value);
+                          const filled = autoExpiryIso(fields, value);
+                          if (filled) next.expiry = filled;
                         }
                         return next;
                       });

@@ -15,7 +15,9 @@ export function parseManualOverrides(raw: unknown): string[] {
       text
         .split("|")
         .map((part) => part.trim())
-        .filter(Boolean),
+        .filter(
+          (part) => Boolean(part) && !part.startsWith("TRAINING::"),
+        ),
     ),
   );
 }

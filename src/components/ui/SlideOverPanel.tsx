@@ -65,7 +65,7 @@ export function SlideOverPanel({
     ignoreBackdropClickRef.current = true;
     const release = window.setTimeout(() => {
       ignoreBackdropClickRef.current = false;
-    }, 320);
+    }, 600);
 
     previousFocusRef.current = document.activeElement as HTMLElement | null;
     const returnFocusTarget =

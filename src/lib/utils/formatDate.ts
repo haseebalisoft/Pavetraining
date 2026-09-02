@@ -135,14 +135,26 @@ export function formatShortMonth(
     : invalidValueFallback(value, fallback);
 }
 
+/**
+ * Add whole calendar years to an ISO date (`YYYY-MM-DD`).
+ * Returns null when the source is missing or not a calendar date.
+ */
+export function addCalendarYearsIso(
+  iso: string | null | undefined,
+  years: number,
+): string | null {
+  const source = iso?.trim() ?? "";
+  const match = ISO_DATE_ONLY.exec(source);
+  if (!match) return null;
+  const year = Number(match[1]) + years;
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const expiry = new Date(Date.UTC(year, month - 1, day));
+  return `${expiry.getUTCFullYear()}-${String(expiry.getUTCMonth() + 1).padStart(2, "0")}-${String(expiry.getUTCDate()).padStart(2, "0")}`;
+}
+
 /** Default register expiry for a Pass: 5 years from the training date (or today). */
 export function defaultPassExpiryIso(trainingDate?: string | null): string {
   const source = trainingDate?.trim() || new Date().toISOString().slice(0, 10);
-  const iso = ISO_DATE_ONLY.exec(source);
-  const now = new Date();
-  const year = iso ? Number(iso[1]) : now.getUTCFullYear();
-  const month = iso ? Number(iso[2]) : now.getUTCMonth() + 1;
-  const day = iso ? Number(iso[3]) : now.getUTCDate();
-  const expiry = new Date(Date.UTC(year + 5, month - 1, day));
-  return `${expiry.getUTCFullYear()}-${String(expiry.getUTCMonth() + 1).padStart(2, "0")}-${String(expiry.getUTCDate()).padStart(2, "0")}`;
+  return addCalendarYearsIso(source, 5) ?? source;
 }

@@ -17,8 +17,10 @@ import styles from "./customer.module.css";
 type TopLink = { href: string; label: string; exact?: boolean };
 
 const PRIMARY_LINKS: TopLink[] = [
-  { href: "/customer", label: "Training Matrix", exact: true },
+  // Dashboard is the customer landing page — keep it first so the ordering
+  // matches the login redirect and the client's spec.
   { href: "/customer/dashboard", label: "Dashboard" },
+  { href: "/customer/training-matrix", label: "Training Matrix" },
   { href: "/customer/courses", label: "Training Delivery" },
   { href: "/customer/candidates", label: "Candidates" },
 ];
@@ -231,7 +233,7 @@ export function CustomerTopNav({
     >
       <div className={styles.topNavBar}>
         <div className={styles.topNavBrand}>
-          <Link href="/customer" className={styles.topNavBrandLink}>
+          <Link href="/customer/dashboard" className={styles.topNavBrandLink}>
             <BrandLogo variant="mark" priority />
             <span className={styles.topNavBrandText}>PAVE Training</span>
           </Link>

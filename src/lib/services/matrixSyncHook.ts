@@ -2,6 +2,7 @@ import "server-only";
 
 import type { AdminRegisterKey, AdminTrainingRecord } from "@/lib/services/adminCrudService";
 import type { MatrixSyncResult, MatrixSyncResultItem } from "@/types/matrixSync";
+import { revalidateTrainingSurfaces } from "@/lib/cache/revalidateTrainingSurfaces";
 import {
   syncAfterRegisterDelete,
   syncAfterRegisterSave,
@@ -17,10 +18,12 @@ export async function triggerMatrixSyncAfterRegister(
   userEmail?: string | null,
 ): Promise<MatrixSyncResult | null> {
   try {
-    return await syncAfterRegisterSave(registerKey, record, {
+    const result = await syncAfterRegisterSave(registerKey, record, {
       dryRun: false,
       userEmail,
     });
+    revalidateTrainingSurfaces();
+    return result;
   } catch (error) {
     console.error(
       `[matrix-sync] Failed after ${registerKey} save #${record.id}`,
@@ -42,6 +45,7 @@ export async function triggerMatrixSyncAfterRegister(
     } catch {
       // ignore alert failures
     }
+    revalidateTrainingSurfaces();
     return null;
   }
 }
@@ -56,10 +60,12 @@ export async function triggerMatrixSyncAfterRegisterDelete(
   userEmail?: string | null,
 ): Promise<MatrixSyncResult | null> {
   try {
-    return await syncAfterRegisterDelete(registerKey, deletedRecord, {
+    const result = await syncAfterRegisterDelete(registerKey, deletedRecord, {
       dryRun: false,
       userEmail,
     });
+    revalidateTrainingSurfaces();
+    return result;
   } catch (error) {
     console.error(
       `[matrix-sync] Failed to recompute after ${registerKey} delete #${deletedRecord.id}`,
@@ -81,6 +87,7 @@ export async function triggerMatrixSyncAfterRegisterDelete(
     } catch {
       // ignore alert failures
     }
+    revalidateTrainingSurfaces();
     return null;
   }
 }
@@ -116,6 +123,7 @@ export function triggerMatrixSyncAfterNvq(record: {
         "NVQ saved to profile/history; no Matrix expiry target configured.",
     },
   ];
+  revalidateTrainingSurfaces();
   return {
     dryRun: false,
     scope: "register",

@@ -1,6 +1,5 @@
-import { NextResponse } from "next/server";
-
 import { handleApiError } from "@/lib/api/apiGuards";
+import { fileResponse } from "@/lib/http/fileResponse";
 import {
   logDocumentView,
   sanitizeAuditError,
@@ -80,15 +79,12 @@ export async function GET(
       request,
     });
 
-    const fileName = file.fileName ?? document.name;
-    return new NextResponse(file.content, {
-      status: 200,
-      headers: {
-        "Content-Type": file.contentType,
-        "Content-Disposition": `inline; filename="${fileName.replace(/"/g, "")}"`,
-        "Cache-Control": "no-store",
-      },
-    });
+    return fileResponse(
+      file.content,
+      file.fileName ?? document.name,
+      file.contentType,
+      "inline",
+    );
   } catch (error) {
     await logDocumentView({
       userEmail: email,

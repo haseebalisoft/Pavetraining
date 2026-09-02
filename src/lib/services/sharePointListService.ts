@@ -340,7 +340,8 @@ export function buildSchemaFieldEqualsFilter(
 export function asBoolean(value: unknown): boolean {
   if (typeof value === "boolean") return value;
   if (typeof value === "string") {
-    return value.toLowerCase() === "true" || value === "1" || value === "Yes";
+    const normalized = value.trim().toLowerCase();
+    return normalized === "true" || normalized === "1" || normalized === "yes";
   }
   if (typeof value === "number") return value === 1;
   return false;
@@ -425,6 +426,14 @@ export function asLookupOrString(value: unknown): string | null {
   return null;
 }
 
+/** Lookup display text, ignoring Graph LookupId numbers leaked as the value. */
+export function asLookupDisplayName(value: unknown): string | null {
+  const text = asLookupOrString(value);
+  if (!text) return null;
+  if (/^\d+$/.test(text.trim())) return null;
+  return text;
+}
+
 /**
  * Graph often returns only `{Field}LookupId` without LookupValue.
  * Reads nested LookupId or the sibling `{fieldInternalName}LookupId` field.
@@ -434,6 +443,13 @@ export function extractLookupId(
   fieldInternalName: string,
 ): string | null {
   const direct = fields[fieldInternalName];
+  if (typeof direct === "number") {
+    const text = String(direct).trim();
+    if (text) return text;
+  }
+  if (typeof direct === "string" && /^\d+$/.test(direct.trim())) {
+    return direct.trim();
+  }
   if (direct && typeof direct === "object" && "LookupId" in direct) {
     const id = (direct as { LookupId?: unknown }).LookupId;
     if (typeof id === "number" || typeof id === "string") {
@@ -558,6 +574,10 @@ function markListMutated(listKey: SharePointListKey): void {
  */
 const UNWRITABLE_GRAPH_FIELDS: Partial<Record<SharePointListKey, string[]>> = {
   workforce: ["TrainingManagerText", "SupervisorText"],
+  // Projected lookup from Workforce — read-only; per-course numbers use CertificationNumber.
+  inHouseCertificates: ["Candidate_x0020_Name_x003a__x002"],
+  // NI Number on NVQ is a projected Candidate Name lookup, not a writable column.
+  nvqRegister: ["NINumber"],
 };
 
 function fieldsForGraphWrite(
@@ -778,6 +798,7 @@ type GraphChoiceColumn = {
   choice?: {
     allowTextEntry?: boolean;
     choices?: string[];
+    displayAs?: string;
   };
 };
 
@@ -801,14 +822,52 @@ async function getChoiceColumn(
   );
 }
 
+function graphErrorStatus(error: unknown): number | null {
+  if (!error || typeof error !== "object") return null;
+  const value =
+    (error as { statusCode?: unknown }).statusCode ??
+    (error as { status?: unknown }).status;
+  return typeof value === "number" ? value : null;
+}
+
+function graphErrorText(error: unknown): string {
+  if (!(error instanceof Error)) return String(error ?? "");
+  const body =
+    error && typeof error === "object" && "body" in error
+      ? String((error as { body?: unknown }).body ?? "")
+      : "";
+  return `${error.message} ${body}`.toLowerCase();
+}
+
+/** App-only Graph cannot change list column definitions on this site. */
+function isChoiceColumnUpdateDenied(error: unknown): boolean {
+  const status = graphErrorStatus(error);
+  if (status === 403) return true;
+  const text = graphErrorText(error);
+  return (
+    text.includes("access denied") ||
+    text.includes("not compatible with target field type")
+  );
+}
+
 /**
- * Make sure MultiChoice values exist on the SharePoint column before writing.
- * Missing codes (and junk like "Choice 8") are why NPORS Category saves 400.
+ * Make sure Choice / MultiChoice values exist on the SharePoint column
+ * before writing. Missing codes (and junk like "Choice 8") are why NPORS
+ * Category saves 400.
+ *
+ * PATCH only `choice.choices`. Sending `displayAs` (dropDownMenu vs
+ * checkBoxes) returns Graph 400 "not compatible with target field type".
+ * This app identity also 403s column updates — swallow that so a missing
+ * Candidate choice cannot 400 every Permissions save.
  */
 export async function ensureChoiceColumnValues(
   listKey: SharePointListKey,
   columnName: string,
   values: string[],
+  _options?: {
+    displayAs?: "checkBoxes" | "dropDownMenu" | "radioButtons";
+    requireExisting?: boolean;
+  },
 ): Promise<string[]> {
   const wanted = [
     ...new Set(values.map((value) => value.trim()).filter(Boolean)),
@@ -848,15 +907,132 @@ export async function ensureChoiceColumnValues(
   const siteRoot = getSharePointSiteApiRoot();
   const listId = getSharePointListId(listKey);
   const client = getGraphClient();
-  await client.api(`${siteRoot}/lists/${listId}/columns/${column.id}`).patch({
-    choice: {
-      allowTextEntry: false,
-      displayAs: "checkBoxes",
-      choices: nextChoices,
-    },
-  });
-  revalidateSharePointList(listKey);
+  try {
+    await client.api(`${siteRoot}/lists/${listId}/columns/${column.id}`).patch({
+      choice: { choices: nextChoices },
+    });
+    revalidateSharePointList(listKey);
+  } catch (error) {
+    if (!isChoiceColumnUpdateDenied(error)) throw error;
+    console.warn(
+      `[sharepoint] ${listKey}.${columnName} choices not expanded (app cannot update list columns). Missing: ${missing.join(", ")}`,
+    );
+    if (_options?.requireExisting) {
+      throw new Error(
+        `SharePoint ${columnName} does not include ${missing.join(", ")}. Add ${missing.join(", ")} to the list column choices, then try again.`,
+      );
+    }
+  }
   return resolved;
+}
+
+const PERMISSION_ROLE_TYPE_CHOICES = [
+  "Admin",
+  "Training Manager",
+  "Supervisor",
+  "Customer",
+];
+
+/**
+ * RoleType is a single-select Choice (Admin / Training Manager /
+ * Supervisor / Customer). This app cannot add choices — Graph 403s
+ * column definition updates.
+ */
+export async function ensurePermissionRoleTypeChoices(): Promise<void> {
+  await ensureChoiceColumnValues(
+    "permissions",
+    "RoleType",
+    PERMISSION_ROLE_TYPE_CHOICES,
+  );
+}
+
+type GraphListColumn = {
+  id: string;
+  name?: string;
+  displayName?: string;
+  required?: boolean;
+  readOnly?: boolean;
+  text?: unknown;
+};
+
+const IN_HOUSE_CERT_NUMBER_FIELD = "CertificationNumber";
+let inHouseCertColumnEnsure: Promise<void> | null = null;
+
+/**
+ * In-House certification numbers are optional (each course can use a
+ * different reference). Clears Required on the old Workforce lookup
+ * projection and ensures a writable per-record text column exists.
+ */
+export async function ensureInHouseCertificationNumberOptional(): Promise<void> {
+  if (!inHouseCertColumnEnsure) {
+    inHouseCertColumnEnsure = ensureInHouseCertificationNumberOptionalOnce().catch(
+      (error) => {
+        inHouseCertColumnEnsure = null;
+        throw error;
+      },
+    );
+  }
+  try {
+    await inHouseCertColumnEnsure;
+  } catch (error) {
+    console.warn(
+      "[inHouseCertificates] could not relax certification-number column; saving without it.",
+      error,
+    );
+  }
+}
+
+async function ensureInHouseCertificationNumberOptionalOnce(): Promise<void> {
+  const listKey: SharePointListKey = "inHouseCertificates";
+  const siteRoot = getSharePointSiteApiRoot();
+  const listId = getSharePointListId(listKey);
+  const client = getGraphClient();
+  const response = (await withGraphReadRetry(() =>
+    client.api(`${siteRoot}/lists/${listId}/columns`).top(200).get(),
+  )) as { value?: GraphListColumn[] };
+  const columns = response.value ?? [];
+
+  for (const column of columns) {
+    const title = `${column.displayName ?? ""} ${column.name ?? ""}`.toLowerCase();
+    if (!title.includes("certification number")) continue;
+    if (column.required === false) continue;
+    try {
+      await client
+        .api(`${siteRoot}/lists/${listId}/columns/${column.id}`)
+        .patch({ required: false });
+    } catch (error) {
+      console.warn(
+        `[inHouseCertificates] could not clear Required on ${column.displayName ?? column.name}.`,
+        error,
+      );
+    }
+  }
+
+  const hasWritable = columns.some((column) => {
+    const name = (column.name ?? "").toLowerCase();
+    const display = (column.displayName ?? "").toLowerCase();
+    return (
+      Boolean(column.text) &&
+      (name === IN_HOUSE_CERT_NUMBER_FIELD.toLowerCase() ||
+        display === "certification number")
+    );
+  });
+  if (!hasWritable) {
+    try {
+      await client.api(`${siteRoot}/lists/${listId}/columns`).post({
+        name: IN_HOUSE_CERT_NUMBER_FIELD,
+        displayName: "Certification Number",
+        text: { allowMultipleLines: false, maxLength: 255 },
+      });
+    } catch (error) {
+      console.warn(
+        "[inHouseCertificates] could not add CertificationNumber column.",
+        error,
+      );
+    }
+  }
+
+  revalidateSharePointList(listKey);
 }
 
 /** Maps schema field keys to SharePoint internal names for write payloads. */

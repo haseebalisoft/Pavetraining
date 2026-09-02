@@ -5,12 +5,13 @@ import { allocateNextWorkforceNumber } from "@/lib/workforceNumber";
 import { NotFoundError } from "@/lib/services/errorHandler";
 import { ValidationError } from "@/lib/services/validationService";
 import { validateEmailField } from "@/lib/validation/email";
-import { defaultPassExpiryIso } from "@/lib/utils/formatDate";
+import { addCalendarYearsIso } from "@/lib/utils/formatDate";
 import { assertNotProtectedAdmin } from "@/lib/auth/protectedAdmins";
 import { getSharePointFields } from "@/lib/schema/sharepointSchema";
 import { isDepartmentActive } from "@/lib/services/departmentTypes";
 import {
   asBoolean,
+  asLookupDisplayName,
   asLookupOrString,
   asMultiChoiceText,
   asNullableString,
@@ -18,6 +19,8 @@ import {
   buildSchemaFieldEqualsFilter,
   createListItemByKey,
   deleteListItemByKey,
+  ensureChoiceColumnValues,
+  ensureInHouseCertificationNumberOptional,
   extractLookupId,
   getListItemById,
   getListItemByKey,
@@ -31,6 +34,7 @@ import {
 } from "@/lib/services/sharePointListService";
 import { getSharePointListId } from "@/lib/config/sharepoint";
 import { revalidateSharePointList } from "@/lib/cache/sharePointCache";
+import { revalidateTrainingSurfaces } from "@/lib/cache/revalidateTrainingSurfaces";
 import { revalidatePath } from "next/cache";
 import {
   normalizePermissionFormRole,
@@ -38,6 +42,7 @@ import {
   permissionFormRoleFromSharePoint,
   resolveCustomerRole,
   roleLabelFor,
+  routingRoleToSharePointRoleType,
   toSharePointRoleType,
   type PermissionFormRole,
 } from "@/lib/services/permissionService";
@@ -67,6 +72,15 @@ import type {
   AdminDocumentRecord,
   DocumentMetadataStatus,
 } from "@/types/adminDocuments";
+import {
+  headerFromTrainingDateFieldName,
+  isMatrixTrainingDateFieldName,
+  MATRIX_EDITOR_DATE_HEADERS,
+  matrixStoredExpiryKey,
+} from "@/lib/training/matrixEditorFields";
+import {
+  EUSR_MATRIX_CATEGORY_COLUMNS,
+} from "@/lib/training/eusrOptions";
 import {
   bookingStatusFromFreeBusy,
   freeBusyFromBookingStatus,
@@ -135,6 +149,48 @@ function matchesCompany(
 ): boolean {
   if (!companyName) return true;
   return (value ?? "").trim().toLowerCase() === companyName.trim().toLowerCase();
+}
+
+function resolveCompanyFromInput(
+  companies: Company[],
+  input: Record<string, unknown>,
+  fallbackName?: string | null,
+): Company | null {
+  const companyId = optionalText(input.companyId);
+  if (companyId) {
+    const byId = companies.find(
+      (row) => String(row.id).trim() === companyId,
+    );
+    if (byId) return byId;
+  }
+  const companyName =
+    optionalText(input.companyName) ?? optionalText(fallbackName);
+  if (!companyName) return null;
+  if (/^\d+$/.test(companyName)) {
+    const byId = companies.find(
+      (row) => String(row.id).trim() === companyName,
+    );
+    if (byId) return byId;
+  }
+  return (
+    companies.find(
+      (row) =>
+        row.companyName.trim().toLowerCase() === companyName.toLowerCase(),
+    ) ?? null
+  );
+}
+
+function workforceMatchesCompanyRecord(
+  row: { companyId: string | null; companyName: string },
+  company: Company,
+): boolean {
+  if (row.companyId && String(row.companyId).trim() === String(company.id).trim()) {
+    return true;
+  }
+  return (
+    row.companyName.trim().toLowerCase() ===
+    company.companyName.trim().toLowerCase()
+  );
 }
 
 /* ───────────────── Companies ───────────────── */
@@ -530,7 +586,7 @@ export async function ensurePermissionPerson(input: {
   const fields = getSharePointFields("permissions");
   const payload: SharePointFields = toSharePointFields("permissions", {
     userEmail,
-    roleType: toSharePointRoleType(input.roleType),
+    roleType: routingRoleToSharePointRoleType(input.roleType),
     status: "Active",
     accessScope: "Full Company",
     canView: true,
@@ -1680,6 +1736,8 @@ export interface AdminMatrixRecord {
   workforceNumber?: string | null;
   /** Link health: Linked (default view), or Orphan / Needs Review (hidden by default). */
   matrixLinkStatus?: MatrixLinkStatus;
+  /** Per-category training dates keyed by template header. */
+  categoryTrainingDates?: Record<string, string | null>;
 }
 
 function mapMatrix(
@@ -2014,6 +2072,7 @@ export async function listAdminMatrix(
         faceFitExpiry: columnValues["Face ift"] ?? null,
         columnValues,
         manualOverrideHeaders: example.manualOverrides ?? [],
+        categoryTrainingDates: example.categoryTrainingDates ?? {},
         workforceId: wf?.id ?? null,
         workforceNumber: wf?.workforceNumber ?? example.workforceNumber ?? null,
         matrixLinkStatus,
@@ -2170,6 +2229,7 @@ export async function createAdminMatrix(input: Record<string, unknown>) {
       n100Expiry: asNullableString(asDateInput(input.n100Expiry) ?? null),
       columnValues: {},
     } satisfies AdminMatrixRecord);
+  revalidateTrainingSurfaces();
   return {
     ...mapped,
     dateOfBirth: mapped.dateOfBirth ?? candidate.dateOfBirth,
@@ -2266,6 +2326,7 @@ export async function linkAdminMatrixToWorkforce(
   if (!updated) {
     throw new NotFoundError("Matrix record not found after link.");
   }
+  revalidateTrainingSurfaces();
   return updated;
 }
 
@@ -2274,6 +2335,7 @@ export async function deleteAdminMatrix(id: string) {
     const exampleId = stripExampleMatrixId(id);
     if (!exampleId) throw new NotFoundError("Matrix record not found.");
     await deleteListItemByKey("trainingMatrixExample", exampleId);
+    revalidateTrainingSurfaces();
     return;
   }
   if (id.startsWith("workforce-only:")) {
@@ -2285,6 +2347,7 @@ export async function deleteAdminMatrix(id: string) {
   const existing = await getListItemByKey("trainingMatrix", id);
   if (!existing) throw new NotFoundError("Matrix record not found.");
   await deleteListItemByKey("trainingMatrix", id);
+  revalidateTrainingSurfaces();
 }
 
 export async function deleteAdminRegister(
@@ -2301,6 +2364,7 @@ export async function deleteAdminRegister(
   if (!deletedRecord) {
     throw new NotFoundError("Training record not found.");
   }
+  revalidateTrainingSurfaces();
   return { deletedRecord };
 }
 
@@ -2308,6 +2372,7 @@ export async function deleteAdminNvq(id: string): Promise<void> {
   const existing = await getListItemByKey("nvqRegister", id);
   if (!existing) throw new NotFoundError("NVQ record not found.");
   await deleteListItemByKey("nvqRegister", id);
+  revalidateTrainingSurfaces();
 }
 
 export async function deleteAdminOffer(id: string): Promise<void> {
@@ -2413,6 +2478,11 @@ export async function updateAdminMatrix(
       }
     }
 
+    const trainingDates: Record<string, string | null> = {
+      ...(existing.categoryTrainingDates ?? {}),
+    };
+    const editorHeaderSet = new Set(MATRIX_EDITOR_DATE_HEADERS);
+
     if (input.columnValues && typeof input.columnValues === "object") {
       for (const [key, value] of Object.entries(
         input.columnValues as Record<string, unknown>,
@@ -2426,7 +2496,8 @@ export async function updateAdminMatrix(
       }
     }
 
-    // Allow direct header keys from the edit form (e.g. "N006 - Side Loader").
+    // Allow direct header keys from the edit form (e.g. "N006 - Side Loader")
+    // and `training:<header>` keys for per-category training dates.
     for (const [key, value] of Object.entries(input)) {
       if (
         key === "candidateName" ||
@@ -2434,8 +2505,23 @@ export async function updateAdminMatrix(
         key === "department" ||
         key === "columnValues" ||
         key === "id" ||
-        key === "manualOverrideHeaders"
+        key === "manualOverrideHeaders" ||
+        key === "categoryTrainingDates" ||
+        key === "workforceId" ||
+        key === "workforceNumber" ||
+        key === "matrixLinkStatus" ||
+        key === "overallStatus" ||
+        key === "needsReview" ||
+        key === "matrixNotes" ||
+        key === "nextExpiryDate"
       ) {
+        continue;
+      }
+      if (isMatrixTrainingDateFieldName(key)) {
+        const header = headerFromTrainingDateFieldName(key);
+        if (!header || !editorHeaderSet.has(header)) continue;
+        trainingDates[header] =
+          value == null || value === "" ? null : (asDateInput(value) ?? null);
         continue;
       }
       if (CLIENT_MATRIX_DISPLAY_HEADERS.includes(key as never)) {
@@ -2445,6 +2531,14 @@ export async function updateAdminMatrix(
             : asDateInput(value) ?? String(value);
         changedHeaders.push(key);
       }
+    }
+
+    for (const { header } of EUSR_MATRIX_CATEGORY_COLUMNS) {
+      if (!Object.prototype.hasOwnProperty.call(source, header)) continue;
+      const iso = source[header]?.trim()
+        ? (asDateInput(source[header]) ?? null)
+        : null;
+      trainingDates[matrixStoredExpiryKey(header)] = iso;
     }
 
     const name = source.Name?.trim() || existing.candidateName;
@@ -2467,6 +2561,7 @@ export async function updateAdminMatrix(
       existingItemId: exampleId,
       source: { ...source, Name: name },
       manualOverrides,
+      categoryTrainingDates: trainingDates,
     });
 
     // includeUnlinked: an admin editing a Needs Review / Orphan row must get the
@@ -2476,6 +2571,7 @@ export async function updateAdminMatrix(
     if (!updated) {
       throw new NotFoundError("Matrix record not found after update.");
     }
+    revalidateTrainingSurfaces();
     return updated;
   }
 
@@ -2631,6 +2727,7 @@ export async function updateAdminMatrix(
   const expiryByCode = expiryByPerson.get(
     matrixRowKey(mapped.candidateName, mapped.companyName),
   );
+  revalidateTrainingSurfaces();
   return {
     ...mapped,
     dateOfBirth: mapped.dateOfBirth ?? wf?.dateOfBirth ?? null,
@@ -2687,6 +2784,7 @@ type RegisterLookupMaps = {
   workforceNameById: Map<string, string>;
   workforceCompanyById: Map<string, string>;
   workforceNumberById: Map<string, string>;
+  workforceNiById: Map<string, string>;
 };
 
 async function loadRegisterLookupMaps(): Promise<RegisterLookupMaps> {
@@ -2713,12 +2811,18 @@ async function loadRegisterLookupMaps(): Promise<RegisterLookupMaps> {
       .filter((row) => row.workforceNumber?.trim())
       .map((row) => [row.id, row.workforceNumber as string] as const),
   );
+  const workforceNiById = new Map(
+    workforce
+      .filter((row) => row.niNumber?.trim())
+      .map((row) => [row.id, row.niNumber as string] as const),
+  );
   return {
     companyNameById,
     companyNumberById,
     workforceNameById,
     workforceCompanyById,
     workforceNumberById,
+    workforceNiById,
   };
 }
 
@@ -2951,9 +3055,11 @@ function mapRegister(
     certificateCategory: asNullableString(item.fields[f.certificateCategory]),
     courseCategory: asNullableString(item.fields[f.courseCategory]),
     inHouseCertificationNumber:
+      asNullableString(item.fields[f.certificationNumber]) ??
       asLookupOrString(
         item.fields.Candidate_x0020_Name_x003a__x002,
-      ) ?? null,
+      ) ??
+      null,
   };
 }
 
@@ -3010,11 +3116,27 @@ function registerWritePayload(
       ? null
       : undefined;
 
-  if (key === "nporsRegister" && normalizedOutcome === "Pass") {
+  if (key === "nporsRegister" || key === "eusrRegister") {
     const expiry =
       input.expiry === undefined ? undefined : asDateInput(input.expiry);
     if (mode === "create" && !expiry) {
-      input.expiry = defaultPassExpiryIso(optionalText(input.trainingDate));
+      const fromTraining = addCalendarYearsIso(
+        optionalText(input.trainingDate),
+        3,
+      );
+      if (fromTraining) input.expiry = fromTraining;
+    }
+  }
+
+  if (key === "nrswaRegister") {
+    const expiry =
+      input.expiry === undefined ? undefined : asDateInput(input.expiry);
+    if (mode === "create" && !expiry) {
+      const fromTraining = addCalendarYearsIso(
+        optionalText(input.trainingDate),
+        5,
+      );
+      if (fromTraining) input.expiry = fromTraining;
     }
   }
 
@@ -3202,6 +3324,13 @@ function registerWritePayload(
     expiryDate:
       input.expiry === undefined ? undefined : asDateInput(input.expiry),
     customerVisible: optionalBool(input.customerVisible),
+    certificationNumber:
+      input.inHouseCertificationNumber === undefined &&
+      input.certificationNumber === undefined
+        ? undefined
+        : optionalText(
+            input.inHouseCertificationNumber ?? input.certificationNumber,
+          ),
   };
   if (mode === "create" && values.customerVisible === undefined) {
     values.customerVisible = true;
@@ -3381,15 +3510,32 @@ export async function createAdminRegister(
   const deferred = stripDeferredChoiceFields(key, payload);
 
   await applyRegisterLookupIds(payload, input, "create");
+  if (key === "inHouseCertificates") {
+    await ensureInHouseCertificationNumberOptional();
+  }
   let item;
   try {
     item = await createListItemByKey(key, payload);
   } catch (error) {
     const detail =
       error instanceof Error ? error.message : "SharePoint create failed.";
-    throw new ValidationError(
-      `Could not save ${key === "nrswaRegister" ? "Streetworks" : key === "eusrRegister" ? "EUSR" : "training"} record: ${detail}`,
-    );
+    if (
+      key === "inHouseCertificates" &&
+      /CertificationNumber|certification number/i.test(detail)
+    ) {
+      delete payload.CertificationNumber;
+      try {
+        item = await createListItemByKey(key, payload);
+      } catch {
+        throw new ValidationError(
+          `Could not save In-House record: ${detail}`,
+        );
+      }
+    } else {
+      throw new ValidationError(
+        `Could not save ${key === "nrswaRegister" ? "Streetworks" : key === "eusrRegister" ? "EUSR" : key === "inHouseCertificates" ? "In-House" : "training"} record: ${detail}`,
+      );
+    }
   }
 
   const choiceWarnings = await applyDeferredChoiceFields(
@@ -3429,6 +3575,13 @@ export async function createAdminRegister(
   if (submittedEusr && !mapped.eusrCategory) {
     mapped.eusrCategory = submittedEusr;
   }
+  const submittedInHouseNumber =
+    optionalText(input.inHouseCertificationNumber) ??
+    optionalText(input.certificationNumber);
+  if (submittedInHouseNumber && !mapped.inHouseCertificationNumber) {
+    mapped.inHouseCertificationNumber = submittedInHouseNumber;
+  }
+  revalidateTrainingSurfaces();
   return { record: mapped, choiceWarnings };
 }
 
@@ -3442,15 +3595,32 @@ export async function updateAdminRegister(
   const payload = registerWritePayload(key, input, "update");
   const deferred = stripDeferredChoiceFields(key, payload);
   await applyRegisterLookupIds(payload, input, "update");
+  if (key === "inHouseCertificates") {
+    await ensureInHouseCertificationNumberOptional();
+  }
   let item;
   try {
     item = await updateListItemFieldsByKey(key, id, payload);
   } catch (error) {
     const detail =
       error instanceof Error ? error.message : "SharePoint update failed.";
-    throw new ValidationError(
-      `Could not update training record: ${detail}`,
-    );
+    if (
+      key === "inHouseCertificates" &&
+      /CertificationNumber|certification number/i.test(detail)
+    ) {
+      delete payload.CertificationNumber;
+      try {
+        item = await updateListItemFieldsByKey(key, id, payload);
+      } catch {
+        throw new ValidationError(
+          `Could not update training record: ${detail}`,
+        );
+      }
+    } else {
+      throw new ValidationError(
+        `Could not update training record: ${detail}`,
+      );
+    }
   }
 
   const choiceWarnings = await applyDeferredChoiceFields(key, id, deferred);
@@ -3482,6 +3652,13 @@ export async function updateAdminRegister(
   if (submittedCert) {
     mapped.certificateCategory = submittedCert;
   }
+  const submittedInHouseNumber =
+    optionalText(input.inHouseCertificationNumber) ??
+    optionalText(input.certificationNumber);
+  if (submittedInHouseNumber) {
+    mapped.inHouseCertificationNumber = submittedInHouseNumber;
+  }
+  revalidateTrainingSurfaces();
   return { record: mapped, choiceWarnings };
 }
 
@@ -3545,8 +3722,8 @@ function mapNvq(
     extractLookupId(item.fields, nvqFields.nvqCompany) ??
     extractLookupId(item.fields, nvqFields.companyName);
   const companyName =
-    asLookupOrString(item.fields[nvqFields.nvqCompany]) ??
-    asLookupOrString(item.fields[nvqFields.companyName]) ??
+    asLookupDisplayName(item.fields[nvqFields.nvqCompany]) ??
+    asLookupDisplayName(item.fields[nvqFields.companyName]) ??
     (companyLookupId
       ? (lookups.companyNameById.get(companyLookupId) ?? null)
       : null) ??
@@ -3570,7 +3747,11 @@ function mapNvq(
     companyLookupId,
     companyNumber,
     workforceNumber,
-    niNumber: asNullableString(item.fields[nvqFields.niNumber]),
+    niNumber:
+      (candidateLookupId
+        ? (lookups.workforceNiById.get(candidateLookupId) ?? null)
+        : null) ??
+      asNullableString(item.fields[nvqFields.niNumber]),
     ulnNumber: asNullableString(item.fields[nvqFields.ulnNumber]),
     nvqTitle: asNullableString(item.fields[nvqFields.nvqTitle]),
     boltOn: asNullableString(item.fields[nvqFields.boltonNvq]),
@@ -3621,22 +3802,56 @@ export async function listAdminNvq(companyName?: string | null) {
     });
 }
 
+function graphUnrecognizedField(error: unknown): string | null {
+  const message =
+    error instanceof Error
+      ? `${error.message} ${
+          "body" in error ? String((error as { body?: unknown }).body ?? "") : ""
+        }`
+      : String(error ?? "");
+  return /Field '([^']+)' is not recognized/i.exec(message)?.[1] ?? null;
+}
+
+async function writeNvqItem(
+  payload: SharePointFields,
+  id?: string,
+): Promise<SharePointListItem> {
+  const next: SharePointFields = { ...payload };
+  delete next.NINumber;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      return id
+        ? await updateListItemFieldsByKey("nvqRegister", id, next)
+        : await createListItemByKey("nvqRegister", next);
+    } catch (error) {
+      const field = graphUnrecognizedField(error);
+      if (field && Object.prototype.hasOwnProperty.call(next, field)) {
+        delete next[field];
+        continue;
+      }
+      const detail =
+        error instanceof Error ? error.message : "SharePoint write failed.";
+      throw new ValidationError(`Could not save NVQ record: ${detail}`);
+    }
+  }
+  throw new ValidationError("Could not save NVQ record.");
+}
+
 export async function createAdminNvq(input: Record<string, unknown>) {
   const workforceId = optionalText(input.workforceId);
   const candidateName = requireText(input.candidateName, "Candidate name");
-  const companyName = requireText(input.companyName, "Company");
+  if (!optionalText(input.companyName) && !optionalText(input.companyId)) {
+    throw new ValidationError("Company is required.");
+  }
   const [companies, workforce] = await Promise.all([
     listAdminCompanies(),
     listAdminWorkforce(),
   ]);
-  const company =
-    companies.find(
-      (row) =>
-        row.companyName.trim().toLowerCase() ===
-        companyName.trim().toLowerCase(),
-    ) ?? null;
+  const company = resolveCompanyFromInput(companies, input);
   if (!company) {
-    throw new ValidationError(`Company "${companyName}" was not found.`);
+    throw new ValidationError(
+      `Company "${optionalText(input.companyName) ?? optionalText(input.companyId) ?? ""}" was not found.`,
+    );
   }
   const candidate =
     (workforceId
@@ -3646,8 +3861,7 @@ export async function createAdminNvq(input: Record<string, unknown>) {
       (row) =>
         row.candidateName.trim().toLowerCase() ===
           candidateName.trim().toLowerCase() &&
-        row.companyName.trim().toLowerCase() ===
-          company.companyName.trim().toLowerCase(),
+        workforceMatchesCompanyRecord(row, company),
     ) ??
     workforce.find(
       (row) =>
@@ -3661,7 +3875,6 @@ export async function createAdminNvq(input: Record<string, unknown>) {
   }
 
   const payload = toSharePointFields("nvqRegister", {
-    niNumber: optionalText(input.niNumber),
     ulnNumber: optionalText(input.ulnNumber),
     nvqTitle: optionalText(input.nvqTitle),
     boltonNvq: optionalText(input.boltOn),
@@ -3690,10 +3903,11 @@ export async function createAdminNvq(input: Record<string, unknown>) {
   payload.CandidateNameLookupId = Number(candidate.id);
   payload.NVQCompanyLookupId = Number(company.id);
 
-  const item = await createListItemByKey("nvqRegister", payload);
+  const item = await writeNvqItem(payload);
   const lookups = await loadRegisterLookupMaps();
   const mapped = mapNvq(item, lookups);
   if (!mapped) throw new Error("Created NVQ could not be mapped.");
+  revalidateTrainingSurfaces();
   return mapped;
 }
 
@@ -3704,8 +3918,6 @@ export async function updateAdminNvq(
   const existing = await getListItemByKey("nvqRegister", id);
   if (!existing) throw new NotFoundError("NVQ record not found.");
   const payload = toSharePointFields("nvqRegister", {
-    niNumber:
-      input.niNumber === undefined ? undefined : optionalText(input.niNumber),
     ulnNumber:
       input.ulnNumber === undefined ? undefined : optionalText(input.ulnNumber),
     nvqTitle:
@@ -3793,33 +4005,47 @@ export async function updateAdminNvq(
     const workforceId = optionalText(input.workforceId);
     const candidateName =
       optionalText(input.candidateName) ?? existingMapped?.candidateName ?? "";
-    const companyName =
-      optionalText(input.companyName) ?? existingMapped?.companyName ?? "";
+    const company =
+      resolveCompanyFromInput(
+        companies,
+        input,
+        existingMapped?.companyName,
+      ) ??
+      (existingMapped?.companyLookupId
+        ? (companies.find(
+            (row) =>
+              String(row.id).trim() ===
+              String(existingMapped.companyLookupId).trim(),
+          ) ?? null)
+        : null);
 
-    if (companyName) {
-      const company = companies.find(
-        (row) =>
-          row.companyName.trim().toLowerCase() ===
-          companyName.trim().toLowerCase(),
-      );
+    if (
+      input.companyName !== undefined ||
+      input.companyId !== undefined ||
+      company
+    ) {
       if (!company) {
-        throw new ValidationError(`Company "${companyName}" was not found.`);
+        throw new ValidationError(
+          `Company "${optionalText(input.companyName) ?? existingMapped?.companyName ?? ""}" was not found.`,
+        );
       }
       payload.NVQCompanyLookupId = Number(company.id);
     }
 
     if (workforceId || candidateName) {
-      const companyKey = companyName.trim().toLowerCase();
+      const scopedCompany = company;
       const candidate =
         (workforceId
           ? (workforce.find((row) => row.id === workforceId) ?? null)
           : null) ??
-        workforce.find(
-          (row) =>
-            row.candidateName.trim().toLowerCase() ===
-              candidateName.trim().toLowerCase() &&
-            row.companyName.trim().toLowerCase() === companyKey,
-        ) ??
+        (scopedCompany
+          ? workforce.find(
+              (row) =>
+                row.candidateName.trim().toLowerCase() ===
+                  candidateName.trim().toLowerCase() &&
+                workforceMatchesCompanyRecord(row, scopedCompany),
+            )
+          : null) ??
         workforce.find(
           (row) =>
             row.candidateName.trim().toLowerCase() ===
@@ -3834,10 +4060,11 @@ export async function updateAdminNvq(
     }
   }
 
-  const item = await updateListItemFieldsByKey("nvqRegister", id, payload);
+  const item = await writeNvqItem(payload, id);
   const lookups = await loadRegisterLookupMaps();
   const mapped = mapNvq(item, lookups);
   if (!mapped) throw new Error("Updated NVQ could not be mapped.");
+  revalidateTrainingSurfaces();
   return mapped;
 }
 
@@ -3964,7 +4191,7 @@ export function mapDocument(item: SharePointListItem): AdminDocumentRecord | nul
     parentPath,
     uploadedDate: modifiedDate,
     previewPath: hasFile
-      ? `/api/admin/documents/${item.id}/download?disposition=inline`
+      ? `/api/admin/documents/${item.id}/view`
       : null,
     downloadPath: hasFile
       ? `/api/admin/documents/${item.id}/download`
@@ -4213,7 +4440,7 @@ export async function listAdminDocumentsAtPath(
       parentPath,
       uploadedDate: child.lastModifiedDateTime,
       previewPath: hasFile
-        ? `/api/admin/documents/${listId}/download?disposition=inline`
+        ? `/api/admin/documents/${listId}/view`
         : null,
       downloadPath: hasFile
         ? `/api/admin/documents/${listId}/download`
@@ -4397,23 +4624,10 @@ async function attachEventCompanyNames(
 
 export async function getEventsSchemaWarnings(): Promise<string[]> {
   try {
-    const [hasEventCompany, hasInternalNotes] = await Promise.all([
-      listHasColumn("events", "EventCompany"),
-      listHasColumn("events", "InternalNotes"),
-    ]);
-    const warnings: string[] = [];
-    if (!hasEventCompany) warnings.push(EVENT_COMPANY_MISSING_WARNING);
-    if (!hasInternalNotes) {
-      warnings.push(
-        "Events list needs the InternalNotes multiple-lines text column.",
-      );
-    }
-    return warnings;
+    const hasEventCompany = await listHasColumn("events", "EventCompany");
+    return hasEventCompany ? [] : [EVENT_COMPANY_MISSING_WARNING];
   } catch {
-    return [
-      EVENT_COMPANY_MISSING_WARNING,
-      "Events list needs the InternalNotes multiple-lines text column.",
-    ];
+    return [];
   }
 }
 
@@ -4859,7 +5073,7 @@ export interface AdminPermissionRecord {
   name: string | null;
   /** Routing bucket: Admin portal vs Customer portal. */
   roleType: RoleType;
-  /** Admin form value — includes first-class Candidate. */
+  /** Admin form value — Admin / Manager / Supervisor / Customer / Candidate. */
   permissionRole: PermissionFormRole;
   sharePointRoleType: string;
   customerRole: CustomerRoleType | null;
@@ -4906,10 +5120,27 @@ function extractMultiLookupIds(
     .filter(Boolean);
 }
 
+function readSharePointRoleType(value: unknown): string {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((entry) => String(entry ?? "").trim())
+      .filter(Boolean);
+    return parts[0] ?? "";
+  }
+  if (value && typeof value === "object") {
+    return (
+      asString((value as { LookupValue?: unknown }).LookupValue) ?? ""
+    );
+  }
+  return asString(value) ?? "";
+}
+
 function mapPermission(item: SharePointListItem): AdminPermissionRecord | null {
   const userEmail = asString(item.fields[permissionFields.userEmail]);
-  const sharePointRoleType =
-    asString(item.fields[permissionFields.roleType])?.trim() || "";
+  const sharePointRoleType = readSharePointRoleType(
+    item.fields[permissionFields.roleType],
+  );
   const roleType = normalizePermissionRoleType(sharePointRoleType);
   if (!userEmail || !roleType) return null;
   const companyId =
@@ -5022,29 +5253,39 @@ function normalizeAccessScopeChoice(value: unknown): string | null {
   return raw;
 }
 
+function coercePermissionRoleInput(
+  input: Record<string, unknown>,
+): PermissionFormRole | null {
+  // Only the admin form field. Do not read `roleType` — that is the portal
+  // routing bucket (Admin | Customer) and would turn Supervisors into Customer.
+  const parsed = normalizePermissionFormRole(input.permissionRole);
+  if (parsed) return parsed;
+  const key = String(input.permissionRole ?? "")
+    .toLowerCase()
+    .replace(/[^a-z]/g, "");
+  if (key === "admin") return "Admin";
+  if (key === "manager" || key === "trainingmanager") return "Manager";
+  if (key === "supervisor") return "Supervisor";
+  if (key === "customer" || key === "candidate") return "Customer";
+  return null;
+}
+
 export async function createAdminPermission(input: Record<string, unknown>) {
   const userEmail = requiredEmail(input.userEmail, "User email");
-  // Accept legacy roleType values plus first-class Candidate.
-  const permissionRole =
-    normalizePermissionFormRole(input.permissionRole) ??
-    normalizePermissionFormRole(input.roleType);
+  const permissionRole = coercePermissionRoleInput(input);
   if (!permissionRole) {
     throw new ValidationError(
-      "Role must be Training Manager, Supervisor, or Candidate.",
+      "Role must be Admin, Manager, Supervisor, or Customer.",
     );
   }
   const companyId = optionalText(input.companyId);
   const companyName = optionalText(input.companyName);
-  if (
-    (permissionRole === "Customer" || permissionRole === "Candidate") &&
-    !companyId &&
-    !companyName
-  ) {
-    throw new ValidationError("Customer / Candidate permissions require a company.");
+  if (permissionRole !== "Admin" && !companyId && !companyName) {
+    throw new ValidationError("This role requires a company.");
   }
 
   const accessScope =
-    permissionRole === "Candidate"
+    permissionRole === "Customer" || permissionRole === "Candidate"
       ? "Candidate Only"
       : (normalizeAccessScopeChoice(input.accessScope) ?? "Full Company");
   const displayName =
@@ -5052,17 +5293,40 @@ export async function createAdminPermission(input: Record<string, unknown>) {
     userEmail.split("@")[0]?.replace(/[._]/g, " ") ??
     null;
 
-  const payload: SharePointFields = toSharePointFields("permissions", {
-    userEmail,
-    roleType: toSharePointRoleType(permissionRole),
-    status: optionalText(input.status) ?? "Active",
-    accessScope,
-    canView: optionalBool(input.canView) ?? true,
-    canDownload: optionalBool(input.canDownload) ?? false,
-    canEdit: optionalBool(input.canEdit) ?? false,
-    name: displayName ?? undefined,
-  });
+  const existingRows = await listAdminPermissions();
+  if (
+    existingRows.some(
+      (row) => row.userEmail.trim().toLowerCase() === userEmail,
+    )
+  ) {
+    throw new ValidationError(
+      `A permission already exists for ${userEmail}. Edit that row instead of adding a duplicate.`,
+    );
+  }
 
+  const sharePointRole = toSharePointRoleType(permissionRole);
+  try {
+    // Only ensure the RoleType being written. This app cannot add new
+    // SharePoint choice values (Graph 403s column updates).
+    await ensureChoiceColumnValues(
+      "permissions",
+      "RoleType",
+      [sharePointRole],
+      { requireExisting: true },
+    );
+  } catch (error) {
+    console.warn("[permissions] could not expand RoleType choices", error);
+  }
+
+  const payload: SharePointFields = {
+    Title: displayName || userEmail,
+    [permissionFields.userEmail]: userEmail,
+    [permissionFields.roleType]: sharePointRole,
+    [permissionFields.status]: optionalText(input.status) ?? "Active",
+  };
+  if (displayName) {
+    payload[permissionFields.name] = displayName;
+  }
   if (companyId) {
     payload[permissionFields.companyLookupId] = Number.isNaN(Number(companyId))
       ? companyId
@@ -5071,16 +5335,76 @@ export async function createAdminPermission(input: Record<string, unknown>) {
     payload[permissionFields.company] = companyName;
   }
 
-  await applyPermissionDepartmentCoverage(payload, input, companyId);
-
   let item;
   try {
     item = await createListItemByKey("permissions", payload);
   } catch (error) {
-    rethrowPermissionWriteError(error);
+    if (companyId && payload[permissionFields.companyLookupId] !== undefined) {
+      try {
+        item = await createListItemByKey("permissions", {
+          ...payload,
+          [permissionFields.companyLookupId]: String(companyId),
+        });
+      } catch {
+        rethrowPermissionWriteError(error);
+      }
+    } else {
+      rethrowPermissionWriteError(error);
+    }
   }
-  const mapped = mapPermission(item);
+
+  const extras: SharePointFields = {
+    [permissionFields.accessScope]: accessScope,
+    [permissionFields.canView]: optionalBool(input.canView) ?? true,
+    [permissionFields.canDownload]: optionalBool(input.canDownload) ?? false,
+    [permissionFields.canEdit]: optionalBool(input.canEdit) ?? false,
+  };
+  for (const [field, value] of Object.entries(extras)) {
+    if (value === undefined) continue;
+    try {
+      await updateListItemFieldsByKey("permissions", item.id, {
+        [field]: value,
+      });
+    } catch (error) {
+      console.warn(
+        `[permissions] could not set ${field} on new row #${item.id}`,
+        error,
+      );
+    }
+  }
+
+  try {
+    const coverage: SharePointFields = {};
+    await applyPermissionDepartmentCoverage(coverage, input, companyId);
+    if (Object.keys(coverage).length > 0) {
+      await updateListItemFieldsByKey("permissions", item.id, coverage);
+    }
+  } catch (error) {
+    if (error instanceof ValidationError) throw error;
+    console.warn("[permissions] department coverage skipped on create", error);
+  }
+
+  const refreshed = await getListItemByKey("permissions", item.id);
+  let mapped = mapPermission(refreshed ?? item);
   if (!mapped) throw new Error("Created permission could not be mapped.");
+
+  if (
+    sharePointRole &&
+    readSharePointRoleType(mapped.sharePointRoleType) !== sharePointRole
+  ) {
+    try {
+      await updateListItemFieldsByKey("permissions", item.id, {
+        [permissionFields.roleType]: sharePointRole,
+      });
+      const corrected = await getListItemByKey("permissions", item.id);
+      mapped = mapPermission(corrected ?? item) ?? mapped;
+    } catch (error) {
+      console.warn(
+        `[permissions] RoleType ${sharePointRole} did not stick on #${item.id}`,
+        error,
+      );
+    }
+  }
 
   // One invite email when someone is added to Permissions (never fail create).
   try {
@@ -5145,23 +5469,32 @@ export async function updateAdminPermission(
   let sharePointRole: string | undefined;
   let permissionRole: PermissionFormRole | null = null;
   if (input.permissionRole !== undefined || input.roleType !== undefined) {
-    permissionRole =
-      normalizePermissionFormRole(input.permissionRole) ??
-      normalizePermissionFormRole(input.roleType);
+    permissionRole = coercePermissionRoleInput(input);
     if (!permissionRole) {
       throw new ValidationError(
-        "Role must be Training Manager, Supervisor, or Candidate.",
+        "Role must be Admin, Manager, Supervisor, or Customer.",
       );
     }
     sharePointRole = toSharePointRoleType(permissionRole);
+    try {
+      await ensureChoiceColumnValues(
+        "permissions",
+        "RoleType",
+        [sharePointRole],
+        { requireExisting: true },
+      );
+    } catch (error) {
+      console.warn("[permissions] could not expand RoleType choices", error);
+    }
   }
 
-  const forcedCandidateScope =
+  const forcedOwnProfile =
+    sharePointRole === "Customer" ||
     sharePointRole === "Candidate" ||
-    normalizePermissionFormRole(input.permissionRole) === "Candidate" ||
-    normalizePermissionFormRole(input.roleType) === "Candidate";
+    permissionRole === "Customer" ||
+    permissionRole === "Candidate";
 
-  let accessScope: string | undefined = forcedCandidateScope
+  let accessScope: string | undefined = forcedOwnProfile
     ? "Candidate Only"
     : input.accessScope === undefined
       ? undefined
@@ -5406,6 +5739,16 @@ async function applyPermissionDepartmentCoverage(
     return;
   }
 
+  const scope = String(
+    payload[permissionFields.accessScope] ?? input.accessScope ?? "",
+  ).toLowerCase();
+  // Full Company / Candidate Only ignore leftover department ticks — those
+  // checkboxes used to list every company, so a CVA id could be sent while
+  // Company was DBS and the save would fail.
+  if (!scope.includes("department")) {
+    return;
+  }
+
   let departments;
   try {
     const { listAdminDepartments } = await import(
@@ -5428,7 +5771,9 @@ async function applyPermissionDepartmentCoverage(
   const ids: number[] = [];
   for (const name of names) {
     const hit =
-      departments.find((row) => row.id === name) ??
+      departments.find(
+        (row) => String(row.id).trim() === String(name).trim(),
+      ) ??
       departments.find(
         (row) =>
           row.name.trim().toLowerCase() === name.trim().toLowerCase(),

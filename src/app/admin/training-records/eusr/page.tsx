@@ -27,6 +27,7 @@ export default async function AdminEusrPage() {
         swqrNumber: row.swqrNumber,
         inHouseCertificationNumber: row.inHouseCertificationNumber,
         workforceNumber: row.workforceNumber,
+        niNumber: row.niNumber,
       }))}
       initialRows={records}
     />

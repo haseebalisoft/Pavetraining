@@ -1,39 +1,22 @@
-import { Suspense } from "react";
 import { redirect } from "next/navigation";
-
-import { TrainingMatrixView } from "@/components/customer/TrainingMatrixView";
-import { LoadingState } from "@/components/ui/States";
-import { auth } from "@/auth";
-import { getCustomerContext } from "@/lib/services/customerContextService";
-import { getCustomerMatrixRecords } from "@/lib/services/customerDashboardService";
-import type { CustomerContext } from "@/types/models";
 
 export const dynamic = "force-dynamic";
 
-/** Customer home — Training Matrix (Wayne UAT). */
-export default async function CustomerHomePage() {
-  const session = await auth();
-  const email = session?.user?.email?.trim().toLowerCase();
-
-  if (!email) {
-    redirect("/login");
-  }
-
-  let context: CustomerContext;
-  try {
-    context = await getCustomerContext(email);
-  } catch {
-    redirect("/access-denied");
-  }
-
-  const records = await getCustomerMatrixRecords(context.companyName, context);
-
-  return (
-    <Suspense fallback={<LoadingState label="Loading training matrix…" />}>
-      <TrainingMatrixView
-        companyName={context.companyName}
-        records={records}
-      />
-    </Suspense>
-  );
+/**
+ * Customer portal landing — always the Dashboard.
+ *
+ * Client rule (spec):
+ *   Admin        → /admin
+ *   Customer     → /customer/dashboard
+ *   Training Mgr → /customer/dashboard
+ *   Supervisor   → /customer/dashboard
+ *   Candidate    → /customer/dashboard
+ *
+ * Customers must NEVER land on the Training Matrix, a candidate profile, or
+ * a blank page. The Training Matrix has its own route at
+ * `/customer/training-matrix`; this file only exists to keep the bare
+ * `/customer` URL working for links and email history.
+ */
+export default function CustomerHomePage() {
+  redirect("/customer/dashboard");
 }

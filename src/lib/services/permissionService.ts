@@ -33,13 +33,21 @@ async function fetchActivePermissionItems(filter: string, top: number) {
 
 /**
  * SharePoint RoleType values used by the portal:
- * Training Manager | Supervisor | Admin | Candidate
+ * Admin | Training Manager | Supervisor | Customer
+ *
+ * Customer (and any leftover Candidate rows) = own profile only.
  *
  * Portal routing bucket (`RoleType`):
- * - Admin: Admin + Training Manager (PAVE staff → /admin; TM also sees customer APIs)
- * - Customer: Supervisor + Candidate → /customer (Training Matrix, docs, etc.)
+ * - Admin: literal Admin → /admin; Training Manager also uses this bucket
+ *   for legacy APIs but still lands on /customer
+ * - Customer: Supervisor + Customer → /customer
  */
-export type PermissionFormRole = "Admin" | "Customer" | "Candidate";
+export type PermissionFormRole =
+  | "Admin"
+  | "Manager"
+  | "Supervisor"
+  | "Customer"
+  | "Candidate";
 
 export function normalizePermissionRoleType(
   value: unknown,
@@ -50,7 +58,8 @@ export function normalizePermissionRoleType(
   if (
     normalized === "admin" ||
     normalized === "training manager" ||
-    normalized === "trainingmanager"
+    normalized === "trainingmanager" ||
+    normalized === "manager"
   ) {
     return "Admin";
   }
@@ -64,48 +73,85 @@ export function normalizePermissionRoleType(
   return null;
 }
 
-/** Form / admin UI role including first-class Candidate. */
+/** Form / admin UI role. Admin, Manager, Supervisor, and Customer are distinct. */
 export function normalizePermissionFormRole(
   value: unknown,
 ): PermissionFormRole | null {
   const role = asString(value);
   if (!role) return null;
-  const normalized = role.toLowerCase().trim();
+  const normalized = role.toLowerCase().trim().replace(/\s+/g, " ");
+  if (normalized === "admin") return "Admin";
   if (
-    normalized === "admin" ||
+    normalized === "manager" ||
     normalized === "training manager" ||
     normalized === "trainingmanager"
   ) {
-    return "Admin";
+    return "Manager";
   }
-  if (normalized === "candidate") return "Candidate";
-  if (normalized === "customer" || normalized === "supervisor") {
-    return "Customer";
-  }
+  if (normalized === "supervisor") return "Supervisor";
+  // One Customer role: own profile. Legacy "Candidate" is the same thing.
+  if (normalized === "customer" || normalized === "candidate") return "Customer";
   return null;
 }
 
 /**
- * Values written back to the SharePoint RoleType column.
- * Candidate is first-class (accepted by the live list even if not in the choice UI).
+ * Values written back to the SharePoint RoleType column from the admin form.
  */
-export function toSharePointRoleType(
-  role: RoleType | PermissionFormRole,
-): string {
-  if (role === "Admin") return "Training Manager";
-  if (role === "Candidate") return "Candidate";
-  return "Supervisor";
+export function toSharePointRoleType(role: PermissionFormRole): string {
+  if (role === "Admin") return "Admin";
+  if (role === "Manager") return "Training Manager";
+  if (role === "Supervisor") return "Supervisor";
+  return "Customer";
+}
+
+/** Read RoleType whether Graph returns a string, multi-choice array, or lookup. */
+export function parseSharePointRoleType(value: unknown): string {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((entry) => String(entry ?? "").trim())
+      .filter(Boolean);
+    const preferred = parts.find((part) =>
+      /^(admin|training manager|trainingmanager|manager|supervisor|customer|candidate)$/i.test(
+        part,
+      ),
+    );
+    return preferred ?? parts[0] ?? "";
+  }
+  if (value && typeof value === "object") {
+    const lookup = asString(
+      (value as { LookupValue?: unknown }).LookupValue,
+    );
+    if (lookup) return lookup;
+  }
+  return asString(value) ?? "";
+}
+
+/**
+ * Workforce TM/Supervisor auto-create still uses the routing bucket
+ * (`RoleType` Admin | Customer), not the admin form roles.
+ */
+export function routingRoleToSharePointRoleType(role: RoleType): string {
+  return role === "Admin" ? "Training Manager" : "Supervisor";
 }
 
 /** Admin form value derived from SharePoint RoleType + AccessScope. */
 export function permissionFormRoleFromSharePoint(
   sharePointRole: string,
-  accessScope: string,
+  _accessScope: string,
 ): PermissionFormRole {
-  const customerRole = resolveCustomerRole(sharePointRole, accessScope);
-  if (customerRole === "Candidate") return "Candidate";
-  const routing = normalizePermissionRoleType(sharePointRole);
-  return routing === "Admin" ? "Admin" : "Customer";
+  const key = sharePointRole.toLowerCase().trim().replace(/\s+/g, " ");
+  if (key === "admin") return "Admin";
+  if (key === "training manager" || key === "trainingmanager" || key === "manager") {
+    return "Manager";
+  }
+  if (key === "supervisor") return "Supervisor";
+  if (key === "customer" || key === "candidate") return "Customer";
+  const customerRole = resolveCustomerRole(sharePointRole, _accessScope);
+  if (customerRole === "TrainingManager") return "Manager";
+  if (customerRole === "Supervisor") return "Supervisor";
+  if (customerRole === "Candidate") return "Customer";
+  return "Manager";
 }
 
 export function resolveCustomerRole(
@@ -121,9 +167,10 @@ export function resolveCustomerRole(
     return "TrainingManager";
   }
 
-  if (role === "candidate") return "Candidate";
+  // Customer (and legacy Candidate) = own profile only, like before.
+  if (role === "customer" || role === "candidate") return "Candidate";
 
-  if (role === "supervisor" || role === "customer") {
+  if (role === "supervisor") {
     if (scope.includes("candidate")) return "Candidate";
     return "Supervisor";
   }
@@ -135,9 +182,16 @@ export function roleLabelFor(
   sharePointRole: string,
   customerRole: CustomerRoleType | null,
 ): string {
-  if (customerRole === "TrainingManager") return "Training Manager";
-  if (customerRole === "Supervisor") return "Customer";
-  if (customerRole === "Candidate") return "Candidate";
+  const key = sharePointRole.toLowerCase().trim().replace(/\s+/g, " ");
+  if (key === "admin") return "Admin";
+  if (key === "training manager" || key === "trainingmanager" || key === "manager") {
+    return "Manager";
+  }
+  if (key === "supervisor") return "Supervisor";
+  if (key === "customer" || key === "candidate") return "Customer";
+  if (customerRole === "TrainingManager") return "Manager";
+  if (customerRole === "Supervisor") return "Supervisor";
+  if (customerRole === "Candidate") return "Customer";
   return sharePointRole.trim() || "Admin";
 }
 
@@ -231,7 +285,7 @@ function mapPermissionItem(
   const userEmail = asString(fields[permissionFields.userEmail])?.trim();
   const status = asString(fields[permissionFields.status])?.trim();
   const sharePointRoleType =
-    asString(fields[permissionFields.roleType])?.trim() || "";
+    parseSharePointRoleType(fields[permissionFields.roleType]);
   const roleType = normalizePermissionRoleType(sharePointRoleType);
   const companyId = resolveCompanyId(fields);
   const accessScope = asString(fields[permissionFields.accessScope])?.trim();

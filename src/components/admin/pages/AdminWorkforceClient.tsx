@@ -206,8 +206,9 @@ const fields: AdminFieldConfig[] = [
   { name: "eusrExpiry", label: "Eusr Expiry", type: "date" },
   {
     name: "inHouseCertificationNumber",
-    label: "In House Certification Number",
+    label: "In House Certification Number (optional)",
     type: "text",
+    placeholder: "Optional — course-specific numbers belong on the In-House record",
   },
   {
     name: "department",

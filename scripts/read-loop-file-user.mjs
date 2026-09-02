@@ -15,7 +15,27 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { DeviceCodeCredential } from "@azure/identity";
 
-const AZURE_CLI_CLIENT_ID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46";
+/**
+ * Public client to use for the device-code flow. Order matters — we try each
+ * one in turn if the previous fails with AADSTS65002 ("preauthorization"
+ * missing between the client and Microsoft Graph in this tenant).
+ *
+ * 1. Microsoft Graph Command Line Tools — the "mgc" / Graph PowerShell
+ *    client id. Pre-authorized for Graph in nearly every tenant.
+ * 2. Azure CLI — often works too, but some tenants block the CLI ↔ Graph
+ *    consent (Pavetraining's tenant threw AADSTS65002 on this one).
+ * 3. Microsoft Office — very broad consent, last-resort fallback.
+ *
+ * Override with the env var LOOP_READER_CLIENT_ID if none of these are
+ * allowed and you have your own app registration (Public client, delegated
+ * Files.Read.All + Sites.Read.All).
+ */
+const PUBLIC_CLIENT_IDS = [
+  process.env.LOOP_READER_CLIENT_ID,
+  "14d82eec-204b-4c2f-b7e8-296a70dab67e", // Microsoft Graph Command Line Tools
+  "04b07795-8ddb-461a-bbee-02f9e1bf7b46", // Azure CLI
+  "d3590ed6-52b3-4102-aeff-aad2292ab01c", // Microsoft Office
+].filter(Boolean);
 
 const args = process.argv.slice(2);
 const shareUrl = args.find((a) => !a.startsWith("--"));
@@ -53,27 +73,55 @@ loadDotenv(".env.local");
 
 const tenantId = process.env.AZURE_TENANT_ID || "common";
 
-const credential = new DeviceCodeCredential({
-  tenantId,
-  clientId: AZURE_CLI_CLIENT_ID,
-  userPromptCallback: (info) => {
-    console.log("\n============================================================");
-    console.log("SIGN-IN REQUIRED");
-    console.log("------------------------------------------------------------");
-    console.log(`1. Open:  ${info.verificationUri}`);
-    console.log(`2. Enter code:  ${info.userCode}`);
-    console.log("3. Sign in with the Microsoft account that can view the Loop page.");
-    console.log("============================================================\n");
-  },
-});
+function makeCredential(clientId) {
+  return new DeviceCodeCredential({
+    tenantId,
+    clientId,
+    userPromptCallback: (info) => {
+      console.log("\n============================================================");
+      console.log("SIGN-IN REQUIRED");
+      console.log("------------------------------------------------------------");
+      console.log(`1. Open:  ${info.verificationUri}`);
+      console.log(`2. Enter code:  ${info.userCode}`);
+      console.log(`3. Sign in with the Microsoft account that can view the Loop page.`);
+      console.log(`   (Trying public client id ${clientId})`);
+      console.log("============================================================\n");
+    },
+  });
+}
+
+function isPreAuthorizationBlocked(error) {
+  const message = String(error?.message ?? error ?? "");
+  return message.includes("AADSTS65002") || /preauthorization/i.test(message);
+}
 
 async function getToken() {
-  const token = await credential.getToken([
+  const scopes = [
     "https://graph.microsoft.com/Files.Read.All",
     "https://graph.microsoft.com/Sites.Read.All",
-  ]);
-  if (!token?.token) throw new Error("Failed to get Graph token");
-  return token.token;
+  ];
+  let lastError = null;
+  for (const clientId of PUBLIC_CLIENT_IDS) {
+    try {
+      const token = await makeCredential(clientId).getToken(scopes);
+      if (token?.token) return token.token;
+    } catch (error) {
+      lastError = error;
+      if (isPreAuthorizationBlocked(error)) {
+        console.warn(
+          `\nTenant blocked client ${clientId} (AADSTS65002). Trying the next one…`,
+        );
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error(
+    `No public client id was allowed to request Microsoft Graph tokens in this tenant. ` +
+      `Register your own public client app (delegated Files.Read.All + Sites.Read.All, ` +
+      `"Allow public client flows" = yes) and set LOOP_READER_CLIENT_ID=<its id>. ` +
+      `Last auth error: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+  );
 }
 
 function encodeShareUrl(url) {

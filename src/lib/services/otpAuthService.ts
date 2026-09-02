@@ -34,6 +34,16 @@ function sha256Hmac(value: string): string {
   return createHmac("sha256", authSecret()).update(value).digest("hex");
 }
 
+/** HTML-escape helper for company / role text rendered inside the OTP email. */
+function escapeHtmlForOtp(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function generateCode(): string {
   const max = 10 ** OTP_LENGTH;
   return String(randomInt(0, max)).padStart(OTP_LENGTH, "0");
@@ -118,12 +128,28 @@ export async function requestEmailOtp(input: {
 
   const logo = await loadPaveLogoAttachment();
 
+  // Client-approved rule: every portal email — including one-time-password
+  // sign-in codes — must carry Company + Role context so the recipient knows
+  // exactly which company / role account they are signing in to. Falls back
+  // to "— not set —" only if the Permissions row has neither value, so the
+  // drift is visible on-screen instead of shipping a generic message.
+  const companyLabel = permission.companyDisplayName?.trim() || "— not set —";
+  const roleLabel = permission.roleLabel?.trim() || "— not set —";
+
   const result = await sendNotification({
     type: "login_otp",
     to: email,
     subject: "Your PAVE Training Portal sign-in code",
     text: [
-      "Your PAVE Training Portal sign-in code is:",
+      "You are signing in to the PAVE Training Portal.",
+      "",
+      "Company:",
+      companyLabel,
+      "",
+      "Role:",
+      roleLabel,
+      "",
+      "Your sign-in code is:",
       "",
       code,
       "",
@@ -133,7 +159,10 @@ export async function requestEmailOtp(input: {
       "This code expires in 10 minutes.",
       "If you did not request this, you can ignore this email.",
     ].join("\n"),
-    html: `${emailLogoHtml()}<p>Your <strong>PAVE Training Portal</strong> sign-in code is:</p>
+    html: `${emailLogoHtml()}<p>You are signing in to the <strong>PAVE Training Portal</strong>.</p>
+<p><strong>Company:</strong><br/>${escapeHtmlForOtp(companyLabel)}</p>
+<p><strong>Role:</strong><br/>${escapeHtmlForOtp(roleLabel)}</p>
+<p>Your sign-in code is:</p>
 <p style="font-size:28px;font-weight:700;letter-spacing:0.18em;font-family:Segoe UI,Arial,sans-serif">${code}</p>
 <p>Enter this code on the <a href="${loginUrl}">portal login page</a>.</p>
 <p>This code expires in 10 minutes.</p>

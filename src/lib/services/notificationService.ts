@@ -45,6 +45,7 @@ export interface SendNotificationInput {
 async function sendViaGraph(input: {
   from: string;
   fromName?: string | null;
+  replyTo?: string | null;
   to: string;
   subject: string;
   text: string;
@@ -83,9 +84,17 @@ async function sendViaGraph(input: {
         from: {
           emailAddress: {
             address: input.from,
-            name: input.fromName?.trim() || "PAVE Training Portal",
+            name: input.fromName?.trim() || "PAVE Training",
           },
         },
+        replyTo: [
+          {
+            emailAddress: {
+              address: input.replyTo || input.from,
+              name: input.fromName?.trim() || "PAVE Training",
+            },
+          },
+        ],
         toRecipients: [
           {
             emailAddress: {
@@ -95,7 +104,7 @@ async function sendViaGraph(input: {
         ],
         ...(attachments.length > 0 ? { attachments } : {}),
       },
-      saveToSentItems: false,
+      saveToSentItems: true,
     });
     return { ok: true };
   } catch (error) {
@@ -116,6 +125,7 @@ export async function sendNotification(
   const portal = await getPortalSettingsCached();
   const to = input.to.trim().toLowerCase();
 
+  const isTrainingRecordChange = input.type === "training_record_change";
   const isAdminAlert = input.type === "admin_alert";
   const isPortalInvite = input.type === "portal_invite";
   const isLoginOtp = input.type === "login_otp";
@@ -147,12 +157,14 @@ export async function sendNotification(
     };
   }
 
-  // Portal invites + login OTP must send when mail is configured.
-  // Booking confirmations only need the customer master switch (not document-upload).
+  // Portal invites, login OTP, and Training Manager record-change emails
+  // must send whenever mail is configured — they are operational, not
+  // gated by the customer-portal notification toggle.
   if (
     !isAdminAlert &&
     !isPortalInvite &&
     !isLoginOtp &&
+    !isTrainingRecordChange &&
     (!settings.notificationsEnabled || !portal.enableCustomerNotifications)
   ) {
     await writeNotificationLog({
@@ -270,6 +282,7 @@ export async function sendNotification(
   const delivery = await sendViaGraph({
     from: settings.fromEmail,
     fromName: input.fromName,
+    replyTo: process.env.NOTIFICATION_REPLY_TO_EMAIL?.trim() || settings.fromEmail,
     to,
     subject: input.subject,
     text: input.text,
@@ -408,10 +421,28 @@ export async function sendPortalInviteNotification(input: {
   itemId?: string | null;
   actorEmail?: string | null;
 }): Promise<NotificationSendResult> {
+  // Client-approved rule: portal invitations must always carry Company + Role
+  // context so recipients know exactly which company they are joining and in
+  // what capacity. Reject generic invites early so we never send an email
+  // that reads "you have been invited" with no scope information.
+  const companyName = input.companyName?.trim();
+  const roleLabel = input.roleLabel?.trim();
+  if (!companyName || !roleLabel) {
+    return {
+      status: "skipped",
+      recipientEmail: input.to,
+      subject: "You're invited to the PAVE Training Portal",
+      errorMessage: `Portal invite to ${input.to} not sent — missing ${
+        !companyName ? "Company" : "Role"
+      }. Fix the Permissions row and try again.`,
+      logged: false,
+    };
+  }
+
   const template = portalInviteEmailTemplate({
     displayName: input.displayName,
-    companyName: input.companyName,
-    roleLabel: input.roleLabel,
+    companyName,
+    roleLabel,
   });
   const logo = await loadPaveLogoAttachment();
   return sendNotification({

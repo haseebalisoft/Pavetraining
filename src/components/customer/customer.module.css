@@ -891,6 +891,14 @@
   margin-bottom: 1.35rem;
 }
 
+.pageHeader:has(.profileHero) {
+  margin-bottom: 0.55rem;
+}
+
+.pageHeader:has(.profileHero) + .companyMeta {
+  margin: 0 0 0.9rem;
+}
+
 .eyebrow {
   margin: 0 0 0.28rem;
   font-family: var(--pave-font-body);
@@ -1454,11 +1462,238 @@
   padding: 0.35rem;
 }
 
-.profileHero {
+/* ------------------------------------------------------------------------- */
+/* Customer Dashboard company hero — big branded header. See                  */
+/* CustomerCompanyProfileCard.tsx for the render contract.                    */
+/* ------------------------------------------------------------------------- */
+.companyHero {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  margin-bottom: 1.75rem;
+  padding: 1.85rem 1.85rem 1.5rem;
+  background: linear-gradient(
+      180deg,
+      rgba(var(--pave-charcoal-rgb), 0.03) 0%,
+      var(--pave-surface) 55%
+    );
+  border: 1px solid rgba(var(--pave-charcoal-rgb), 0.08);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.companyHeroBand {
   display: flex;
   align-items: flex-start;
-  gap: 1rem;
-  margin-top: 0.75rem;
+  gap: 2rem;
+  flex-wrap: wrap;
+}
+
+.companyHeroLogo,
+.companyHeroLogoPlaceholder {
+  flex: 0 0 auto;
+  width: clamp(13.5rem, 24vw, 18rem);
+  height: clamp(13.5rem, 24vw, 18rem);
+  object-fit: contain;
+  background: var(--pave-surface);
+  border: 1px solid var(--pave-border);
+  border-radius: var(--radius-lg);
+  padding: 1rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.companyHeroLogoPlaceholder {
+  display: grid;
+  place-items: center;
+  font-family: var(--pave-font-heading);
+  font-size: clamp(2.6rem, 6vw, 4rem);
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: var(--pave-charcoal-light, #667085);
+  background: var(--pave-bg);
+}
+
+.companyHeroText {
+  flex: 1 1 22rem;
+  min-width: 16rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding-top: 0.15rem;
+}
+
+.companyHeroTitle {
+  margin: 0;
+  font-family: var(--pave-font-heading);
+  font-size: clamp(2rem, 4vw, 3rem);
+  font-weight: 800;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  text-transform: uppercase;
+  color: var(--pave-charcoal);
+}
+
+.companyHeroPrimary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  margin: 0;
+}
+
+.companyHeroStatusRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.companyHeroMetaChip {
+  padding: 0.28rem 0.65rem;
+  border-radius: 999px;
+  background: var(--pave-bg);
+  border: 1px solid var(--pave-border);
+  font-size: 0.78rem;
+  color: var(--pave-charcoal);
+}
+
+.companyHeroContactItem {
+  min-width: 0;
+}
+
+.companyHeroContactItem dt,
+.companyHeroContactItem .metaLabel {
+  margin: 0;
+}
+
+.companyHeroContactValue {
+  margin: 0.15rem 0 0;
+  padding: 0;
+  font-size: 1.05rem;
+  line-height: 1.4;
+  color: var(--pave-charcoal);
+  word-break: break-word;
+}
+
+.companyHeroLink {
+  color: var(--pave-charcoal);
+  text-decoration: underline;
+  text-decoration-color: rgba(var(--pave-charcoal-rgb), 0.35);
+  text-underline-offset: 3px;
+}
+
+.companyHeroLink:hover {
+  text-decoration-color: var(--pave-charcoal);
+}
+
+.companyHeroSecondary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem 1.35rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(var(--pave-charcoal-rgb), 0.08);
+  font-size: 0.86rem;
+  color: var(--pave-charcoal-light, #667085);
+}
+
+.companyHeroSecondary strong {
+  color: var(--pave-charcoal);
+  font-weight: 600;
+  margin-right: 0.35rem;
+}
+
+@media (max-width: 640px) {
+  .companyHero {
+    padding: 1.25rem 1.25rem 1.15rem;
+  }
+  .companyHeroBand {
+    gap: 1.15rem;
+  }
+  .companyHeroLogo,
+  .companyHeroLogoPlaceholder {
+    width: 11rem;
+    height: 11rem;
+  }
+}
+
+.profileHero {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem 0.85rem;
+  margin-top: 0.35rem;
+}
+
+.profileHeroPhoto {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  flex-shrink: 0;
+}
+
+.profileHeroCopy {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.profileHeroCopy .eyebrow {
+  margin: 0 0 0.08rem;
+}
+
+.profileHeroCopy .title {
+  line-height: 1.05;
+}
+
+.profileHeroCopy .subtitle {
+  margin: 0.18rem 0 0;
+  font-size: 0.82rem;
+  line-height: 1.3;
+}
+
+.profileHeroCopy .dobSecondary {
+  margin-top: 0.08rem;
+}
+
+.profileHeroCopy .profileAssignedLine {
+  margin-top: 0.2rem;
+  font-size: 0.84rem;
+}
+
+.profileCompanyMark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-left: auto;
+  width: 6.75rem;
+  height: 5.5rem;
+  padding: 0.35rem 0.4rem;
+  background:
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.95) 0%,
+      var(--pave-surface) 100%
+    );
+  border: 1px solid rgba(var(--pave-charcoal-rgb), 0.1);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+}
+
+.profileCompanyLogo {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.profileCompanyNameFallback {
+  margin: 0;
+  text-align: center;
+  font-family: var(--pave-font-heading);
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+  color: var(--pave-charcoal);
 }
 
 .candidatePhoto,
@@ -2032,6 +2267,56 @@
   margin-top: 0.25rem;
 }
 
+.eventListCard {
+  appearance: none;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.eventListCard:hover,
+.eventListCard:focus-visible {
+  border-color: var(--pave-lime);
+  box-shadow: var(--shadow-md);
+}
+
+.eventOpenHint {
+  margin-top: 0.35rem;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--pave-charcoal);
+}
+
+.eventDetail {
+  display: flex;
+  flex-direction: column;
+  gap: 1.15rem;
+}
+
+.eventDetailWide {
+  grid-column: 1 / -1;
+}
+
+.eventDetailBlock h3 {
+  margin: 0 0 0.4rem;
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.eventDetailBlock p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.eventDocumentList {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
 @media (max-width: 720px) {
   .eventMetaList {
     grid-template-columns: 1fr;
@@ -2202,6 +2487,33 @@
   line-height: 1.25;
   color: var(--cust-ink);
   word-break: break-word;
+}
+
+.eusrCategoryStack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  min-width: 8.25rem;
+}
+
+.eusrCategoryItem {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+}
+
+.eusrCategoryName {
+  font-size: 0.78rem;
+  font-weight: 650;
+  line-height: 1.2;
+  color: var(--cust-ink);
+}
+
+.eusrCategoryDates {
+  font-size: 0.72rem;
+  line-height: 1.2;
+  color: var(--cust-muted, var(--pave-charcoal-muted));
+  font-variant-numeric: tabular-nums;
 }
 
 .matrixActions {

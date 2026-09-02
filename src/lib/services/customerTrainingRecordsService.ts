@@ -8,6 +8,7 @@ import {
 import { getCompanyById } from "@/lib/services/companyService";
 import {
   asBoolean,
+  asLookupOrString,
   asMultiChoiceText,
   asNullableString,
   asString,
@@ -41,7 +42,13 @@ async function resolveCompanyName(companyId: string): Promise<string> {
   return company.companyName;
 }
 
-function companyAndVisibleFilter(
+/**
+ * Company-only Graph filter. Do not AND CustomerVisible here — the live
+ * tenant returns 0 rows for that combined query even when both fields match
+ * (same issue as Events / Customer Documents). Visibility is enforced in
+ * the per-row mappers.
+ */
+function companyOnlyFilter(
   listKey:
     | "nporsRegister"
     | "eusrRegister"
@@ -52,12 +59,21 @@ function companyAndVisibleFilter(
 ): string {
   // Prefer LookupId — avoids OData breakage on company names with & / quotes.
   const id = Number(companyId);
-  const companyFilter = Number.isFinite(id)
-    ? buildFieldLookupIdEqualsFilter("CompanyNameLookupId", id)
-    : buildSchemaFieldEqualsFilter(listKey, "companyName", companyName);
-  const fields = getSharePointFields(listKey);
-  const visibleField = fields.customerVisible;
-  return `${companyFilter} and fields/${visibleField} eq true`;
+  if (Number.isFinite(id)) {
+    return buildFieldLookupIdEqualsFilter("CompanyNameLookupId", id);
+  }
+  return buildSchemaFieldEqualsFilter(listKey, "companyName", companyName);
+}
+
+function isCustomerVisibleField(
+  fields: SharePointFields,
+  internalName: string,
+): boolean {
+  return (
+    asBoolean(fields[internalName]) ||
+    asBoolean(fields.CustomerVisible) ||
+    asBoolean(fields.Customer_x0020_Visible)
+  );
 }
 
 /**
@@ -79,7 +95,7 @@ function mapNpors(
   fields: SharePointFields,
   workforceIds: Map<string, string>,
 ): CustomerNporsRecord | null {
-  if (!asBoolean(fields[nporsFields.customerVisible])) {
+  if (!isCustomerVisibleField(fields, nporsFields.customerVisible)) {
     return null;
   }
 
@@ -115,7 +131,7 @@ function mapEusr(
   fields: SharePointFields,
   workforceIds: Map<string, string>,
 ): CustomerEusrRecord | null {
-  if (!asBoolean(fields[eusrFields.customerVisible])) {
+  if (!isCustomerVisibleField(fields, eusrFields.customerVisible)) {
     return null;
   }
 
@@ -151,7 +167,7 @@ function mapStreetworks(
   fields: SharePointFields,
   workforceIds: Map<string, string>,
 ): CustomerStreetworksRecord | null {
-  if (!asBoolean(fields[streetworksFields.customerVisible])) {
+  if (!isCustomerVisibleField(fields, streetworksFields.customerVisible)) {
     return null;
   }
 
@@ -193,7 +209,7 @@ function mapInHouse(
   fields: SharePointFields,
   workforceIds: Map<string, string>,
 ): CustomerInHouseRecord | null {
-  if (!asBoolean(fields[inHouseFields.customerVisible])) {
+  if (!isCustomerVisibleField(fields, inHouseFields.customerVisible)) {
     return null;
   }
 
@@ -216,6 +232,11 @@ function mapInHouse(
       extractLookupId(fields, inHouseFields.candidateName),
     ),
     course,
+    certificationNumber:
+      asNullableString(fields[inHouseFields.certificationNumber]) ??
+      asLookupOrString(
+        fields.Candidate_x0020_Name_x003a__x002,
+      ),
     trainingDate: asNullableString(fields[inHouseFields.courseDate]),
     trainingAddress: stripSharePointHtml(
       asNullableString(fields[inHouseFields.trainingAddress]),
@@ -238,7 +259,7 @@ export async function getCustomerNporsRecords(
   const companyName = await resolveCompanyName(companyId);
   const [items, workforceIds] = await Promise.all([
     getListItemsByKey("nporsRegister", {
-      filter: companyAndVisibleFilter("nporsRegister", companyId, companyName),
+      filter: companyOnlyFilter("nporsRegister", companyId, companyName),
       top: 5000,
     }),
     getWorkforceIdByCandidateName(companyName),
@@ -265,7 +286,7 @@ export async function getCustomerEusrRecords(
   const companyName = await resolveCompanyName(companyId);
   const [items, workforceIds] = await Promise.all([
     getListItemsByKey("eusrRegister", {
-      filter: companyAndVisibleFilter("eusrRegister", companyId, companyName),
+      filter: companyOnlyFilter("eusrRegister", companyId, companyName),
       top: 5000,
     }),
     getWorkforceIdByCandidateName(companyName),
@@ -296,7 +317,7 @@ export async function getCustomerStreetworksRecords(
   const companyName = await resolveCompanyName(companyId);
   const [items, workforceIds] = await Promise.all([
     getListItemsByKey("nrswaRegister", {
-      filter: companyAndVisibleFilter("nrswaRegister", companyId, companyName),
+      filter: companyOnlyFilter("nrswaRegister", companyId, companyName),
       top: 5000,
     }),
     getWorkforceIdByCandidateName(companyName),
@@ -323,7 +344,7 @@ export async function getCustomerInHouseRecords(
   const companyName = await resolveCompanyName(companyId);
   const [items, workforceIds] = await Promise.all([
     getListItemsByKey("inHouseCertificates", {
-      filter: companyAndVisibleFilter(
+      filter: companyOnlyFilter(
         "inHouseCertificates",
         companyId,
         companyName,

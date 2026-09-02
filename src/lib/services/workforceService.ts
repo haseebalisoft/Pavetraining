@@ -44,6 +44,8 @@ function mapWorkforceItem(
   companyNameById?: Map<string, string>,
   permissionNameById?: Map<string, string>,
   departmentNameById?: Map<string, string>,
+  companyLogoById?: Map<string, string | null>,
+  companyIdByName?: Map<string, string>,
 ): WorkforceCandidate | null {
   const candidateName = asString(fields[workforceFields.candidateName]);
   const companyLookupId = extractLookupId(fields, workforceFields.companyName);
@@ -57,6 +59,14 @@ function mapWorkforceItem(
   if (!candidateName || !companyName) {
     return null;
   }
+
+  const companyId =
+    companyLookupId ??
+    companyIdByName?.get(companyName.trim().toLowerCase()) ??
+    null;
+  const companyLogo = companyId
+    ? (companyLogoById?.get(companyId) ?? null)
+    : null;
 
   const trainingManagerLookupId = extractLookupId(
     fields,
@@ -75,6 +85,8 @@ function mapWorkforceItem(
     id,
     candidateName,
     companyName,
+    companyId,
+    companyLogo,
     workforceNumber: asNullableString(fields[workforceFields.workforceNumber]),
     dateOfBirth: asNullableString(fields[workforceFields.dateOfBirth]),
     department:
@@ -115,9 +127,21 @@ function mapWorkforceItem(
   };
 }
 
-async function companyNameLookupMap(): Promise<Map<string, string>> {
+async function companyLookupMaps(): Promise<{
+  nameById: Map<string, string>;
+  logoById: Map<string, string | null>;
+  idByName: Map<string, string>;
+}> {
   const companies = await getAllCompanies();
-  return new Map(companies.map((row) => [row.id, row.companyName] as const));
+  return {
+    nameById: new Map(companies.map((row) => [row.id, row.companyName] as const)),
+    logoById: new Map(companies.map((row) => [row.id, row.companyLogo] as const)),
+    idByName: new Map(
+      companies.map(
+        (row) => [row.companyName.trim().toLowerCase(), row.id] as const,
+      ),
+    ),
+  };
 }
 
 async function permissionNameLookupMap(): Promise<Map<string, string>> {
@@ -162,18 +186,20 @@ export async function getWorkforceById(
     return null;
   }
 
-  const [companyNameById, permissionNameById, departmentNameById] =
+  const [companies, permissionNameById, departmentNameById] =
     await Promise.all([
-      companyNameLookupMap(),
+      companyLookupMaps(),
       permissionNameLookupMap(),
       departmentNameLookupMap(),
     ]);
   return mapWorkforceItem(
     item.id,
     item.fields,
-    companyNameById,
+    companies.nameById,
     permissionNameById,
     departmentNameById,
+    companies.logoById,
+    companies.idByName,
   );
 }
 
@@ -188,6 +214,14 @@ export const getWorkforceByCompanyName = cache(
       ]);
     const companyNameById = new Map(
       companies.map((row) => [row.id, row.companyName] as const),
+    );
+    const companyLogoById = new Map(
+      companies.map((row) => [row.id, row.companyLogo] as const),
+    );
+    const companyIdByName = new Map(
+      companies.map(
+        (row) => [row.companyName.trim().toLowerCase(), row.id] as const,
+      ),
     );
     const company = companies.find(
       (row) =>
@@ -211,6 +245,8 @@ export const getWorkforceByCompanyName = cache(
           companyNameById,
           permissionNameById,
           departmentNameById,
+          companyLogoById,
+          companyIdByName,
         ),
       )
       .filter((row): row is WorkforceCandidate => row !== null)

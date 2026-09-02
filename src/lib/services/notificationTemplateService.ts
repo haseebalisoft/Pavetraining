@@ -134,6 +134,13 @@ export function adminAlertEmailTemplate(input: {
   return { subject, text, html };
 }
 
+/**
+ * Portal invitation email — used for User / Customer / Training Manager /
+ * Supervisor / Candidate invites. Client-approved rule: every invitation MUST
+ * include Company and Role on their own lines so the recipient knows exactly
+ * which company they are being granted access to and in what capacity.
+ * Generic invites without a Company are rejected by `sendPortalInviteNotification`.
+ */
 export function portalInviteEmailTemplate(input: {
   displayName?: string | null;
   companyName?: string | null;
@@ -143,36 +150,40 @@ export function portalInviteEmailTemplate(input: {
   const portalUrl = settings.portalUrl?.replace(/\/$/, "") || null;
   const loginUrl = portalUrl ? `${portalUrl}/login` : null;
   const who = input.displayName?.trim() || "there";
-  const company = input.companyName?.trim() || null;
-  const role = input.roleLabel?.trim() || null;
+  // Fallback labels only appear if a call site slipped past the send-time
+  // guard — we still render the field so the recipient can see the drift.
+  const company = input.companyName?.trim() || "— not set —";
+  const role = input.roleLabel?.trim() || "— not set —";
 
   const subject = "You're invited to the PAVE Training Portal";
   const text = [
     `Hi ${who},`,
     "",
     "You have been invited to the PAVE Training Portal.",
-    company ? `Company: ${company}` : null,
-    role ? `Role: ${role}` : null,
+    "",
+    "Company:",
+    company,
+    "",
+    "Role:",
+    role,
     "",
     loginUrl
       ? `Sign in here:\n${loginUrl}`
       : "Please sign in using the portal link provided by your training provider.",
     "",
-    "Use your work email with Microsoft sign-in. If your organisation uses multi-factor authentication, you will be prompted as usual.",
-  ]
-    .filter((line): line is string => line !== null)
-    .join("\n");
+    "Use your work email with Microsoft sign-in, or request a one-time code from the login screen. If your organisation uses multi-factor authentication, you will be prompted as usual.",
+  ].join("\n");
 
   const html = `${emailLogoHtml()}<p>Hi ${escapeHtml(who)},</p>
 <p>You have been invited to the <strong>PAVE Training Portal</strong>.</p>
-${company ? `<p>Company: <strong>${escapeHtml(company)}</strong></p>` : ""}
-${role ? `<p>Role: <strong>${escapeHtml(role)}</strong></p>` : ""}
+<p><strong>Company:</strong><br/>${escapeHtml(company)}</p>
+<p><strong>Role:</strong><br/>${escapeHtml(role)}</p>
 ${
   loginUrl
     ? `<p><a href="${escapeHtml(loginUrl)}">Sign in to the portal</a></p>`
     : `<p>Please sign in using the portal link provided by your training provider.</p>`
 }
-<p>Use your work email with Microsoft sign-in. If your organisation uses multi-factor authentication, you will be prompted as usual.</p>`;
+<p>Use your work email with Microsoft sign-in, or request a one-time code from the login screen. If your organisation uses multi-factor authentication, you will be prompted as usual.</p>`;
 
   return { subject, text, html };
 }

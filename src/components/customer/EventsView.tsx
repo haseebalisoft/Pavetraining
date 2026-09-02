@@ -1,16 +1,20 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   CalendarGrid,
   type CalendarGridEvent,
   type CalendarView,
 } from "@/components/calendar/CalendarGrid";
+import { CustomerEventDetailPanel } from "@/components/customer/CustomerEventDetailPanel";
 import { CustomerPageHeader } from "@/components/customer/CustomerPageHeader";
 import { formatDate, formatTime } from "@/lib/utils/formatDate";
 import { formatEventDuration } from "@/lib/utils/eventDuration";
-import type { CustomerEventRecord } from "@/types/models";
+import type {
+  CustomerDocumentRecord,
+  CustomerEventRecord,
+} from "@/types/models";
 
 import styles from "./customer.module.css";
 import sectionStyles from "./portalSections.module.css";
@@ -18,6 +22,8 @@ import sectionStyles from "./portalSections.module.css";
 interface Props {
   companyName: string;
   records: CustomerEventRecord[];
+  documents?: CustomerDocumentRecord[];
+  initialEventId?: string | null;
 }
 
 type EventsViewMode = "list" | CalendarView;
@@ -29,11 +35,24 @@ function formatTimeRange(row: CustomerEventRecord): string {
   return start ?? end ?? "Time TBC";
 }
 
-export function EventsView({ companyName, records }: Props) {
+export function EventsView({
+  companyName,
+  records,
+  documents = [],
+  initialEventId = null,
+}: Props) {
   const [search, setSearch] = useState("");
-  const [view, setView] = useState<EventsViewMode>("month");
+  const [view, setView] = useState<EventsViewMode>("list");
   const [cursor, setCursor] = useState(() => new Date());
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(
+    initialEventId,
+  );
+
+  useEffect(() => {
+    if (initialEventId) {
+      setSelectedId(initialEventId);
+    }
+  }, [initialEventId]);
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -60,42 +79,13 @@ export function EventsView({ companyName, records }: Props) {
     [filtered],
   );
 
-  const selected = filtered.find((row) => row.id === selectedId) ?? null;
+  const selected =
+    records.find((row) => String(row.id) === String(selectedId ?? "")) ??
+    filtered.find((row) => String(row.id) === String(selectedId ?? "")) ??
+    null;
 
-  function renderEventCard(row: CustomerEventRecord) {
-    return (
-      <article key={row.id} className={sectionStyles.card}>
-        <h2>{row.title}</h2>
-        <dl className={styles.eventMetaList}>
-          <div>
-            <dt>Date</dt>
-            <dd>{row.eventDate ? formatDate(row.eventDate) : "Date TBC"}</dd>
-          </div>
-          <div>
-            <dt>Time</dt>
-            <dd>{formatTimeRange(row)}</dd>
-          </div>
-          <div>
-            <dt>Duration</dt>
-            <dd>
-              {formatEventDuration(row.eventDate, row.endDate) ??
-                "Duration not set"}
-            </dd>
-          </div>
-          <div>
-            <dt>Training address</dt>
-            <dd>{row.trainingAddress?.trim() || "—"}</dd>
-          </div>
-          <div>
-            <dt>Location</dt>
-            <dd>{row.location?.trim() || "—"}</dd>
-          </div>
-        </dl>
-        <p className={sectionStyles.cardBody}>
-          {row.description?.trim() || "No description provided."}
-        </p>
-      </article>
-    );
+  function openEvent(id: string) {
+    setSelectedId(String(id));
   }
 
   return (
@@ -106,7 +96,7 @@ export function EventsView({ companyName, records }: Props) {
           { label: "Events" },
         ]}
         title="Events"
-        subtitle="Your company’s customer-visible training events."
+        subtitle="Your company’s customer-visible training events. Click an event to open its details."
       />
 
       <p className={styles.companyMeta}>
@@ -143,7 +133,8 @@ export function EventsView({ companyName, records }: Props) {
       </div>
 
       <p className={styles.resultCount}>
-        {filtered.length} of {records.length} event{records.length === 1 ? "" : "s"}
+        {filtered.length} of {records.length} event
+        {records.length === 1 ? "" : "s"}
       </p>
 
       {filtered.length === 0 ? (
@@ -157,26 +148,60 @@ export function EventsView({ companyName, records }: Props) {
         </div>
       ) : view === "list" ? (
         <section className={styles.cardGrid} aria-label="Training events">
-          {filtered.map(renderEventCard)}
+          {filtered.map((row) => (
+            <button
+              key={row.id}
+              type="button"
+              className={`${sectionStyles.card} ${styles.eventListCard}`}
+              onClick={() => openEvent(row.id)}
+            >
+              <h2>{row.title}</h2>
+              <dl className={styles.eventMetaList}>
+                <div>
+                  <dt>Date</dt>
+                  <dd>
+                    {row.eventDate ? formatDate(row.eventDate) : "Date TBC"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Time</dt>
+                  <dd>{formatTimeRange(row)}</dd>
+                </div>
+                <div>
+                  <dt>Duration</dt>
+                  <dd>
+                    {formatEventDuration(row.eventDate, row.endDate) ??
+                      "Duration not set"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Location</dt>
+                  <dd>
+                    {row.location?.trim() ||
+                      row.trainingAddress?.trim() ||
+                      "—"}
+                  </dd>
+                </div>
+              </dl>
+              <span className={styles.eventOpenHint}>View details →</span>
+            </button>
+          ))}
         </section>
       ) : (
-        <>
-          <CalendarGrid
-            events={calendarEvents}
-            view={view}
-            cursor={cursor}
-            onCursorChange={setCursor}
-            onEventClick={(event) => setSelectedId(event.id)}
-          />
-          <div className={styles.eventCalendarSelected}>
-            {selected ? (
-              renderEventCard(selected)
-            ) : (
-              <p className={styles.muted}>Select an event to view its details.</p>
-            )}
-          </div>
-        </>
+        <CalendarGrid
+          events={calendarEvents}
+          view={view}
+          cursor={cursor}
+          onCursorChange={setCursor}
+          onEventClick={(event) => openEvent(event.id)}
+        />
       )}
+
+      <CustomerEventDetailPanel
+        event={selected}
+        documents={documents}
+        onClose={() => setSelectedId(null)}
+      />
     </div>
   );
 }

@@ -79,6 +79,7 @@ const IN_HOUSE_COLUMNS: BulkImportColumn[] = [
     required: true,
   },
   { key: "certificateCategory", label: "Certificate Category" },
+  { key: "certificationNumber", label: "Certification Number" },
   { key: "startDate", label: "Start Date" },
   { key: "expiry", label: "Expiry" },
   { key: "outcome", label: "Outcome" },

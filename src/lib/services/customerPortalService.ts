@@ -17,6 +17,7 @@ import {
   asString,
   buildFieldLookupIdEqualsFilter,
   buildSchemaFieldEqualsFilter,
+  extractLookupId,
   getListItemByKey,
   getListItemFileContent,
   getListItemsByKey,
@@ -46,39 +47,43 @@ async function resolveCompanyName(companyId: string): Promise<string> {
   return company.companyName;
 }
 
-function companyAndVisibleFilter(
+function companyOnlyFilter(
   listKey: "nvqRegister" | "customerDocuments" | "events" | "offersPromotions",
   companyFieldKey: string,
   companyName: string,
   companyId?: string,
 ): string {
   const id = Number(companyId);
-  let companyFilter: string;
   if (listKey === "nvqRegister" && Number.isFinite(id)) {
     // Admin writes NVQCompanyLookupId — prefer that over display-name text.
-    companyFilter = buildFieldLookupIdEqualsFilter("NVQCompanyLookupId", id);
-  } else {
-    companyFilter = buildSchemaFieldEqualsFilter(
-      listKey,
-      companyFieldKey,
-      companyName,
-    );
+    return buildFieldLookupIdEqualsFilter("NVQCompanyLookupId", id);
   }
-  const fields = getSharePointFields(listKey) as Record<string, string>;
-  const visibleField = fields.customerVisible;
-  return `${companyFilter} and fields/${visibleField} eq true`;
+  return buildSchemaFieldEqualsFilter(listKey, companyFieldKey, companyName);
+}
+
+function isCustomerVisibleField(
+  fields: SharePointFields,
+  internalName: string,
+): boolean {
+  return (
+    asBoolean(fields[internalName]) ||
+    asBoolean(fields.CustomerVisible) ||
+    asBoolean(fields.Customer_x0020_Visible)
+  );
 }
 
 /**
  * Prefer CompanyLookupId (indexed) over Company display-name text filters.
- * FSObjType is filtered in memory — including it in OData often makes Graph hang.
+ * Do NOT AND CustomerVisible into this Graph filter — the live tenant
+ * returns 0 rows for that combined query even when both fields match
+ * (same issue as Events). Visibility is enforced in mapDocument.
  */
 function customerDocumentsByCompanyIdFilter(companyId: string): string {
   const id = Number(companyId);
-  const companyClause = Number.isFinite(id)
-    ? `fields/${documentFields.companyLookupId} eq ${id}`
-    : buildSchemaFieldEqualsFilter("customerDocuments", "company", companyId);
-  return `${companyClause} and fields/${documentFields.customerVisible} eq true`;
+  if (Number.isFinite(id)) {
+    return `fields/${documentFields.companyLookupId} eq ${id}`;
+  }
+  return buildSchemaFieldEqualsFilter("customerDocuments", "company", companyId);
 }
 
 function matchesCompany(
@@ -142,7 +147,7 @@ function nvqStatus(completedDate: string | null): CustomerNvqStatus {
 }
 
 function mapNvq(id: string, fields: SharePointFields): CustomerNvqRecord | null {
-  if (!asBoolean(fields[nvqFields.customerVisible])) {
+  if (!isCustomerVisibleField(fields, nvqFields.customerVisible)) {
     return null;
   }
 
@@ -183,7 +188,7 @@ function mapDocument(
     return null;
   }
 
-  if (!asBoolean(fields[documentFields.customerVisible])) {
+  if (!isCustomerVisibleField(fields, documentFields.customerVisible)) {
     return null;
   }
 
@@ -207,6 +212,9 @@ function mapDocument(
     name,
     documentType: asNullableString(fields[documentFields.documentType]),
     candidate: candidateName,
+    candidateId:
+      asString(fields[documentFields.candidateLookupId]) ||
+      extractCandidateLookupId(fields, documentFields.candidate),
     uploadedDate,
     canDownload,
     viewPath: `/api/customer/documents/${id}/view`,
@@ -314,16 +322,31 @@ export async function getCustomerNvqRecords(
 ): Promise<CustomerNvqRecord[]> {
   const companyName = await resolveCompanyName(companyId);
   const items = await getListItemsByKey("nvqRegister", {
-    filter: companyAndVisibleFilter(
+    filter: companyOnlyFilter(
       "nvqRegister",
       "companyName",
       companyName,
       companyId,
     ),
     top: 5000,
-  });
+  }).catch(async () => getListItemsByKey("nvqRegister", { top: 5000 }));
 
   let rows = items
+    .filter((item) => {
+      const lookupId =
+        asString(item.fields.NVQCompanyLookupId) ||
+        extractLookupId(item.fields, nvqFields.nvqCompany);
+      if (
+        lookupId &&
+        String(lookupId).trim() === String(companyId).trim()
+      ) {
+        return true;
+      }
+      const name =
+        asLookupOrString(item.fields[nvqFields.nvqCompany]) ||
+        asLookupOrString(item.fields[nvqFields.companyName]);
+      return matchesCompany(name, companyName);
+    })
     .map((item) => mapNvq(item.id, item.fields))
     .filter((row): row is CustomerNvqRecord => row !== null);
 
@@ -347,10 +370,14 @@ export async function getCustomerDocumentRecords(
     context?.companyName?.trim() || (await resolveCompanyName(companyId));
 
   // Indexed CompanyLookupId filter — avoid slow Company text + FSObjType OData.
+  let usedCompanyLookupFilter = Number.isFinite(Number(companyId));
   const [items, nameCache, allowedIds] = await Promise.all([
     getListItemsByKey("customerDocuments", {
       filter: customerDocumentsByCompanyIdFilter(companyId),
-      top: 500,
+      top: 2000,
+    }).catch(async () => {
+      usedCompanyLookupFilter = false;
+      return getListItemsByKey("customerDocuments", { top: 5000 });
     }),
     getCompanyCandidateNameMap(companyName),
     context && !isCompanyWideScope(context.normalizedAccessScope)
@@ -367,12 +394,14 @@ export async function getCustomerDocumentRecords(
     }
 
     const company = asLookupOrString(item.fields[documentFields.company]);
-    const companyLookupId = asString(
-      item.fields[documentFields.companyLookupId],
-    );
+    const companyLookupId =
+      asString(item.fields[documentFields.companyLookupId]) ||
+      extractLookupId(item.fields, documentFields.company);
     const companyOk =
-      companyLookupId === companyId ||
-      matchesCompany(company, companyName);
+      (companyLookupId != null &&
+        String(companyLookupId).trim() === String(companyId).trim()) ||
+      matchesCompany(company, companyName) ||
+      (usedCompanyLookupFilter && !companyLookupId && !company);
     if (!companyOk) {
       continue;
     }
@@ -447,6 +476,9 @@ export async function getCustomerDocumentForAccess(
   }
 
   const company = asLookupOrString(item.fields[documentFields.company]);
+  const companyLookupId =
+    asString(item.fields[documentFields.companyLookupId]) ||
+    extractLookupId(item.fields, documentFields.company);
   const name =
     asString(item.fields[documentFields.fileLeafRef]) ??
     asString(item.fields[documentFields.title]) ??
@@ -469,8 +501,14 @@ export async function getCustomerDocumentForAccess(
   return {
     id: item.id,
     name,
-    companyMatches: matchesCompany(company, companyName),
-    customerVisible: asBoolean(item.fields[documentFields.customerVisible]),
+    companyMatches:
+      (companyLookupId != null &&
+        String(companyLookupId).trim() === String(companyId).trim()) ||
+      matchesCompany(company, companyName),
+    customerVisible: isCustomerVisibleField(
+      item.fields,
+      documentFields.customerVisible,
+    ),
     isFile: isSharePointFile(item.fields),
     candidateId,
     scopeAllowed,

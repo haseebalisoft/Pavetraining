@@ -7,6 +7,7 @@ import {
   triggerMatrixSyncAfterRegister,
   triggerMatrixSyncAfterRegisterDelete,
 } from "@/lib/services/matrixSyncHook";
+import { notifyTrainingRecordChange } from "@/lib/services/trainingRecordNotificationService";
 
 export const dynamic = "force-dynamic";
 
@@ -29,6 +30,12 @@ export async function PATCH(
         record,
         adminContext.loggedInEmail,
       );
+      await notifyTrainingRecordChange({
+        register: "nrswaRegister",
+        action: "updated",
+        record,
+        actorEmail: adminContext.loggedInEmail,
+      });
       return { record, matrixSync, choiceWarnings };
     },
     { errorMessage: "Failed to update Streetworks record" },

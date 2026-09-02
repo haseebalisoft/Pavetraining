@@ -1,7 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
 
+import { ImageUploadButton } from "@/components/admin/ImageUploadButton";
+import { LiveTrainingRefresh } from "@/components/training/LiveTrainingRefresh";
 import { Breadcrumbs } from "@/components/ui/Breadcrumbs";
 import { ExpiryDateBadge } from "@/components/ui/ExpiryDateBadge";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -16,6 +20,8 @@ import {
   buildCandidateCategoryRows,
   type CandidateCategoryRow,
 } from "@/lib/training/candidateCategories";
+import { expandEusrRecordsForDisplay } from "@/lib/training/eusrOptions";
+import { getExpiryStatus } from "@/lib/training/expiryFilters";
 import { formatDate } from "@/lib/utils/formatDate";
 import type {
   CustomerDocumentRecord,
@@ -29,6 +35,55 @@ import type {
 } from "@/types/models";
 
 import styles from "./customer.module.css";
+import trainingStyles from "./trainingRecords.module.css";
+
+/**
+ * Simple Active / Expired / Expiring soon badge for the per-register profile
+ * tables. Never hides a row — an expired training record still appears with
+ * a red "Expired" badge so admins and customers can see the full history.
+ * Falls back to "Active" when there is a training date but no expiry (e.g.
+ * a certificate with no formal expiry period), and to "—" only when the
+ * record has no useful data at all.
+ */
+function formatTrainingStatusCell(
+  expiry: string | null | undefined,
+  trainingDate: string | null | undefined,
+) {
+  const status = getExpiryStatus(expiry);
+  if (status.status === "expired") {
+    return <StatusBadge label="Expired" tone="danger" />;
+  }
+  if (status.status === "urgent" || status.status === "upcoming") {
+    return (
+      <StatusBadge
+        label="Expiring soon"
+        tone={status.status === "urgent" ? "danger" : "warn"}
+      />
+    );
+  }
+  if (status.status === "valid") {
+    return <StatusBadge label="Active" tone="ok" />;
+  }
+  // status === "missing" — no expiry date. If a training date exists the
+  // record is still an "Active" historical training. Otherwise it's blank.
+  if (trainingDate?.trim()) {
+    return <StatusBadge label="Active" tone="ok" />;
+  }
+  return <span className={styles.muted}>—</span>;
+}
+
+/**
+ * Shared empty-state card so NVQ / Documents / register sections all show the
+ * same "No records found" panel instead of a plain paragraph.
+ */
+function EmptyRecordsCard({ message }: { message: string }) {
+  return (
+    <div className={trainingStyles.empty}>
+      <h2>No records found</h2>
+      <p>{message}</p>
+    </div>
+  );
+}
 
 interface Props {
   candidate: WorkforceCandidate;
@@ -97,9 +152,24 @@ const nporsColumns: TrainingRecordColumn<CustomerNporsRecord>[] = [
     render: (row) => formatTextCell(row.nporsNumber),
   },
   {
+    key: "nporsCategory",
+    header: "NPORS Category",
+    render: (row) => formatTextCell(row.nporsCategory),
+  },
+  {
     key: "trainingDate",
     header: "Training Date",
     render: (row) => formatDate(row.trainingDate),
+  },
+  {
+    key: "expiry",
+    header: "Expiry Date",
+    render: (row) => formatExpiryCell(row.expiry),
+  },
+  {
+    key: "status",
+    header: "Status",
+    render: (row) => formatTrainingStatusCell(row.expiry, row.trainingDate),
   },
   {
     key: "trainingAddress",
@@ -110,11 +180,6 @@ const nporsColumns: TrainingRecordColumn<CustomerNporsRecord>[] = [
     key: "noviceOrEwt",
     header: "Novice or EWT",
     render: (row) => formatTextCell(row.noviceOrEwt),
-  },
-  {
-    key: "nporsCategory",
-    header: "NPORS Category",
-    render: (row) => formatTextCell(row.nporsCategory),
   },
   {
     key: "outcome",
@@ -145,6 +210,16 @@ const eusrColumns: TrainingRecordColumn<CustomerEusrRecord>[] = [
     render: (row) => formatDate(row.trainingDate),
   },
   {
+    key: "expiry",
+    header: "Expiry Date",
+    render: (row) => formatExpiryCell(row.expiry),
+  },
+  {
+    key: "status",
+    header: "Status",
+    render: (row) => formatTrainingStatusCell(row.expiry, row.trainingDate),
+  },
+  {
     key: "trainingAddress",
     header: "Training Address",
     render: (row) => formatTextCell(row.trainingAddress),
@@ -163,6 +238,16 @@ const streetworksColumns: TrainingRecordColumn<CustomerStreetworksRecord>[] = [
     render: (row) => formatTextCell(row.swqrNumber),
   },
   {
+    key: "course",
+    header: "Course",
+    render: (row) => formatTextCell(row.course),
+  },
+  {
+    key: "streetworksCategory",
+    header: "Streetworks Category",
+    render: (row) => formatTextCell(row.streetworksCategory),
+  },
+  {
     key: "trainingDate",
     header: "Training Date",
     render: (row) => {
@@ -174,19 +259,19 @@ const streetworksColumns: TrainingRecordColumn<CustomerStreetworksRecord>[] = [
     },
   },
   {
+    key: "expiry",
+    header: "Expiry Date",
+    render: (row) => formatExpiryCell(row.expiry),
+  },
+  {
+    key: "status",
+    header: "Status",
+    render: (row) => formatTrainingStatusCell(row.expiry, row.trainingDate),
+  },
+  {
     key: "trainingAddress",
     header: "Training Address",
     render: (row) => formatTextCell(row.trainingAddress),
-  },
-  {
-    key: "course",
-    header: "Course",
-    render: (row) => formatTextCell(row.course),
-  },
-  {
-    key: "streetworksCategory",
-    header: "Streetworks Category",
-    render: (row) => formatTextCell(row.streetworksCategory),
   },
   {
     key: "outcome",
@@ -207,14 +292,19 @@ const inHouseColumns: TrainingRecordColumn<CustomerInHouseRecord>[] = [
     render: (row) => formatDate(row.trainingDate),
   },
   {
-    key: "trainingAddress",
-    header: "Training Address",
-    render: (row) => formatTextCell(row.trainingAddress),
-  },
-  {
     key: "expiry",
     header: "Expiry Date",
     render: (row) => formatExpiryCell(row.expiry),
+  },
+  {
+    key: "status",
+    header: "Status",
+    render: (row) => formatTrainingStatusCell(row.expiry, row.trainingDate),
+  },
+  {
+    key: "trainingAddress",
+    header: "Training Address",
+    render: (row) => formatTextCell(row.trainingAddress),
   },
   {
     key: "outcome",
@@ -244,8 +334,9 @@ function CandidateCategoriesSection({ rows }: { rows: CandidateCategoryRow[] }) 
     >
       <h2 className={styles.profileSectionTitle}>All Training Categories</h2>
       <p className={styles.profileSectionMeta}>
-        Every category held across NPORS, EUSR, Streetworks / NRSWA, In-House,
-        NVQ and the Training Matrix — expired first, then expiring soon.
+        Every category with a training or expiry date — including expired —
+        from NPORS, EUSR, Streetworks / NRSWA, In-House, NVQ and the Training
+        Matrix. Categories with both dates blank are hidden.
       </p>
       {rows.length === 0 ? (
         <p className={styles.muted}>No training categories recorded for this candidate.</p>
@@ -304,7 +395,7 @@ function ProfileNvqSection({
         Active {active.length} · Completed {completed.length}
       </p>
       {records.length === 0 ? (
-        <p className={styles.muted}>{emptyLabel}</p>
+        <EmptyRecordsCard message={emptyLabel} />
       ) : (
         <div className={styles.tableWrap}>
           <table className={styles.dataTable}>
@@ -387,7 +478,7 @@ function ProfileDocumentsSection({
     >
       <h2 className={styles.profileSectionTitle}>Documents</h2>
       {records.length === 0 ? (
-        <p className={styles.muted}>{emptyLabel}</p>
+        <EmptyRecordsCard message={emptyLabel} />
       ) : (
         <div className={styles.tableWrap}>
           <table className={styles.dataTable}>
@@ -456,6 +547,8 @@ export function CandidateProfileView({
   variant = "customer",
 }: Props) {
   const isAdmin = variant === "admin";
+  const router = useRouter();
+  const [photoRevision, setPhotoRevision] = useState(0);
   const backHref = safeReturnHref(
     matrixReturnHref ?? (isAdmin ? "/admin/workforce" : "/customer"),
     variant,
@@ -469,9 +562,11 @@ export function CandidateProfileView({
     nvqRecords,
     matrixRow,
   });
+  const eusrDisplayRecords = expandEusrRecordsForDisplay(eusrRecords);
 
   return (
     <div>
+      <LiveTrainingRefresh />
       <header className={styles.pageHeader}>
         <Breadcrumbs
           items={
@@ -489,24 +584,40 @@ export function CandidateProfileView({
           }
         />
         <div className={styles.profileHero}>
-          {candidate.photoUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              className={styles.candidatePhoto}
-              src={candidate.photoUrl}
-              alt={candidate.candidateName}
-            />
-          ) : (
-            <div className={styles.candidatePhotoPlaceholder} aria-hidden>
-              {candidate.candidateName
-                .split(/\s+/)
-                .filter(Boolean)
-                .slice(0, 2)
-                .map((part) => part[0]?.toUpperCase() ?? "")
-                .join("")}
-            </div>
-          )}
-          <div>
+          <div className={styles.profileHeroPhoto}>
+            {candidate.photoUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                className={styles.candidatePhoto}
+                src={
+                  photoRevision
+                    ? `${candidate.photoUrl}${candidate.photoUrl.includes("?") ? "&" : "?"}v=${photoRevision}`
+                    : candidate.photoUrl
+                }
+                alt={candidate.candidateName}
+              />
+            ) : (
+              <div className={styles.candidatePhotoPlaceholder} aria-hidden>
+                {candidate.candidateName
+                  .split(/\s+/)
+                  .filter(Boolean)
+                  .slice(0, 2)
+                  .map((part) => part[0]?.toUpperCase() ?? "")
+                  .join("")}
+              </div>
+            )}
+            {isAdmin ? (
+              <ImageUploadButton
+                uploadUrl={`/api/admin/workforce/${candidate.id}/photo`}
+                label={candidate.photoUrl ? "Change photo" : "Upload photo"}
+                onUploaded={async () => {
+                  setPhotoRevision(Date.now());
+                  router.refresh();
+                }}
+              />
+            ) : null}
+          </div>
+          <div className={styles.profileHeroCopy}>
             <p className={styles.eyebrow}>
               {isAdmin ? "Admin Candidate Profile" : "Candidate Profile"}
             </p>
@@ -530,6 +641,18 @@ export function CandidateProfileView({
                 ? "Full training history for audit — includes records hidden from customers."
                 : "Training summary and customer-visible records for this candidate."}
             </p>
+          </div>
+          <div className={styles.profileCompanyMark}>
+            {candidate.companyLogo ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                className={styles.profileCompanyLogo}
+                src={candidate.companyLogo}
+                alt={`${companyName} logo`}
+              />
+            ) : (
+              <p className={styles.profileCompanyNameFallback}>{companyName}</p>
+            )}
           </div>
         </div>
       </header>
@@ -565,10 +688,6 @@ export function CandidateProfileView({
         <Item label="CSCS number" value={candidate.cscsNumber} />
         <Item label="SWQR number" value={candidate.swqrNumber} />
         <Item label="EUSR number" value={candidate.eusrNumber} />
-        <Item
-          label="In-House certification number"
-          value={candidate.inHouseCertificationNumber}
-        />
       </section>
 
       <section
@@ -595,10 +714,6 @@ export function CandidateProfileView({
         <ExpiryItem
           label="NPORS expiry"
           date={matrixRow?.nporsExpiry ?? null}
-        />
-        <ExpiryItem
-          label="Next expiry"
-          date={matrixRow?.nextExpiryDate ?? null}
         />
       </section>
 
@@ -634,7 +749,7 @@ export function CandidateProfileView({
           title="EUSR Training"
           description="EUSR registrations for this candidate."
           companyName={companyName}
-          records={eusrRecords}
+          records={eusrDisplayRecords}
           columns={eusrColumns}
           embedded
           getSearchText={(row) =>

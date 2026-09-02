@@ -1,4 +1,6 @@
 /** Auto-aligned to client Excel templates (Company list.xlsx + Workforce list.xlsx + Training matrix example.xlsx). */
+import { EUSR_MATRIX_CATEGORY_COLUMNS } from "@/lib/training/eusrOptions";
+
 export const CLIENT_COMPANY_HEADERS = [
   "Company Number",
   "Company Name",
@@ -777,8 +779,9 @@ export const CLIENT_MATRIX_CATEGORY_COLUMNS: MatrixCategoryColumn[] = [
   }
 ];
 
-/** Exact column order from Training matrix example.xlsx (for admin table + import). */
+/** Exact column order from Training matrix example.xlsx, then per-EUSR-category dates. */
 export const CLIENT_MATRIX_DISPLAY_HEADERS: string[] = [
   ...CLIENT_MATRIX_META_HEADERS,
+  ...EUSR_MATRIX_CATEGORY_COLUMNS.map((column) => column.header),
   ...CLIENT_MATRIX_CATEGORY_COLUMNS.map((column) => column.header),
 ];

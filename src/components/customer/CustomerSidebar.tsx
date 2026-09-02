@@ -9,8 +9,10 @@ import { SlideOverPanel } from "@/components/ui/SlideOverPanel";
 import styles from "./customer.module.css";
 
 const NAV_ITEMS = [
-  { href: "/customer", label: "Training Matrix", exact: true },
+  // Dashboard is the customer landing page — first in the sidebar so the
+  // ordering matches the login redirect and the client's spec.
   { href: "/customer/dashboard", label: "Dashboard" },
+  { href: "/customer/training-matrix", label: "Training Matrix" },
   { href: "/customer/courses", label: "PAVE Training Courses" },
   { href: "/customer/candidates", label: "Candidates / Workforce" },
   { href: "/customer/training-records", label: "Training Records" },

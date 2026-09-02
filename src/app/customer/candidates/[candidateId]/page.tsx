@@ -42,11 +42,17 @@ function scheduleCandidateViewLog(input: {
 }
 
 function matchesCandidate(
-  row: { candidateName?: string | null; workforceId?: string | null; candidate?: string | null },
+  row: {
+    candidateName?: string | null;
+    workforceId?: string | null;
+    candidate?: string | null;
+    candidateId?: string | null;
+  },
   candidateId: string,
   candidateName: string,
 ): boolean {
   if (row.workforceId && row.workforceId === candidateId) return true;
+  if (row.candidateId && row.candidateId === candidateId) return true;
   const key = nameKey(candidateName);
   if (key && nameKey(row.candidateName) === key) return true;
   if (key && nameKey(row.candidate) === key) return true;

@@ -12,6 +12,7 @@ import {
 import styles from "@/components/admin/admin.module.css";
 import { useAdminToast } from "@/components/admin/AdminToast";
 import { LinkMatrixToWorkforceModal } from "@/components/admin/LinkMatrixToWorkforceModal";
+import { LiveTrainingRefresh } from "@/components/training/LiveTrainingRefresh";
 import { ExpiryDateBadge } from "@/components/ui/ExpiryDateBadge";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { readPublicApiError } from "@/lib/errors/publicMessages";
@@ -24,6 +25,12 @@ import {
   matchesAnyExpiryFilter,
   type ExpiryFilter,
 } from "@/lib/training/expiryFilters";
+import {
+  MATRIX_EDITOR_DATE_HEADERS,
+  isMatrixExpiryColumnKey,
+  matrixEditorSectionTitle,
+  matrixTrainingDateFieldName,
+} from "@/lib/training/matrixEditorFields";
 import { isManualOverrideHeader } from "@/lib/training/matrixManualOverrides";
 import {
   matrixStatusLabel,
@@ -74,9 +81,15 @@ function matrixCell(
     );
   }
   const fromColumns = row.columnValues?.[header];
+  const trainingDate = row.categoryTrainingDates?.[header]?.trim() || null;
   const manual = isManualOverrideHeader(header, row.manualOverrideHeaders);
   return (
     <span className={styles.matrixExpiryCell}>
+      {trainingDate ? (
+        <span className={styles.matrixTrainingDate}>
+          Trained {formatDate(trainingDate)}
+        </span>
+      ) : null}
       <ExpiryDateBadge date={fromColumns} fillCell />
       {manual ? (
         <span className={styles.matrixManualBadge} title="Manually set — register sync will not overwrite">
@@ -89,9 +102,49 @@ function matrixCell(
 
 function rowExpiryDates(row: AdminMatrixRecord): Array<string | null> {
   const values = Object.entries(row.columnValues ?? {})
-    .filter(([key]) => key !== "Name" && key !== "DOB")
+    .filter(([key]) => isMatrixExpiryColumnKey(key))
     .map(([, value]) => value);
   return [row.nextExpiryDate, ...values];
+}
+
+const NAMED_EXPIRY_BY_HEADER: Record<string, keyof AdminMatrixRecord> = {
+  "CSCS Expiry": "cscsExpiry",
+  "SSSTS Expiry": "ssstsExpiry",
+  "SMSTS Expiry": "smstsExpiry",
+  "NRSWA Expiry": "nrswaExpiry",
+  "EUSR Expiry": "eusrExpiry",
+  "Face ift": "faceFitExpiry",
+  "N001 - Ind FLT": "n001Expiry",
+  "N003 - Reach Lift Truck": "n003Expiry",
+  "N004 - Lorry Mounted Lift Truck": "n004Expiry",
+  "N010 - Telescopic Handler": "n010Expiry",
+  "N020 - Tiltrotator System": "n020Expiry",
+  "N021 - Suction Excavator": "n021Expiry",
+  "N027 - Excavation Marshal - Banksperson": "n027Expiry",
+  "N100 - Exc Crane": "n100Expiry",
+  "N031 - Asbestos Awareness": "n031Expiry",
+};
+
+function expiryFromRow(row: AdminMatrixRecord, header: string): string | null {
+  const fromColumns = row.columnValues?.[header];
+  if (fromColumns?.trim()) return fromColumns;
+  const alias = NAMED_EXPIRY_BY_HEADER[header];
+  if (!alias) return null;
+  const named = row[alias];
+  return typeof named === "string" && named.trim() ? named : null;
+}
+
+/** Copy nested columnValues / training dates onto the row so the drawer form can bind them. */
+function flattenMatrixEditorRow(row: AdminMatrixRecord): AdminMatrixRecord {
+  const extra: Record<string, string | null> = {};
+  for (const header of MATRIX_EDITOR_DATE_HEADERS) {
+    extra[header] = expiryFromRow(row, header);
+    extra[matrixTrainingDateFieldName(header)] =
+      row.categoryTrainingDates?.[header] ??
+      row.columnValues?.[`${header} Training Date`] ??
+      null;
+  }
+  return { ...row, ...extra };
 }
 
 /** Name first (sticky), then company, then template headers / status. */
@@ -182,96 +235,23 @@ const fields: AdminFieldConfig[] = [
     type: "date",
     section: "Candidate",
   },
-  {
-    name: "cscsExpiry",
-    label: "CSCS Expiry",
-    type: "date",
-    section: "Card expiries",
-  },
-  {
-    name: "nrswaExpiry",
-    label: "SWQR / NRSWA Expiry",
-    type: "date",
-    section: "Card expiries",
-  },
-  {
-    name: "eusrExpiry",
-    label: "EUSR Expiry",
-    type: "date",
-    section: "Card expiries",
-  },
-  {
-    name: "ssstsExpiry",
-    label: "SSSTS Expiry",
-    type: "date",
-    section: "Card expiries",
-  },
-  {
-    name: "smstsExpiry",
-    label: "SMSTS Expiry",
-    type: "date",
-    section: "Card expiries",
-  },
-  {
-    name: "faceFitExpiry",
-    label: "Face Fit Expiry",
-    type: "date",
-    section: "Card expiries",
-  },
-  {
-    name: "n001Expiry",
-    label: "N001 - Ind FLT",
-    type: "date",
-    section: "NPORS categories",
-  },
-  {
-    name: "n003Expiry",
-    label: "N003 - Reach Lift Truck",
-    type: "date",
-    section: "NPORS categories",
-  },
-  {
-    name: "n004Expiry",
-    label: "N004 - Lorry Mounted Lift Truck",
-    type: "date",
-    section: "NPORS categories",
-  },
-  {
-    name: "n010Expiry",
-    label: "N010 - Telescopic Handler",
-    type: "date",
-    section: "NPORS categories",
-  },
-  {
-    name: "n020Expiry",
-    label: "N020 - Tiltrotator System",
-    type: "date",
-    section: "NPORS categories",
-  },
-  {
-    name: "n021Expiry",
-    label: "N021 - Suction Excavator",
-    type: "date",
-    section: "NPORS categories",
-  },
-  {
-    name: "n027Expiry",
-    label: "N027 - Excavation Marshal - Banksperson",
-    type: "date",
-    section: "NPORS categories",
-  },
-  {
-    name: "n100Expiry",
-    label: "N100 - Exc Crane",
-    type: "date",
-    section: "NPORS categories",
-  },
-  {
-    name: "n031Expiry",
-    label: "N031 - Asbestos Awareness",
-    type: "date",
-    section: "In-house / other",
-  },
+  ...MATRIX_EDITOR_DATE_HEADERS.flatMap((header) => {
+    const section = matrixEditorSectionTitle(header);
+    return [
+      {
+        name: matrixTrainingDateFieldName(header),
+        label: "Training date",
+        type: "date" as const,
+        section,
+      },
+      {
+        name: header,
+        label: "Expiry date",
+        type: "date" as const,
+        section,
+      },
+    ];
+  }),
 ];
 
 type LinkFilter = "all" | "linked" | "needs-review" | "orphan";
@@ -471,6 +451,7 @@ export function AdminMatrixClient({
 
   return (
     <>
+      <LiveTrainingRefresh />
       <div className={styles.legendRow} aria-label="Expiry colour legend">
         {EXPIRY_STATUS_LEGEND.map((item) => (
           <StatusBadge
@@ -520,11 +501,11 @@ export function AdminMatrixClient({
 
       <AdminCrudPage<AdminMatrixRecord>
         title="Training Matrix"
-        description="Register sync (NPORS / EUSR / Streetworks / In-House Asbestos → N031) and direct admin edits both update this matrix. Cells marked Manual are not overwritten by register sync. Pass updates expiry when newer; Fail never extends."
+        description="Register sync (NPORS / EUSR / Streetworks / In-House Asbestos → N031) and direct admin edits both update this matrix. The editor lists every configured category with a training date and an expiry date. Cells marked Manual are not overwritten by register sync. Pass updates expiry when newer; Fail never extends."
         columns={columns}
         fields={fields}
         companies={companies}
-        initialRows={initialRows}
+        initialRows={initialRows.map(flattenMatrixEditorRow)}
         enableCompanyFilter
         getCompanyName={(row) => row.companyName}
         drawerWide
@@ -537,7 +518,9 @@ export function AdminMatrixClient({
         optimistic
         allowCreate={false}
         mapResponse={(payload) =>
-          ((payload as { records?: AdminMatrixRecord[] }).records ?? [])
+          ((payload as { records?: AdminMatrixRecord[] }).records ?? []).map(
+            flattenMatrixEditorRow,
+          )
         }
         rowFilter={(row) => matchesFilter(row, filter, linkFilter)}
         rowClassName={(row) => (row.needsReview ? styles.reviewRow : undefined)}

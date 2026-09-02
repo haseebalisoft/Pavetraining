@@ -33,11 +33,11 @@ const descriptions: Record<RegisterKind, string> = {
   npors:
     "Select company, then candidate — Workforce / NPORS numbers fill from Workforce. Pass updates the Training Matrix and profile.",
   eusr:
-    "Select company, then candidate — Workforce / EUSR numbers fill from Workforce. Pass updates the Training Matrix and profile.",
+    "Select company, then candidate — Workforce / EUSR numbers fill from Workforce. Each EUSR category can have its own training and expiry dates — add a separate record when those dates differ. Pass updates the Training Matrix and profile.",
   streetworks:
     "Select company, then candidate — Workforce / SWQR numbers fill from Workforce. Pass updates the Training Matrix and profile.",
   "in-house":
-    "Select company, then candidate — certification number fills from Workforce. Asbestos Awareness Pass syncs to N031 on the Matrix; other courses stay standalone.",
+    "Select company, then candidate. Certification number is optional — each internal course can have a different reference. Asbestos Awareness Pass syncs to N031 on the Matrix; other courses stay standalone.",
 };
 
 const workforceNumberField: AdminFieldConfig = {
@@ -101,9 +101,13 @@ function fieldsFor(
     },
     {
       name: "expiry",
-      label: "Expiry (5 years from training date if left blank)",
+      label:
+        kind === "npors" || kind === "eusr"
+          ? "Expiry (3 years from training date if left blank)"
+          : "Expiry (5 years from training date if left blank)",
       type: "date",
       section: "Outcome",
+      defaultExpiryYears: kind === "npors" || kind === "eusr" ? 3 : undefined,
     },
     {
       name: "assessorTrainer",
@@ -191,7 +195,7 @@ function fieldsFor(
       },
       {
         name: "eusrCategory",
-        label: "EUSR category",
+        label: "EUSR category (separate record if dates differ)",
         type: "multiselect",
         required: true,
         section: "Training",
@@ -267,11 +271,12 @@ function fieldsFor(
         section: "Outcome",
       },
       {
-      name: "expiry",
-      label: "Expiry (5 years from training date if left blank)",
-      type: "date",
-      section: "Outcome",
-    },
+        name: "expiry",
+        label: "Expiry (5 years from training date if left blank)",
+        type: "date",
+        section: "Outcome",
+        defaultExpiryYears: 5,
+      },
       {
         name: "assessorTrainer",
         label: "Assessor / trainer",
@@ -296,10 +301,10 @@ function fieldsFor(
     ...people,
     {
       name: "inHouseCertificationNumber",
-      label: "In-House certification number (from Workforce)",
+      label: "Certification number (optional)",
       type: "text",
-      readOnly: true,
       section: "Training",
+      placeholder: "Leave blank if this course has no reference",
     },
     {
       name: "certificateCategory",
@@ -374,6 +379,11 @@ function columnsFor(kind: RegisterKind): AdminColumn<AdminTrainingRecord>[] {
     });
   }
   if (kind === "in-house") {
+    base.push({
+      key: "certNumber",
+      header: "Certification number",
+      render: (row) => row.inHouseCertificationNumber ?? "—",
+    });
     base.push({
       key: "certCategory",
       header: "Course",

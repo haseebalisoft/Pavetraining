@@ -10,8 +10,12 @@ import {
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Inline preview. Kept on a /view URL (not /download) so browsers open PDFs
+ * and images instead of saving them.
+ */
 export async function GET(
-  request: Request,
+  _request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
   let email = "unknown";
@@ -35,37 +39,28 @@ export async function GET(
 
     await writeAuditLog({
       userEmail: email,
-      action: "DOWNLOAD",
+      action: "VIEW",
       entityName: "Customer Documents",
       itemId: id,
       success: true,
     });
 
-    const dispositionParam = new URL(request.url).searchParams.get(
-      "disposition",
-    );
-    const disposition =
-      dispositionParam === "inline" ? "inline" : "attachment";
-
     return fileResponse(
       file.content,
       file.fileName ?? "document",
       file.contentType,
-      disposition,
+      "inline",
     );
   } catch (error) {
     await writeAuditLog({
       userEmail: email,
-      action: "DOWNLOAD",
+      action: "VIEW",
       entityName: "Customer Documents",
       itemId: id || null,
       success: false,
       errorMessage: error instanceof Error ? error.message : "Unknown error",
     });
 
-    return handleApiError(
-      "GET /api/admin/documents/[id]/download",
-      error,
-    );
+    return handleApiError("GET /api/admin/documents/[id]/view", error);
   }
 }

@@ -223,6 +223,16 @@ export function AdminNotificationsClient() {
               <p>{settings.portalUrl ?? "—"}</p>
             </div>
           </div>
+          <p className={styles.helpText}>
+            Mail that reaches the recipient but sits in Junk is their filter,
+            not a send failure (those show as Failed in the log below). To
+            keep PAVE mail in the inbox: send from a real{" "}
+            <strong>@pavetraining.co.uk</strong> mailbox people already know
+            (not a made-up noreply); confirm SPF, DKIM and DMARC for that
+            domain in Microsoft 365; ask each customer to add the From address
+            to Safe senders (or a mail-flow rule “never junk @pavetraining.co.uk”);
+            and ask them to mark one message Not junk so their system learns.
+          </p>
         </section>
       ) : null}
 

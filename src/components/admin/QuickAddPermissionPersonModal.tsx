@@ -20,8 +20,8 @@ export interface QuickAddPermissionPersonModalProps {
   onCreated: (record: AdminPermissionRecord) => void;
   /**
    * Which SharePoint RoleType to create. The modal preselects the underlying
-   * `permissionRole` form value: Training Manager → Admin, Supervisor →
-   * Customer. Candidate is included for symmetry with the strict filter but
+   * `permissionRole` form value: Training Manager → Manager, Supervisor →
+   * Supervisor. Candidate is included for symmetry with the strict filter but
    * not used by Workforce today.
    */
   role: "Training Manager" | "Supervisor" | "Candidate";
@@ -31,9 +31,9 @@ export interface QuickAddPermissionPersonModalProps {
 
 function permissionRoleFor(
   role: QuickAddPermissionPersonModalProps["role"],
-): "Admin" | "Customer" | "Candidate" {
-  if (role === "Training Manager") return "Admin";
-  if (role === "Supervisor") return "Customer";
+): "Admin" | "Manager" | "Supervisor" | "Customer" | "Candidate" {
+  if (role === "Training Manager") return "Manager";
+  if (role === "Supervisor") return "Supervisor";
   return "Candidate";
 }
 

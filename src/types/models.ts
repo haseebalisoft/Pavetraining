@@ -68,6 +68,10 @@ export interface WorkforceCandidate {
   id: string;
   candidateName: string;
   companyName: string;
+  /** SharePoint Company list id when the lookup is set. */
+  companyId: string | null;
+  /** App media URL for the company logo when set. */
+  companyLogo: string | null;
   workforceNumber: string | null;
   dateOfBirth: string | null;
   department: string | null;
@@ -444,6 +448,12 @@ export interface DashboardStats {
 }
 
 /** Customer-visible training matrix summary (no admin notes). */
+export interface CustomerEusrCategoryCell {
+  category: string;
+  trainingDate: string | null;
+  expiry: string | null;
+}
+
 export interface CustomerMatrixRecord {
   id: string;
   /** Workforce list item id when resolved; used for profile links. */
@@ -468,6 +478,8 @@ export interface CustomerMatrixRecord {
   swqrExpiry: string | null;
   eusrNumber: string | null;
   eusrExpiry: string | null;
+  /** Per-category EUSR training + expiry when categories were completed separately. */
+  eusrCategoryRows: CustomerEusrCategoryCell[];
   inHouseCourse: string | null;
   inHouseExpiry: string | null;
   n001Expiry: string | null;
@@ -478,6 +490,10 @@ export interface CustomerMatrixRecord {
   n021Expiry: string | null;
   n027Expiry: string | null;
   n100Expiry: string | null;
+  /** Full matrix expiry cells keyed by display header. */
+  columnValues?: Record<string, string | null>;
+  /** Per-header training dates from the matrix TrainingDates JSON. */
+  categoryTrainingDates?: Record<string, string | null>;
 }
 
 /** Customer-facing Pass/Fail only — other SharePoint outcome values are hidden. */
@@ -515,6 +531,7 @@ export interface CustomerStreetworksRecord extends CustomerTrainingRecordBase {
 
 export interface CustomerInHouseRecord extends CustomerTrainingRecordBase {
   course: string | null;
+  certificationNumber: string | null;
 }
 
 export type CustomerNvqStatus = "Active" | "Completed";
@@ -540,6 +557,7 @@ export interface CustomerDocumentRecord {
   name: string;
   documentType: string | null;
   candidate: string | null;
+  candidateId?: string | null;
   /** Modified / uploaded date for display. */
   uploadedDate: string | null;
   canDownload: boolean;

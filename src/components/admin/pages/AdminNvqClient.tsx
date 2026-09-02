@@ -212,7 +212,9 @@ const fields: AdminFieldConfig[] = [
     name: "niNumber",
     label: "NI Number",
     type: "text",
+    readOnly: true,
     section: "Candidate",
+    placeholder: "From Workforce (auto)",
   },
   {
     name: "ulnNumber",

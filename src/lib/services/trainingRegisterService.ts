@@ -4,6 +4,7 @@ import { getSharePointFields } from "@/lib/schema/sharepointSchema";
 import {
   asBoolean,
   asLookupOrString,
+  asMultiChoiceText,
   asNullableString,
   asString,
   getListItemsByKey,
@@ -11,6 +12,7 @@ import {
   type SharePointListItem,
 } from "@/lib/services/sharePointListService";
 import type { AdminRegisterKey } from "@/lib/services/adminCrudService";
+import { parseEusrCategories } from "@/lib/training/eusrOptions";
 
 export type RegisterSource =
   | "NPORS"
@@ -30,9 +32,13 @@ export interface NormalizedRegisterRecord {
   companyLookupId: string | null;
   trainingOutcome: NormalizedTrainingOutcome;
   expiry: string | null;
+  /** Training / course date when the register stores one. */
+  trainingDate: string | null;
   /** NPORS category codes e.g. N001 */
   nporsCategories: string[];
   eusrCategory: string | null;
+  /** Individual EUSR categories when several are stored on one row. */
+  eusrCategories: string[];
   streetworksCategory: string | null;
   certificateCategory: string | null;
   courseCategory: string | null;
@@ -193,8 +199,10 @@ function mapRegisterItem(
         asNullableString(item.fields[f.trainingOutcome]),
       ),
       expiry: asNullableString(item.fields[f.expiry]),
+      trainingDate: asNullableString(item.fields[f.trainingDate]),
       nporsCategories: parseNporsCategories(item.fields[f.nporsCategory]),
       eusrCategory: null,
+      eusrCategories: [],
       streetworksCategory: null,
       certificateCategory: null,
       courseCategory: null,
@@ -223,8 +231,12 @@ function mapRegisterItem(
         asNullableString(item.fields[f.trainingOutcome]),
       ),
       expiry: asNullableString(item.fields[f.expiry]),
+      trainingDate: asNullableString(item.fields[f.trainingDate]),
       nporsCategories: [],
-      eusrCategory: asNullableString(item.fields[f.eusrCategory]),
+      eusrCategory:
+        asMultiChoiceText(item.fields[f.eusrCategory]) ||
+        asNullableString(item.fields[f.eusrCategory]),
+      eusrCategories: parseEusrCategories(item.fields[f.eusrCategory]),
       streetworksCategory: null,
       certificateCategory: null,
       courseCategory: null,
@@ -253,8 +265,10 @@ function mapRegisterItem(
         asNullableString(item.fields[f.trainingOutcome]),
       ),
       expiry: asNullableString(item.fields[f.expiryDate]),
+      trainingDate: asNullableString(item.fields[f.trainingDate]),
       nporsCategories: [],
       eusrCategory: null,
+      eusrCategories: [],
       streetworksCategory: asNullableString(
         item.fields[f.streetworksCategory],
       ),
@@ -280,8 +294,10 @@ function mapRegisterItem(
       asNullableString(item.fields[f.trainingOutcome]),
     ),
     expiry: asNullableString(item.fields[f.expiryDate]),
+    trainingDate: asNullableString(item.fields[f.courseDate]),
     nporsCategories: [],
     eusrCategory: null,
+    eusrCategories: [],
     streetworksCategory: null,
     certificateCategory: asNullableString(item.fields[f.certificateCategory]),
     courseCategory: asNullableString(item.fields[f.courseCategory]),
@@ -323,6 +339,7 @@ export function normalizeRegisterFromAdminRecord(
     workforceId?: string | null;
     trainingOutcome?: string | null;
     expiry?: string | null;
+    trainingDate?: string | null;
     nporsCategory?: string | null;
     eusrCategory?: string | null;
     streetworksCategory?: string | null;
@@ -347,8 +364,10 @@ export function normalizeRegisterFromAdminRecord(
     companyLookupId: lookupHints?.companyLookupId ?? null,
     trainingOutcome: normalizeTrainingOutcome(record.trainingOutcome),
     expiry: record.expiry ?? null,
+    trainingDate: record.trainingDate ?? null,
     nporsCategories: parseNporsCategories(record.nporsCategory),
     eusrCategory: record.eusrCategory ?? null,
+    eusrCategories: parseEusrCategories(record.eusrCategory),
     streetworksCategory: record.streetworksCategory ?? null,
     certificateCategory:
       record.certificateCategory ?? record.course ?? null,

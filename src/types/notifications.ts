@@ -1,6 +1,7 @@
 export type NotificationType =
   | "document_upload"
   | "booking_confirmed"
+  | "training_record_change"
   | "expiry_3m"
   | "expiry_6m"
   | "expiry_expired"

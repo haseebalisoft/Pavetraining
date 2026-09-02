@@ -18,6 +18,39 @@ function safeCallbackUrl(value: string | null): string {
   return value;
 }
 
+/**
+ * Resolve where to send the user after a successful sign-in.
+ *
+ * Client rule: the first page after login must always be role-driven — Admins
+ * to `/admin`, everyone else to `/customer/dashboard`. Deep-link `callbackUrl`
+ * values (from email invitations, saved bookmarks, or session expiry
+ * redirects) are ignored so a customer clicking a link to `/customer/documents`
+ * still lands on the Dashboard first, matching the spec.
+ *
+ * Callback URL is only used as a fallback when `/api/me` fails (network error,
+ * missing permission row, etc.) so users are not left stranded on `/`.
+ */
+async function resolvePostLoginDestination(
+  fallbackFromCallback: string,
+): Promise<string> {
+  try {
+    const meRes = await fetch("/api/me");
+    if (meRes.ok) {
+      const me = (await meRes.json()) as { redirectTo?: string };
+      if (
+        me.redirectTo === "/admin" ||
+        me.redirectTo === "/customer" ||
+        me.redirectTo === "/customer/dashboard"
+      ) {
+        return me.redirectTo;
+      }
+    }
+  } catch {
+    // fall through to callback URL
+  }
+  return fallbackFromCallback;
+}
+
 export function LoginClient() {
   const searchParams = useSearchParams();
   const autoSignInTried = useRef(false);
@@ -95,24 +128,8 @@ export function LoginClient() {
           );
           return;
         }
-        let destination = safeCallbackUrl(searchParams.get("callbackUrl"));
-        if (destination === "/") {
-          try {
-            const meRes = await fetch("/api/me");
-            if (meRes.ok) {
-              const me = (await meRes.json()) as { redirectTo?: string };
-              if (
-                me.redirectTo === "/admin" ||
-                me.redirectTo === "/customer" ||
-                me.redirectTo === "/customer/dashboard"
-              ) {
-                destination = me.redirectTo;
-              }
-            }
-          } catch {
-            // Fall back to home router.
-          }
-        }
+        const fallback = safeCallbackUrl(searchParams.get("callbackUrl"));
+        const destination = await resolvePostLoginDestination(fallback);
         window.location.href = destination;
       } catch (err) {
         setStep("code");
@@ -210,24 +227,8 @@ export function LoginClient() {
         );
         return;
       }
-      let destination = safeCallbackUrl(searchParams.get("callbackUrl"));
-      if (destination === "/") {
-        try {
-          const meRes = await fetch("/api/me");
-          if (meRes.ok) {
-            const me = (await meRes.json()) as { redirectTo?: string };
-            if (
-              me.redirectTo === "/admin" ||
-              me.redirectTo === "/customer" ||
-              me.redirectTo === "/customer/dashboard"
-            ) {
-              destination = me.redirectTo;
-            }
-          }
-        } catch {
-          // Fall back to home router.
-        }
-      }
+      const fallback = safeCallbackUrl(searchParams.get("callbackUrl"));
+      const destination = await resolvePostLoginDestination(fallback);
       window.location.href = destination;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sign-in failed.");

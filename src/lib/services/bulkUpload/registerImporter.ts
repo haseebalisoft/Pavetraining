@@ -181,6 +181,12 @@ function mapRegisterSpecificFields(
         "Certificate Category",
         "CertificateCategory",
       ]),
+      inHouseCertificationNumber: pickField(raw, [
+        "Certification Number",
+        "In-House Certification Number",
+        "In House Certification Number",
+        "CertificationNumber",
+      ]),
     };
   }
 
@@ -448,6 +454,7 @@ function toCreateInput(
     streetworksCategory: fields.streetworksCategory,
     certificateCategory:
       fields.certificateCategory ?? fields.course ?? fields.courseCategory,
+    inHouseCertificationNumber: fields.inHouseCertificationNumber,
     customerVisible: true,
   };
 }

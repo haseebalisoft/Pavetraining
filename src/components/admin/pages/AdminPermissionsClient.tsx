@@ -9,49 +9,70 @@ import {
   type AdminFieldConfig,
 } from "@/components/admin/AdminCrudPage";
 import type { AdminPermissionRecord } from "@/lib/services/adminCrudService";
-import type { AdminDepartmentRecord } from "@/lib/services/departmentTypes";
+import {
+  isDepartmentActive,
+  type AdminDepartmentRecord,
+} from "@/lib/services/departmentTypes";
 import type { Company } from "@/types/models";
 
 import styles from "@/components/admin/admin.module.css";
 
-const columns: AdminColumn<AdminPermissionRecord>[] = [
-  { key: "email", header: "User email", render: (row) => row.userEmail },
-  {
-    key: "name",
-    header: "Name",
-    render: (row) => row.name?.trim() || "—",
-  },
-  {
-    key: "role",
-    header: "Role",
-    render: (row) => row.roleLabel,
-  },
-  {
-    key: "scope",
-    header: "Access scope",
-    render: (row) => row.accessScope?.trim() || "—",
-  },
-  {
-    key: "depts",
-    header: "Departments covered",
-    render: (row) =>
-      row.departmentScopes?.length ? row.departmentScopes.join(", ") : "—",
-  },
-  { key: "company", header: "Company", render: (row) => row.companyName ?? "—" },
-  { key: "status", header: "Status", render: (row) => row.status },
-  {
-    key: "flags",
-    header: "Access",
-    render: (row) =>
-      [
-        row.canView ? "View" : null,
-        row.canDownload ? "Download" : null,
-        row.canEdit ? "Edit" : null,
-      ]
-        .filter(Boolean)
-        .join(" · ") || "—",
-  },
-];
+function companyDepartmentsForRow(
+  row: AdminPermissionRecord,
+  departments: AdminDepartmentRecord[],
+): AdminDepartmentRecord[] {
+  const companyId = String(row.companyId ?? "").trim();
+  const companyName = String(row.companyName ?? "")
+    .trim()
+    .toLowerCase();
+  const seen = new Set<string>();
+  const matched: AdminDepartmentRecord[] = [];
+  for (const department of departments) {
+    if (!isDepartmentActive(department)) continue;
+    const sameCompany =
+      (companyId &&
+        department.companyId &&
+        companyId === String(department.companyId)) ||
+      (companyName &&
+        (department.companyName || "").trim().toLowerCase() === companyName);
+    if (!sameCompany) continue;
+    const key = department.name.trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    matched.push(department);
+  }
+  return matched;
+}
+
+function departmentsCoveredLabel(
+  row: AdminPermissionRecord,
+  departments: AdminDepartmentRecord[],
+): string {
+  const scope = (row.accessScope || "").toLowerCase();
+  if (scope.includes("candidate")) return "—";
+
+  if (scope.includes("department")) {
+    const stored = row.departmentScopes ?? [];
+    if (stored.length === 0) return "—";
+    const companyDepts = companyDepartmentsForRow(row, departments);
+    return stored
+      .map((token) => {
+        const match = companyDepts.find(
+          (department) =>
+            department.id === token ||
+            department.name.trim().toLowerCase() === token.trim().toLowerCase(),
+        );
+        return match?.name ?? token;
+      })
+      .join(", ");
+  }
+
+  // Full Company covers every active department in the company. Do not write
+  // those names onto Permissions — this is display-only so the table is not blank.
+  const companyDepts = companyDepartmentsForRow(row, departments);
+  if (companyDepts.length === 0) return "All departments";
+  return companyDepts.map((department) => department.name).join(", ");
+}
 
 const fields: AdminFieldConfig[] = [
   { name: "userEmail", label: "User email", type: "email", required: true },
@@ -67,18 +88,10 @@ const fields: AdminFieldConfig[] = [
     type: "select",
     required: true,
     options: [
-      {
-        value: "Admin",
-        label: "Training Manager (Admin + Training Matrix)",
-      },
-      {
-        value: "Customer",
-        label: "Customer",
-      },
-      {
-        value: "Candidate",
-        label: "Candidate (own Training Matrix only)",
-      },
+      { value: "Admin", label: "Admin — PAVE staff, full admin portal" },
+      { value: "Manager", label: "Manager — Training Manager, company matrix" },
+      { value: "Supervisor", label: "Supervisor — assigned on Workforce" },
+      { value: "Customer", label: "Customer — own profile only" },
     ],
   },
   {
@@ -92,10 +105,6 @@ const fields: AdminFieldConfig[] = [
         value: "Department Only",
         label: "Department Only (Enterprise TMs — tick departments below)",
       },
-      {
-        value: "Candidate Only",
-        label: "Candidate Only (own records)",
-      },
     ],
   },
   { name: "companyId", label: "Company", type: "company", required: true },
@@ -104,12 +113,7 @@ const fields: AdminFieldConfig[] = [
     label: "Departments covered",
     type: "multiselect",
     section: "Department coverage",
-    // Show every active department across every company (labelled with the
-    // company name so admins can tell duplicate names apart). The runtime
-    // department filter is still combined with the Permission's Company
-    // scope in customerAccessService, so nothing about the security model
-    // changes — this is a UX-only widening of the picker.
-    companyScopedDepartments: "all",
+    companyScopedDepartments: true,
     departmentValueMode: "id",
   },
   {
@@ -127,8 +131,49 @@ const fields: AdminFieldConfig[] = [
   { name: "canEdit", label: "Can edit", type: "boolean" },
 ];
 
+function normalizeSpRole(value: string | null | undefined): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    // Fold legacy "TrainingManager" and "trainingmanager" into the same key
+    .replace("trainingmanager", "training manager");
+}
+
+function permissionRoleFromSharePoint(
+  sharePointRole: string | null | undefined,
+): "Admin" | "Manager" | "Supervisor" | "Customer" | "Candidate" | null {
+  const key = normalizeSpRole(sharePointRole);
+  if (key === "admin") return "Admin";
+  if (key === "training manager" || key === "manager") return "Manager";
+  if (key === "supervisor") return "Supervisor";
+  if (key === "customer" || key === "candidate") return "Customer";
+  return null;
+}
+
+function roleLabelFromSharePoint(
+  sharePointRole: string | null | undefined,
+  fallback?: string | null,
+): string {
+  return permissionRoleFromSharePoint(sharePointRole) ?? fallback?.trim() ?? "—";
+}
+
+function withCorrectedRoles(
+  row: AdminPermissionRecord,
+): AdminPermissionRecord {
+  const permissionRole =
+    permissionRoleFromSharePoint(row.sharePointRoleType) ?? row.permissionRole;
+  return {
+    ...row,
+    permissionRole,
+    roleLabel: roleLabelFromSharePoint(row.sharePointRoleType, row.roleLabel),
+  };
+}
+
 function mapPermissionsResponse(payload: unknown): AdminPermissionRecord[] {
-  return ((payload as { records?: AdminPermissionRecord[] }).records ?? []);
+  return ((payload as { records?: AdminPermissionRecord[] }).records ?? []).map(
+    withCorrectedRoles,
+  );
 }
 
 const permissionSearchKeys: Array<
@@ -146,24 +191,15 @@ type PermissionTabId =
   | "Admin"
   | "Training Manager"
   | "Supervisor"
-  | "Candidate";
+  | "Customer";
 
 const TABS: Array<{ id: PermissionTabId; label: string }> = [
   { id: "all", label: "All" },
   { id: "Admin", label: "Admins" },
-  { id: "Training Manager", label: "Training Managers" },
-  { id: "Supervisor", label: "Customers" },
-  { id: "Candidate", label: "Candidates" },
+  { id: "Training Manager", label: "Managers" },
+  { id: "Supervisor", label: "Supervisors" },
+  { id: "Customer", label: "Customers" },
 ];
-
-function normalizeSpRole(value: string | null | undefined): string {
-  return String(value ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    // Fold legacy "TrainingManager" and "trainingmanager" into the same key
-    .replace("trainingmanager", "training manager");
-}
 
 /** Map the URL ?role= param to a permissionRole form-field default. */
 function rolePresetFromQuery(role: string | null): {
@@ -171,14 +207,17 @@ function rolePresetFromQuery(role: string | null): {
 } | null {
   if (!role) return null;
   const key = role.toLowerCase().replace(/[^a-z]/g, "");
-  if (key === "trainingmanager" || key === "admin") {
+  if (key === "admin") {
     return { permissionRole: "Admin" };
   }
-  if (key === "supervisor" || key === "customer") {
-    return { permissionRole: "Customer" };
+  if (key === "trainingmanager" || key === "manager") {
+    return { permissionRole: "Manager" };
   }
-  if (key === "candidate") {
-    return { permissionRole: "Candidate" };
+  if (key === "supervisor") {
+    return { permissionRole: "Supervisor" };
+  }
+  if (key === "customer" || key === "candidate") {
+    return { permissionRole: "Customer" };
   }
   return null;
 }
@@ -197,15 +236,61 @@ export function AdminPermissionsClient({
   const searchParams = useSearchParams();
   const [activeTab, setActiveTab] = useState<PermissionTabId>("all");
 
+  const columns = useMemo<AdminColumn<AdminPermissionRecord>[]>(
+    () => [
+      { key: "email", header: "User email", render: (row) => row.userEmail },
+      {
+        key: "name",
+        header: "Name",
+        render: (row) => row.name?.trim() || "—",
+      },
+      {
+        key: "role",
+        header: "Role",
+        render: (row) => row.roleLabel,
+      },
+      {
+        key: "scope",
+        header: "Access scope",
+        render: (row) => row.accessScope?.trim() || "—",
+      },
+      {
+        key: "depts",
+        header: "Departments covered",
+        render: (row) => departmentsCoveredLabel(row, departments),
+      },
+      {
+        key: "company",
+        header: "Company",
+        render: (row) => row.companyName ?? "—",
+      },
+      { key: "status", header: "Status", render: (row) => row.status },
+      {
+        key: "flags",
+        header: "Access",
+        render: (row) =>
+          [
+            row.canView ? "View" : null,
+            row.canDownload ? "Download" : null,
+            row.canEdit ? "Edit" : null,
+          ]
+            .filter(Boolean)
+            .join(" · ") || "—",
+      },
+    ],
+    [departments],
+  );
+
   const rolePreset = useMemo(
     () => rolePresetFromQuery(searchParams.get("role")),
     [searchParams],
   );
 
-  // Lock the "Role" field when the drawer was opened via an "Add Training
-  // Manager" / "Add Customer" button so admins can't accidentally save the
-  // wrong role from a role-preset shortcut. The lock only applies during the
-  // shortcut open; picking Edit on any existing row keeps the field editable.
+  // Lock the "Role" field when the drawer was opened via an "Add Manager"
+  // / "Add Supervisor" / "Add Customer" button so admins can't accidentally
+  // save the wrong role from a role-preset shortcut. The lock only applies
+  // during the shortcut open; picking Edit on any existing row keeps the
+  // field editable.
   const fieldsForRender = useMemo<AdminFieldConfig[]>(() => {
     if (!rolePreset) return fields;
     return fields.map((field) =>
@@ -215,10 +300,19 @@ export function AdminPermissionsClient({
 
   const rowFilter = useMemo(() => {
     if (activeTab === "all") return undefined;
-    const target = normalizeSpRole(activeTab);
+    const target =
+      activeTab === "Admin"
+        ? "Admin"
+        : activeTab === "Training Manager"
+          ? "Manager"
+          : activeTab === "Supervisor"
+            ? "Supervisor"
+            : "Customer";
     return (row: AdminPermissionRecord) => {
-      const spRole = normalizeSpRole(row.sharePointRoleType);
-      return spRole === target;
+      const role =
+        permissionRoleFromSharePoint(row.sharePointRoleType) ??
+        row.permissionRole;
+      return role === target;
     };
   }, [activeTab]);
 
@@ -259,12 +353,19 @@ export function AdminPermissionsClient({
         className={styles.permissionAddButton}
         onClick={() => openAddWithRole("Training Manager")}
       >
-        + Add Training Manager
+        + Add Manager
       </button>
       <button
         type="button"
         className={styles.permissionAddButton}
         onClick={() => openAddWithRole("Supervisor")}
+      >
+        + Add Supervisor
+      </button>
+      <button
+        type="button"
+        className={styles.permissionAddButton}
+        onClick={() => openAddWithRole("Customer")}
       >
         + Add Customer
       </button>
@@ -274,12 +375,12 @@ export function AdminPermissionsClient({
   return (
     <AdminCrudPage<AdminPermissionRecord>
       title="Permissions"
-      description="Fully editable by admin: Edit or Delete any row. For Enterprise TMs, set Access scope to Department Only and tick departments — or use Full Company when the company has no departments yet."
+      description="Admin = PAVE staff. Manager = Training Manager (company matrix). Supervisor = named on Workforce. Customer = own profile only (email matches Workforce). Edit or Delete any row."
       columns={columns}
       fields={fieldsForRender}
       companies={companies}
       departments={departments}
-      initialRows={initialRows}
+      initialRows={initialRows.map(withCorrectedRoles)}
       listUrl="/api/admin/permissions"
       createUrl="/api/admin/permissions"
       updateUrl={(id) => `/api/admin/permissions/${id}`}

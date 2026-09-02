@@ -26,9 +26,15 @@ import {
   earliestExpiryDate,
   getExpiryStatus,
 } from "@/lib/training/expiryFilters";
+import {
+  listEusrCategoryMatrixCells,
+  parseEusrCategories,
+} from "@/lib/training/eusrOptions";
 import type {
   CustomerContext,
   CustomerDocumentRecord,
+  CustomerEusrCategoryCell,
+  CustomerEusrRecord,
   CustomerEventRecord,
   CustomerMatrixRecord,
   CustomerOfferRecord,
@@ -66,6 +72,7 @@ type MatrixSourceRow = {
   n100Expiry: string | null;
   n031Expiry?: string | null;
   columnValues: Record<string, string | null>;
+  categoryTrainingDates?: Record<string, string | null>;
 };
 
 function exampleToMatrixSource(
@@ -95,6 +102,7 @@ function exampleToMatrixSource(
     n100Expiry: columnValues["N100 - Exc Crane"] ?? null,
     n031Expiry: columnValues["N031 - Asbestos Awareness"] ?? null,
     columnValues,
+    categoryTrainingDates: example.categoryTrainingDates,
   };
 }
 
@@ -143,6 +151,74 @@ function nporsCategoriesFromMatrix(matrix: MatrixSourceRow | null): string[] {
   return codes;
 }
 
+function laterDateWins(
+  current: string | null | undefined,
+  incoming: string | null | undefined,
+): string | null {
+  const a = current?.trim() || null;
+  const b = incoming?.trim() || null;
+  if (!a) return b;
+  if (!b) return a;
+  return new Date(b).getTime() >= new Date(a).getTime() ? b : a;
+}
+
+function eusrCategoryRowsFromRegisters(
+  records: CustomerEusrRecord[],
+): CustomerEusrCategoryCell[] {
+  const byCategory = new Map<string, CustomerEusrCategoryCell>();
+  for (const row of records) {
+    const names = parseEusrCategories(row.eusrCategory);
+    const categories = names.length > 0 ? names : ["EUSR"];
+    for (const category of categories) {
+      const existing = byCategory.get(category);
+      const expiry = laterDateWins(existing?.expiry, row.expiry);
+      const takeIncoming =
+        !existing ||
+        (row.expiry?.trim() && expiry === row.expiry?.trim());
+      byCategory.set(category, {
+        category,
+        trainingDate: takeIncoming
+          ? row.trainingDate
+          : existing?.trainingDate ?? row.trainingDate,
+        expiry,
+      });
+    }
+  }
+  return Array.from(byCategory.values());
+}
+
+function mergeEusrCategoryRows(
+  matrix: MatrixSourceRow | null,
+  registerRows: CustomerEusrCategoryCell[],
+): CustomerEusrCategoryCell[] {
+  const fromMatrix = listEusrCategoryMatrixCells(
+    matrix?.columnValues,
+    matrix?.categoryTrainingDates,
+  ).map(({ category, trainingDate, expiry }) => ({
+    category,
+    trainingDate,
+    expiry,
+  }));
+  if (fromMatrix.length === 0) return registerRows;
+  const byCategory = new Map(
+    fromMatrix.map((row) => [row.category.toLowerCase(), row] as const),
+  );
+  for (const row of registerRows) {
+    const key = row.category.toLowerCase();
+    const existing = byCategory.get(key);
+    if (!existing) {
+      byCategory.set(key, row);
+      continue;
+    }
+    byCategory.set(key, {
+      category: existing.category,
+      trainingDate: existing.trainingDate ?? row.trainingDate,
+      expiry: existing.expiry ?? row.expiry,
+    });
+  }
+  return Array.from(byCategory.values());
+}
+
 function buildEnrichedRow(input: {
   candidate: WorkforceCandidate | null;
   matrix: MatrixSourceRow | null;
@@ -151,6 +227,7 @@ function buildEnrichedRow(input: {
   nporsNumber?: string | null;
   swqrExpiry: string | null;
   eusrExpiry: string | null;
+  eusrCategoryRows?: CustomerEusrCategoryCell[];
   inHouseExpiry: string | null;
   inHouseCourse?: string | null;
 }): CustomerMatrixRecord {
@@ -186,6 +263,10 @@ function buildEnrichedRow(input: {
     matrix?.columnValues?.["CSCS Expiry"] ?? candidate?.cscsExpiry ?? null;
   const swqrFromMatrix = matrix?.columnValues?.["NRSWA Expiry"] ?? null;
   const eusrFromMatrix = matrix?.columnValues?.["EUSR Expiry"] ?? null;
+  const eusrCategoryRows = mergeEusrCategoryRows(
+    matrix,
+    input.eusrCategoryRows ?? [],
+  );
   const nextExpiryDate =
     earliestExpiryDate([
       matrix?.nextExpiryDate,
@@ -193,6 +274,7 @@ function buildEnrichedRow(input: {
       cscsExpiry,
       input.swqrExpiry ?? swqrFromMatrix,
       input.eusrExpiry ?? eusrFromMatrix,
+      ...eusrCategoryRows.map((row) => row.expiry),
       input.inHouseExpiry,
       ...Object.values(dates),
     ]) ?? null;
@@ -234,9 +316,12 @@ function buildEnrichedRow(input: {
     swqrExpiry: input.swqrExpiry ?? swqrFromMatrix,
     eusrNumber: candidate?.eusrNumber ?? null,
     eusrExpiry: input.eusrExpiry ?? eusrFromMatrix,
+    eusrCategoryRows,
     inHouseCourse: input.inHouseCourse ?? null,
     inHouseExpiry: input.inHouseExpiry,
     ...dates,
+    columnValues: matrix?.columnValues,
+    categoryTrainingDates: matrix?.categoryTrainingDates,
   };
 }
 
@@ -332,9 +417,14 @@ export async function getCustomerMatrixRecords(
     }
 
     const eusrExpiryByName = new Map<string, string[]>();
+    const eusrRowsByName = new Map<string, CustomerEusrRecord[]>();
     for (const row of eusr) {
       const key = nameKey(row.candidateName);
-      if (!key || !row.expiry?.trim()) continue;
+      if (!key) continue;
+      const grouped = eusrRowsByName.get(key) ?? [];
+      grouped.push(row);
+      eusrRowsByName.set(key, grouped);
+      if (!row.expiry?.trim()) continue;
       const list = eusrExpiryByName.get(key) ?? [];
       list.push(row.expiry);
       eusrExpiryByName.set(key, list);
@@ -412,6 +502,9 @@ export async function getCustomerMatrixRecords(
             candidate.eusrExpiry,
             ...(eusrExpiryByName.get(key) ?? []),
           ]),
+          eusrCategoryRows: eusrCategoryRowsFromRegisters(
+            eusrRowsByName.get(key) ?? [],
+          ),
           inHouseExpiry: earliestExpiryDate([
             ...(inHouseExpiryByName.get(key) ?? []),
             matrix?.n031Expiry,
@@ -448,6 +541,7 @@ export async function getCustomerMatrixRecords(
       ]),
       swqrExpiry: null,
       eusrExpiry: null,
+      eusrCategoryRows: [],
       inHouseExpiry: null,
     }),
   );

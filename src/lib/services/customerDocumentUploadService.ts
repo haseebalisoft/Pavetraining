@@ -1,5 +1,6 @@
 import "server-only";
 
+import { revalidatePath } from "next/cache";
 import { revalidateSharePointList } from "@/lib/cache/sharePointCache";
 import { getGraphClient, withGraphReadRetry } from "@/lib/graph/graphClient";
 import { getSharePointFields } from "@/lib/schema/sharepointSchema";
@@ -288,6 +289,9 @@ export async function uploadCustomerDocument(
       metaPayload,
     );
     revalidateSharePointList("customerDocuments");
+    revalidatePath("/customer/documents");
+    revalidatePath("/customer", "layout");
+    revalidatePath("/customer/candidates", "layout");
 
     const refreshed = await getListItemByKey("customerDocuments", listItemId);
     if (!refreshed) {

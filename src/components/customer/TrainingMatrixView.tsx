@@ -8,6 +8,7 @@ import { Breadcrumbs } from "@/components/ui/Breadcrumbs";
 import { ExpiryDateBadge } from "@/components/ui/ExpiryDateBadge";
 import { SlideOverPanel } from "@/components/ui/SlideOverPanel";
 import { StatusBadge } from "@/components/ui/StatusBadge";
+import { LiveTrainingRefresh } from "@/components/training/LiveTrainingRefresh";
 import {
   EXPIRY_STATUS_LEGEND,
   getExpiryStatus,
@@ -65,6 +66,7 @@ function rowExpiryDates(row: CustomerMatrixRecord): Array<string | null> {
     row.cscsExpiry,
     row.swqrExpiry,
     row.eusrExpiry,
+    ...(row.eusrCategoryRows ?? []).map((cell) => cell.expiry),
     row.inHouseExpiry,
     row.n001Expiry,
     row.n003Expiry,
@@ -96,7 +98,13 @@ function matchesCategory(
     return Boolean(row.swqrExpiry?.trim() || row.swqrNumber?.trim());
   }
   if (category === "eusr") {
-    return Boolean(row.eusrExpiry?.trim() || row.eusrNumber?.trim());
+    return Boolean(
+      row.eusrExpiry?.trim() ||
+        row.eusrNumber?.trim() ||
+        (row.eusrCategoryRows ?? []).some(
+          (cell) => cell.expiry?.trim() || cell.trainingDate?.trim(),
+        ),
+    );
   }
   if (category === "in-house") {
     return Boolean(row.inHouseExpiry?.trim() || row.inHouseCourse?.trim());
@@ -139,6 +147,31 @@ function CertCell({
       <ExpiryDateBadge date={expiry} />
     </div>
   );
+}
+
+function EusrCertCell({ row }: { row: CustomerMatrixRecord }) {
+  const categories = row.eusrCategoryRows ?? [];
+  if (categories.length > 0) {
+    return (
+      <div className={styles.eusrCategoryStack}>
+        {row.eusrNumber?.trim() ? (
+          <span className={styles.certNumber}>{row.eusrNumber}</span>
+        ) : null}
+        {categories.map((cell) => (
+          <div key={cell.category} className={styles.eusrCategoryItem}>
+            <span className={styles.eusrCategoryName}>{cell.category}</span>
+            {cell.trainingDate?.trim() ? (
+              <span className={styles.eusrCategoryDates}>
+                Trained {formatDate(cell.trainingDate)}
+              </span>
+            ) : null}
+            <ExpiryDateBadge date={cell.expiry} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+  return <CertCell number={row.eusrNumber} expiry={row.eusrExpiry} />;
 }
 
 function CandidateNameCell({
@@ -438,6 +471,7 @@ export function TrainingMatrixView({
 
   return (
     <div className={styles.matrixPage}>
+      <LiveTrainingRefresh />
       <header className={`${styles.pageHeader} ${styles.matrixHeader}`}>
         <div className={styles.matrixBreadcrumbs}>
           <Breadcrumbs
@@ -694,10 +728,7 @@ export function TrainingMatrixView({
                         />
                       </td>
                       <td>
-                        <CertCell
-                          number={row.eusrNumber}
-                          expiry={row.eusrExpiry}
-                        />
+                        <EusrCertCell row={row} />
                       </td>
                       <td>
                         <div className={styles.certCell}>
@@ -814,10 +845,7 @@ export function TrainingMatrixView({
                     <div>
                       <dt>EUSR</dt>
                       <dd>
-                        <CertCell
-                          number={row.eusrNumber}
-                          expiry={row.eusrExpiry}
-                        />
+                        <EusrCertCell row={row} />
                       </dd>
                     </div>
                     <div>

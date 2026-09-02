@@ -3,6 +3,7 @@ import Link from "next/link";
 import { CustomerCompanyProfileCard } from "@/components/customer/CustomerCompanyProfileCard";
 import { CustomerOfferSlider } from "@/components/customer/CustomerOfferSlider";
 import { CustomerUpcomingEvents } from "@/components/customer/CustomerUpcomingEvents";
+import { LiveTrainingRefresh } from "@/components/training/LiveTrainingRefresh";
 import { formatDate } from "@/lib/utils/formatDate";
 import type {
   CustomerCompanyProfile,
@@ -160,37 +161,21 @@ export function CustomerDashboardView({
 
   return (
     <div className={dashStyles.dashboardPage}>
+      <LiveTrainingRefresh />
       <h1 className={styles.srOnly}>Dashboard</h1>
 
-      {/* Reference order: offers hero, then upcoming events */}
-      <CustomerOfferSlider offers={offers} />
-      <CustomerUpcomingEvents events={upcomingEvents} />
-
+      {/* Company hero: large logo, name, address, main contact, tel, email,
+       * then remaining company details. Operational sections follow. */}
       {companyProfile ? (
         <CustomerCompanyProfileCard company={companyProfile} />
       ) : null}
 
-      <section className={styles.statsSection} aria-label="Training overview">
-        <div className={dashStyles.sectionHeader}>
-          <h2>Training overview</h2>
-        </div>
-        <div className={styles.statsGrid}>
-          {overviewCards.map((card) => (
-            <article
-              key={card.label}
-              className={`${styles.statCard} ${toneClass(card.tone)}`}
-            >
-              <p className={styles.statLabel}>{card.label}</p>
-              <p className={styles.statValue}>{card.value}</p>
-            </article>
-          ))}
-        </div>
-      </section>
+      <CustomerUpcomingEvents events={upcomingEvents} />
 
       {warningCards.length > 0 ? (
-        <section className={styles.panel} aria-label="Expiry warnings">
+        <section className={styles.panel} aria-label="Expiring training">
           <div className={dashStyles.sectionHeader}>
-            <h2>Attention needed</h2>
+            <h2>Expiring training</h2>
           </div>
           <div className={styles.warningList}>
             {warningCards.map((card) => (
@@ -211,7 +196,7 @@ export function CustomerDashboardView({
 
       <section className={styles.panel} aria-label="Recent documents">
         <div className={dashStyles.sectionHeader}>
-          <h2>Recent documents</h2>
+          <h2>Documents</h2>
           <Link href="/customer/documents" className={dashStyles.viewAllLink}>
             View all <span aria-hidden="true">→</span>
           </Link>
@@ -223,21 +208,45 @@ export function CustomerDashboardView({
         ) : (
           <div className={dashStyles.documentsList}>
             {recentDocuments.map((doc) => (
-              <Link
+              <a
                 key={doc.id}
                 href={doc.viewPath ?? "/customer/documents"}
                 className={dashStyles.documentRow}
+                target={doc.viewPath ? "_blank" : undefined}
+                rel={doc.viewPath ? "noreferrer" : undefined}
               >
                 <span className={dashStyles.documentName}>{doc.name}</span>
                 <span className={dashStyles.documentMeta}>
                   {doc.documentType ?? "Document"} ·{" "}
                   {formatDate(doc.uploadedDate, "Date unknown")}
                 </span>
-              </Link>
+              </a>
             ))}
           </div>
         )}
       </section>
+
+      <section className={styles.statsSection} aria-label="Training Matrix summary">
+        <div className={dashStyles.sectionHeader}>
+          <h2>Training Matrix summary</h2>
+          <Link href="/customer/training-matrix" className={dashStyles.viewAllLink}>
+            Open matrix <span aria-hidden="true">→</span>
+          </Link>
+        </div>
+        <div className={styles.statsGrid}>
+          {overviewCards.map((card) => (
+            <article
+              key={card.label}
+              className={`${styles.statCard} ${toneClass(card.tone)}`}
+            >
+              <p className={styles.statLabel}>{card.label}</p>
+              <p className={styles.statValue}>{card.value}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <CustomerOfferSlider offers={offers} />
 
       <section
         className={styles.cardGridSection}

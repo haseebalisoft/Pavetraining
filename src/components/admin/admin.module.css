@@ -1667,6 +1667,28 @@
   cursor: not-allowed;
 }
 
+/* Live-updated confirmation pill rendered under the Company <select> in the
+   Add / Edit Permission drawer. Gives admins immediate visual proof that the
+   company they just picked was actually captured in form state — so if the
+   dropdown ever fails to register a click, the pill will not update and the
+   admin sees the drift before they hit Save. */
+.fieldConfirmPill {
+  align-self: flex-start;
+  margin-top: 0.4rem;
+  padding: 0.28rem 0.65rem;
+  border-radius: 999px;
+  background: var(--pave-bg);
+  color: var(--pave-charcoal);
+  font-size: 0.78rem;
+  line-height: 1;
+  border: 1px solid var(--pave-border);
+}
+.fieldConfirmPill[data-empty="true"] {
+  color: var(--pave-charcoal-muted, #667085);
+  border-style: dashed;
+  background: transparent;
+}
+
 /* Filter tab strip + role-preset "Add" buttons on the Admin → Permissions
    toolbar. Sits inside the AdminCrudPage `toolbarExtra` slot so it inherits
    the toolbar's own wrap / gap behaviour and stays above the table. */
@@ -2086,6 +2108,13 @@ th.stickyActionsCell {
   align-items: stretch;
   gap: 0.2rem;
   min-width: 0;
+}
+
+.matrixTrainingDate {
+  font-size: 0.68rem;
+  line-height: 1.2;
+  color: var(--pave-charcoal-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .matrixManualBadge {

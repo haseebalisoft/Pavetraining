@@ -69,7 +69,11 @@ export function CustomerUpcomingEvents({
               "Location TBC";
             const status = eventStatusLabel(event);
             return (
-              <article key={event.id} className={styles.eventCard}>
+              <Link
+                key={event.id}
+                href={`/customer/events?event=${encodeURIComponent(event.id)}`}
+                className={styles.eventCard}
+              >
                 <div
                   className={styles.eventDateStrip}
                   aria-label={formatDate(event.eventDate, "Date TBC")}
@@ -101,7 +105,7 @@ export function CustomerUpcomingEvents({
                     {status}
                   </span>
                 </div>
-              </article>
+              </Link>
             );
           })}
         </div>

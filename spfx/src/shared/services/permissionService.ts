@@ -96,8 +96,16 @@ export function roleLabelFor(
   sharePointRole: string,
   customerRole: CustomerRoleType | null
 ): string {
-  if (customerRole === "TrainingManager") return "Training Manager";
-  if (customerRole === "Supervisor") return "Customer";
+  const key = sharePointRole.toLowerCase().trim().replace(/\s+/g, " ");
+  if (key === "admin") return "Admin";
+  if (key === "training manager" || key === "trainingmanager" || key === "manager") {
+    return "Manager";
+  }
+  if (key === "supervisor") return "Supervisor";
+  if (key === "customer") return "Customer";
+  if (key === "candidate") return "Candidate";
+  if (customerRole === "TrainingManager") return "Manager";
+  if (customerRole === "Supervisor") return "Supervisor";
   if (customerRole === "Candidate") return "Candidate";
   const raw = sharePointRole.trim();
   if (raw) return raw;

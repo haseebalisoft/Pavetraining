@@ -59,6 +59,14 @@ function dateKey(value: Date): string {
 
 function parseEventDate(value: string | null | undefined): Date | null {
   if (!value?.trim()) return null;
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+  if (dateOnly) {
+    return new Date(
+      Number(dateOnly[1]),
+      Number(dateOnly[2]) - 1,
+      Number(dateOnly[3]),
+    );
+  }
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
@@ -207,6 +215,8 @@ export function CalendarGrid({
               const classNames = [styles.monthDay];
               if (!isCurrentMonth) classNames.push(styles.outsideMonth);
               if (sameDay(day, today)) classNames.push(styles.today);
+              const dayOpensEvent =
+                !onSlotClick && dayEvents.length > 0 && Boolean(onEventClick);
               return (
                 <div
                   key={dateKey(day)}
@@ -214,12 +224,35 @@ export function CalendarGrid({
                   role={onSlotClick ? "button" : undefined}
                   tabIndex={onSlotClick ? 0 : undefined}
                   aria-label={`${formatDate(day)}${dayEvents.length ? `, ${dayEvents.length} events` : ""}`}
-                  onClick={() => onSlotClick?.(new Date(day.getFullYear(), day.getMonth(), day.getDate(), 9))}
-                  onKeyDown={(event) => {
-                    if (onSlotClick && (event.key === "Enter" || event.key === " ")) {
-                      event.preventDefault();
-                      onSlotClick(new Date(day.getFullYear(), day.getMonth(), day.getDate(), 9));
+                  onClick={() => {
+                    if (dayOpensEvent) {
+                      onEventClick?.(dayEvents[0]);
+                      return;
                     }
+                    onSlotClick?.(
+                      new Date(
+                        day.getFullYear(),
+                        day.getMonth(),
+                        day.getDate(),
+                        9,
+                      ),
+                    );
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
+                    if (dayOpensEvent) {
+                      onEventClick?.(dayEvents[0]);
+                      return;
+                    }
+                    onSlotClick?.(
+                      new Date(
+                        day.getFullYear(),
+                        day.getMonth(),
+                        day.getDate(),
+                        9,
+                      ),
+                    );
                   }}
                 >
                   <span className={styles.dayNumber}>{day.getDate()}</span>
@@ -228,7 +261,16 @@ export function CalendarGrid({
                       <EventChip key={`${event.id}-${dateKey(day)}`} event={event} onClick={onEventClick} />
                     ))}
                     {dayEvents.length > 3 ? (
-                      <span className={styles.moreCount}>+{dayEvents.length - 3} more</span>
+                      <button
+                        type="button"
+                        className={styles.moreCount}
+                        onClick={(clickEvent) => {
+                          clickEvent.stopPropagation();
+                          onEventClick?.(dayEvents[3] ?? dayEvents[0]);
+                        }}
+                      >
+                        +{dayEvents.length - 3} more
+                      </button>
                     ) : null}
                   </div>
                 </div>

@@ -27,6 +27,14 @@ import {
   type WorkforceMatrixProfile,
 } from "@/lib/services/bulkUpload/workforceMatrixSync";
 import {
+  MATRIX_TRAINING_DATES_FIELD,
+  isMatrixExpiryColumnKey,
+  matrixStoredExpiryKey,
+  matrixTrainingDateColumnKey,
+  parseTrainingDatesJson,
+  serializeTrainingDatesJson,
+} from "@/lib/training/matrixEditorFields";
+import {
   MANUAL_OVERRIDES_FIELD,
   parseManualOverrides,
   serializeManualOverrides,
@@ -40,6 +48,8 @@ export interface TrainingMatrixExampleRow {
   nextExpiryDate: string | null;
   /** Headers whose dates were set manually in admin (not register sync). */
   manualOverrides: string[];
+  /** Per-category training dates keyed by template header (not expiry). */
+  categoryTrainingDates?: Record<string, string>;
   /** Strong link columns (present once the row is linked to a Workforce record). */
   workforceItemId: string | null;
   workforceNumber: string | null;
@@ -139,7 +149,7 @@ export function earliestDateFromColumns(
 ): string | null {
   return earliestDate(
     Object.entries(columnValues)
-      .filter(([key]) => key !== "Name" && key !== "DOB")
+      .filter(([key]) => isMatrixExpiryColumnKey(key))
       .map(([, value]) => value),
   );
 }
@@ -228,6 +238,38 @@ async function getExampleColumnMap(): Promise<Map<string, ExampleColumnInfo>> {
   return new Map(Object.entries(records));
 }
 
+function findColumn(
+  columnMap: Map<string, ExampleColumnInfo>,
+  header: string,
+): ExampleColumnInfo | null {
+  return (
+    columnMap.get(headerLookupKey(header)) ??
+    columnMap.get(normalizeHeader(header).toLowerCase()) ??
+    null
+  );
+}
+
+function readCategoryTrainingDates(
+  fields: SharePointListItem["fields"],
+  columnMap: Map<string, ExampleColumnInfo>,
+): Record<string, string> {
+  const col =
+    findColumn(columnMap, "TrainingDates") ??
+    findColumn(columnMap, "Training Dates");
+  const raw = col ? fields[col.name] : fields[MATRIX_TRAINING_DATES_FIELD];
+  const fromJson = parseTrainingDatesJson(raw);
+  const merged = { ...fromJson };
+  for (const header of CLIENT_MATRIX_DISPLAY_HEADERS) {
+    if (header === "Name" || header === "DOB") continue;
+    const trainHeader = matrixTrainingDateColumnKey(header);
+    const trainCol = findColumn(columnMap, trainHeader);
+    if (!trainCol) continue;
+    const iso = excelSerialToIsoDate(fields[trainCol.name]);
+    if (iso) merged[header] = iso;
+  }
+  return merged;
+}
+
 function mapItemToRow(
   item: SharePointListItem,
   columnMap: Map<string, ExampleColumnInfo>,
@@ -285,6 +327,14 @@ function mapItemToRow(
     columnValues[header] = excelSerialToIsoDate(raw);
   }
 
+  const categoryTrainingDates = readCategoryTrainingDates(fields, columnMap);
+  for (const header of CLIENT_MATRIX_DISPLAY_HEADERS) {
+    if (header === "Name" || header === "DOB") continue;
+    if (columnValues[header]?.trim()) continue;
+    const storedExpiry = categoryTrainingDates[matrixStoredExpiryKey(header)];
+    if (storedExpiry) columnValues[header] = storedExpiry;
+  }
+
   const dateOfBirth = columnValues.DOB ?? null;
   const nextExpiryDate = earliestDate(
     CLIENT_MATRIX_DISPLAY_HEADERS.filter((h) => h !== "Name" && h !== "DOB").map(
@@ -317,6 +367,7 @@ function mapItemToRow(
     companyItemId: readLinkField("CompanyItemId"),
     companyNumber: readLinkField("CompanyNumber"),
     matrixLinkStatus: readLinkField("MatrixLinkStatus"),
+    categoryTrainingDates,
   };
 }
 
@@ -411,6 +462,8 @@ export async function upsertTrainingMatrixExampleRow(input: {
   linkFields?: MatrixLinkFields;
   /** When set, replaces ManualOverrides on the row. */
   manualOverrides?: string[] | null;
+  /** When set, replaces stored per-category training dates (JSON + optional date columns). */
+  categoryTrainingDates?: Record<string, string | null> | null;
 }): Promise<{ id: string; created: boolean }> {
   const name = input.candidateName.trim();
   if (!name) throw new Error("Candidate name is required for matrix example upsert.");
@@ -502,49 +555,82 @@ export async function upsertTrainingMatrixExampleRow(input: {
     );
   }
 
-  if (input.existingItemId?.trim()) {
-    try {
-      await updateListItemFieldsByKey(
-        "trainingMatrixExample",
-        input.existingItemId.trim(),
-        fields,
-      );
-    } catch (error) {
-      // Retry without ManualOverrides if the column is not provisioned yet.
-      if (
-        input.manualOverrides !== undefined &&
-        MANUAL_OVERRIDES_FIELD in fields
-      ) {
-        const { [MANUAL_OVERRIDES_FIELD]: _drop, ...lean } = fields;
-        await updateListItemFieldsByKey(
-          "trainingMatrixExample",
-          input.existingItemId.trim(),
-          lean,
-        );
-        console.warn(
-          `[matrix] ManualOverrides column missing on Training Matrix Update — date saved without override flag.`,
-        );
-      } else {
-        throw error;
+  let trainingDatesFieldName: string | null = null;
+  if (input.categoryTrainingDates !== undefined) {
+    const dates = input.categoryTrainingDates ?? {};
+    const jsonCol =
+      findColumn(columnMap, "TrainingDates") ??
+      findColumn(columnMap, "Training Dates");
+    trainingDatesFieldName =
+      jsonCol && jsonCol.storage === "other"
+        ? jsonCol.name
+        : MATRIX_TRAINING_DATES_FIELD;
+    fields[trainingDatesFieldName] = serializeTrainingDatesJson(dates);
+
+    for (const header of CLIENT_MATRIX_DISPLAY_HEADERS) {
+      if (header === "Name" || header === "DOB") continue;
+      const trainCol = findColumn(columnMap, matrixTrainingDateColumnKey(header));
+      if (!trainCol) continue;
+      const iso = dates[header] ?? null;
+      if (trainCol.storage === "dateTime") {
+        fields[trainCol.name] = isoToSharePointDateTime(iso);
+      } else if (trainCol.storage === "number") {
+        fields[trainCol.name] = isoToExcelSerial(iso);
       }
     }
+  }
+
+  async function writeOrRetry(
+    writer: (payload: Record<string, unknown>) => Promise<unknown>,
+  ): Promise<void> {
+    try {
+      await writer(fields);
+      return;
+    } catch (error) {
+      if (trainingDatesFieldName && trainingDatesFieldName in fields) {
+        const withoutDates = { ...fields };
+        delete withoutDates[trainingDatesFieldName];
+        try {
+          await writer(withoutDates);
+          console.warn(
+            "[matrix] TrainingDates column missing on Training Matrix Update — expiry saved without training dates.",
+          );
+          return;
+        } catch {
+          // Fall through to also drop ManualOverrides.
+        }
+      }
+      if (MANUAL_OVERRIDES_FIELD in fields) {
+        const lean = { ...fields };
+        if (trainingDatesFieldName) delete lean[trainingDatesFieldName];
+        delete lean[MANUAL_OVERRIDES_FIELD];
+        await writer(lean);
+        console.warn(
+          "[matrix] TrainingDates / ManualOverrides column missing on Training Matrix Update — expiry saved without those fields.",
+        );
+        return;
+      }
+      throw error;
+    }
+  }
+
+  if (input.existingItemId?.trim()) {
+    await writeOrRetry((payload) =>
+      updateListItemFieldsByKey(
+        "trainingMatrixExample",
+        input.existingItemId!.trim(),
+        payload,
+      ),
+    );
     return { id: input.existingItemId.trim(), created: false };
   }
 
-  try {
-    const created = await createListItemByKey("trainingMatrixExample", fields);
-    return { id: created.id, created: true };
-  } catch (error) {
-    if (
-      input.manualOverrides !== undefined &&
-      MANUAL_OVERRIDES_FIELD in fields
-    ) {
-      const { [MANUAL_OVERRIDES_FIELD]: _drop, ...lean } = fields;
-      const created = await createListItemByKey("trainingMatrixExample", lean);
-      return { id: created.id, created: true };
-    }
-    throw error;
-  }
+  let createdId = "";
+  await writeOrRetry(async (payload) => {
+    const created = await createListItemByKey("trainingMatrixExample", payload);
+    createdId = created.id;
+  });
+  return { id: createdId, created: true };
 }
 
 /**

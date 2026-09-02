@@ -26,6 +26,7 @@ export default async function AdminNvqPage() {
         swqrNumber: row.swqrNumber,
         inHouseCertificationNumber: row.inHouseCertificationNumber,
         workforceNumber: row.workforceNumber,
+        niNumber: row.niNumber,
       }))}
       initialRows={records}
     />

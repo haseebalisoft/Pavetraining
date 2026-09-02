@@ -6,6 +6,7 @@ import {
 import { logPermissionDepartmentScopeUpdate } from "@/lib/services/auditLogService";
 
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 /**
  * GET is intentionally left on the standard admin guard: Training Managers

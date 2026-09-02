@@ -7,6 +7,7 @@ import {
   TrainingRecordsTable,
   type TrainingRecordColumn,
 } from "@/components/customer/TrainingRecordsTable";
+import { expandEusrRecordsForDisplay } from "@/lib/training/eusrOptions";
 import { formatDate } from "@/lib/utils/formatDate";
 import type { CustomerEusrRecord } from "@/types/models";
 
@@ -64,7 +65,7 @@ export function EusrRecordsView({ companyName, records }: Props) {
       title="EUSR Training"
       description="EUSR registrations and outcomes for your company workforce."
       companyName={companyName}
-      records={records}
+      records={expandEusrRecordsForDisplay(records)}
       columns={columns}
       getSearchText={(row) =>
         [

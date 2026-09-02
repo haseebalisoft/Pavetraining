@@ -4,6 +4,7 @@ import {
   listAdminRegister,
 } from "@/lib/services/adminCrudService";
 import { triggerMatrixSyncAfterRegister } from "@/lib/services/matrixSyncHook";
+import { notifyTrainingRecordChange } from "@/lib/services/trainingRecordNotificationService";
 
 export const dynamic = "force-dynamic";
 
@@ -34,6 +35,12 @@ export async function POST(request: Request) {
         record,
         context.loggedInEmail,
       );
+      await notifyTrainingRecordChange({
+        register: "inHouseCertificates",
+        action: "added",
+        record,
+        actorEmail: context.loggedInEmail,
+      });
       return { record, matrixSync, choiceWarnings };
     },
     { errorMessage: "Failed to create In-House record" },

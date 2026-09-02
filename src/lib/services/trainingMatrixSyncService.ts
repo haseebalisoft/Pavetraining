@@ -26,10 +26,7 @@ import {
   latestPassExpiry,
   shouldApplyPassExpiry,
 } from "@/lib/services/bulkUpload/registerMatrixFieldSync";
-import {
-  listHasColumn,
-  updateListItemFieldsByKey,
-} from "@/lib/services/sharePointListService";
+import { addCalendarYearsIso } from "@/lib/utils/formatDate";
 import {
   listAllNormalizedRegisters,
   listNormalizedRegisters,
@@ -43,6 +40,12 @@ import {
   isAsbestosAwarenessCategory,
   isManualOverrideHeader,
 } from "@/lib/training/matrixManualOverrides";
+import {
+  EUSR_MATRIX_CATEGORY_COLUMNS,
+  eusrMatrixHeaderForCategory,
+  parseEusrCategories,
+} from "@/lib/training/eusrOptions";
+import { matrixStoredExpiryKey } from "@/lib/training/matrixEditorFields";
 import type {
   MatrixSyncResult,
   MatrixSyncResultItem,
@@ -58,6 +61,40 @@ const NPORS_HEADER_BY_CODE: Record<string, string> = Object.fromEntries(
     column.header,
   ]),
 );
+
+function eusrHeadersForRecord(record: NormalizedRegisterRecord): string[] {
+  const categories =
+    record.eusrCategories.length > 0
+      ? record.eusrCategories
+      : parseEusrCategories(record.eusrCategory);
+  const headers: string[] = [];
+  const seen = new Set<string>();
+  for (const category of categories) {
+    const header = eusrMatrixHeaderForCategory(category);
+    if (!header || seen.has(header)) continue;
+    seen.add(header);
+    headers.push(header);
+  }
+  return headers;
+}
+
+function stampEusrCategoryDates(
+  header: string,
+  expiry: string | null,
+  trainingDate: string | null | undefined,
+  columnValues: Record<string, string | null>,
+  categoryTrainingDates: Record<string, string | null>,
+  fieldsUpdated: string[],
+) {
+  columnValues[header] = expiry;
+  categoryTrainingDates[matrixStoredExpiryKey(header)] = expiry;
+  if (trainingDate?.trim()) {
+    categoryTrainingDates[header] = trainingDate.trim().slice(0, 10);
+  } else if (!expiry) {
+    categoryTrainingDates[header] = null;
+  }
+  if (!fieldsUpdated.includes(header)) fieldsUpdated.push(header);
+}
 
 export interface MatrixSyncOptions {
   dryRun?: boolean;
@@ -115,6 +152,7 @@ function exampleRowToMatrix(
     n100Expiry: example.columnValues["N100 - Exc Crane"] ?? null,
     n031Expiry: example.columnValues[ASBESTOS_MATRIX_HEADER] ?? null,
     columnValues: { ...example.columnValues },
+    categoryTrainingDates: example.categoryTrainingDates ?? {},
     manualOverrideHeaders: example.manualOverrides ?? [],
     workforceId: workforce?.id ?? example.workforceItemId ?? null,
     // Prefer the row's own stored link — never re-derive it from name once set.
@@ -450,6 +488,10 @@ async function syncOneCandidate(
   let workforceSwqrExpiry: string | null | undefined;
   let needsReviewForced = false;
   const manualOverrides = matrixRow?.manualOverrideHeaders ?? [];
+  const categoryTrainingDates: Record<string, string | null> = {
+    ...(matrixRow?.categoryTrainingDates ?? {}),
+  };
+  let trainingDatesDirty = false;
 
   for (const record of registersForMapping) {
     if (record.trainingOutcome === null) {
@@ -469,14 +511,10 @@ async function syncOneCandidate(
 
     if (record.source === "NPORS") {
       if (record.nporsCategories.length === 0) {
-        warnings.push(
-          `NPORS #${record.id}: Pass but no mapped NPORS category (N###).`,
-        );
         continue;
       }
       if (!record.expiry) {
         needsReviewForced = true;
-        warnings.push(`NPORS #${record.id}: Pass but missing Expiry.`);
         continue;
       }
       for (const code of record.nporsCategories) {
@@ -506,10 +544,40 @@ async function syncOneCandidate(
     }
 
     if (record.source === "EUSR") {
+      const headers = eusrHeadersForRecord(record);
+      if (headers.length === 0) {
+        warnings.push(
+          `EUSR #${record.id}: Pass but no EUSR category mapped to a matrix column.`,
+        );
+      }
       if (!record.expiry) {
         needsReviewForced = true;
         warnings.push(`EUSR #${record.id}: Pass but missing Expiry.`);
         continue;
+      }
+      for (const header of headers) {
+        if (isManualOverrideHeader(header, manualOverrides)) {
+          warnings.push(
+            `${header}: skipped sync (manual override on matrix).`,
+          );
+          continue;
+        }
+        const existing = columnValues[header];
+        if (shouldApplyPassExpiry(existing, record.expiry, "Pass")) {
+          stampEusrCategoryDates(
+            header,
+            record.expiry,
+            record.trainingDate,
+            columnValues,
+            categoryTrainingDates,
+            fieldsUpdated,
+          );
+          trainingDatesDirty = true;
+        } else if (existing) {
+          warnings.push(
+            `${header}: kept existing matrix date (register not newer).`,
+          );
+        }
       }
       if (
         workforceEusrExpiry === undefined ||
@@ -520,16 +588,16 @@ async function syncOneCandidate(
     }
 
     if (record.source === "NRSWA") {
-      if (!record.expiry) {
-        needsReviewForced = true;
-        warnings.push(`NRSWA #${record.id}: Pass but missing Expirydate.`);
+      const nrswaExpiry =
+        record.expiry ?? addCalendarYearsIso(record.trainingDate, 5);
+      if (!nrswaExpiry) {
         continue;
       }
       if (
         workforceSwqrExpiry === undefined ||
-        shouldApplyPassExpiry(workforceSwqrExpiry, record.expiry, "Pass")
+        shouldApplyPassExpiry(workforceSwqrExpiry, nrswaExpiry, "Pass")
       ) {
-        workforceSwqrExpiry = record.expiry;
+        workforceSwqrExpiry = nrswaExpiry;
       }
     }
 
@@ -642,6 +710,7 @@ async function syncOneCandidate(
         source: columnValues,
         linkFields,
         // Do not touch ManualOverrides — sync never clears admin flags.
+        ...(trainingDatesDirty ? { categoryTrainingDates } : {}),
       });
       const nextRow: MatrixRowWithLookups = {
         id: `example:${upserted.id}`,
@@ -664,6 +733,7 @@ async function syncOneCandidate(
         n100Expiry: columnValues["N100 - Exc Crane"] ?? null,
         n031Expiry: columnValues[ASBESTOS_MATRIX_HEADER] ?? null,
         columnValues: { ...columnValues },
+        categoryTrainingDates: { ...categoryTrainingDates },
         manualOverrideHeaders: manualOverrides,
         workforceId: workforce.id,
         workforceItemId: workforce.id,
@@ -709,6 +779,7 @@ async function syncOneCandidate(
         columnValues["N027 - Excavation Marshal - Banksperson"] ?? null,
       n100Expiry: columnValues["N100 - Exc Crane"] ?? null,
       columnValues: { ...columnValues },
+      categoryTrainingDates: { ...categoryTrainingDates },
       workforceItemId: workforce.id,
       companyItemId: company.id,
       workforceNumber: workforce.workforceNumber,
@@ -1032,8 +1103,6 @@ export async function syncAfterRegisterSave(
           company: record.companyName,
           registerSources: [],
           skipped: true,
-          skipReason:
-            "In-House course is standalone (only Asbestos Awareness syncs to N031).",
         }),
       ];
       return {
@@ -1052,6 +1121,9 @@ export async function syncAfterRegisterSave(
     candidateLookupId: record.candidateLookupId,
     companyLookupId: record.companyLookupId,
   });
+  if (focus.source === "NRSWA" && !focus.expiry && focus.trainingDate) {
+    focus.expiry = addCalendarYearsIso(focus.trainingDate, 5);
+  }
 
   const ctx = await loadSyncContext({ ...options, focusRecords: [focus] });
   // Ensure we have full register set for status — reload all for this candidate path.
@@ -1106,6 +1178,13 @@ export async function syncAfterRegisterSave(
     `register/${registerKey}/${record.id}`,
     result,
   );
+  // Register save already succeeded. Category/expiry notes from sibling
+  // rows must not surface as error toasts on Streetworks / NPORS / EUSR.
+  for (const item of result.items) {
+    item.warnings = [];
+    if (!item.errors.length) item.skipReason = undefined;
+  }
+  result.summary.warnings = 0;
   return result;
 }
 
@@ -1152,6 +1231,10 @@ async function recomputeCandidateMatrixAfterDelete(
   const columnValues: Record<string, string | null> = {
     ...matrixRow.columnValues,
   };
+  const categoryTrainingDates: Record<string, string | null> = {
+    ...(matrixRow.categoryTrainingDates ?? {}),
+  };
+  let trainingDatesDirty = false;
 
   const applyHeaderRecompute = (
     header: string,
@@ -1204,6 +1287,52 @@ async function recomputeCandidateMatrixAfterDelete(
     const eusrRecords = remainingForCandidate.filter(
       (r) => r.source === "EUSR",
     );
+    const headers = new Set<string>();
+    for (const column of EUSR_MATRIX_CATEGORY_COLUMNS) {
+      if (
+        columnValues[column.header] ||
+        categoryTrainingDates[column.header] ||
+        categoryTrainingDates[matrixStoredExpiryKey(column.header)]
+      ) {
+        headers.add(column.header);
+      }
+    }
+    for (const record of eusrRecords) {
+      for (const header of eusrHeadersForRecord(record)) {
+        headers.add(header);
+      }
+    }
+    for (const key of Object.keys(columnValues)) {
+      if (key.startsWith("EUSR - ") && columnValues[key]) headers.add(key);
+    }
+    for (const header of headers) {
+      const remaining = eusrRecords.filter((record) =>
+        eusrHeadersForRecord(record).includes(header),
+      );
+      const previousExpiry = columnValues[header] ?? null;
+      const previousTraining = categoryTrainingDates[header] ?? null;
+      applyHeaderRecompute(header, remaining);
+      const latest = remaining
+        .filter((record) => record.trainingOutcome === "Pass" && record.expiry)
+        .sort((a, b) => {
+          const aMs = new Date(a.expiry ?? "").getTime();
+          const bMs = new Date(b.expiry ?? "").getTime();
+          return bMs - aMs;
+        })[0];
+      const nextExpiry = columnValues[header] ?? null;
+      const nextTraining = latest?.trainingDate ?? null;
+      if (previousExpiry !== nextExpiry || previousTraining !== nextTraining) {
+        stampEusrCategoryDates(
+          header,
+          nextExpiry,
+          nextTraining,
+          columnValues,
+          categoryTrainingDates,
+          fieldsUpdated,
+        );
+        trainingDatesDirty = true;
+      }
+    }
     applyHeaderRecompute("EUSR Expiry", eusrRecords);
     if (fieldsUpdated.includes("EUSR Expiry")) {
       workforceEusrExpiry = latestPassExpiry(eusrRecords);
@@ -1265,6 +1394,7 @@ async function recomputeCandidateMatrixAfterDelete(
         matrixRow.exampleItemId ?? stripExampleMatrixId(matrixRow.id),
       source: columnValues,
       // Do not touch ManualOverrides — preserved overrides stay flagged, not cleared.
+      ...(trainingDatesDirty ? { categoryTrainingDates } : {}),
     });
   } catch (error) {
     errors.push(
