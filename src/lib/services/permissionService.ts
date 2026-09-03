@@ -171,7 +171,11 @@ export function resolveCustomerRole(
   if (role === "customer" || role === "candidate") return "Candidate";
 
   if (role === "supervisor") {
-    if (scope.includes("candidate")) return "Candidate";
+    // "Assigned Candidates" is a narrower Supervisor scope, not a downgrade
+    // to the Candidate role — only bare "Candidate (Only)" text should do that.
+    if (scope.includes("candidate") && !scope.includes("assigned")) {
+      return "Candidate";
+    }
     return "Supervisor";
   }
 
@@ -201,13 +205,19 @@ export function normalizeAccessScopeValue(
   isAdminOnly: boolean,
 ): NormalizedAccessScope {
   if (isAdminOnly) return "All";
+  // Customer/Candidate is "own profile only" unconditionally (see
+  // resolveCustomerRole) — a stale or mis-set Access Scope column text
+  // (e.g. left over from before the role was changed to Customer) must
+  // never widen it. This is checked before any text parsing below.
+  if (customerRole === "Candidate") return "CandidateOnly";
   const s = value.toLowerCase().trim();
   if (s === "all" || s.includes("all compan")) return "All";
-  if (s.includes("candidate")) return "CandidateOnly";
+  // Check "assigned" first — "Assigned Candidates" contains the word
+  // "candidate" too, and must not be misread as the narrower CandidateOnly.
   if (s.includes("assigned")) return "AssignedCandidates";
+  if (s.includes("candidate")) return "CandidateOnly";
   if (s.includes("department")) return "Department";
   if (s.includes("full company") || s === "company") return "Company";
-  if (customerRole === "Candidate") return "CandidateOnly";
   if (customerRole === "Supervisor") return "Department";
   if (customerRole === "TrainingManager") return "Company";
   return "Company";
@@ -294,8 +304,13 @@ function mapPermissionItem(
     return null;
   }
 
-  const resolvedAccessScope = accessScope || "Full Company";
-  const customerRole = resolveCustomerRole(sharePointRoleType, resolvedAccessScope);
+  const customerRole = resolveCustomerRole(sharePointRoleType, accessScope ?? "");
+  // A blank Access Scope column must not silently widen a Candidate role to
+  // company-wide — Customer/Candidate is "own profile only" by design (see
+  // resolveCustomerRole above). Only default an unset scope to the whole
+  // company for roles where that's the sensible default.
+  const resolvedAccessScope =
+    accessScope || (customerRole === "Candidate" ? "Candidate Only" : "Full Company");
   const isAdminOnly = roleType === "Admin" && customerRole === null;
   // Strict rule (client sign-off requirement): ONLY literal SharePoint
   // `RoleType = Admin` can enter /admin. Training Managers, Supervisors,

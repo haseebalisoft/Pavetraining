@@ -291,14 +291,15 @@ function findWorkforceMatch(
 ): AdminWorkforceRecord | null {
   const cName = nameKey(candidateName);
   const companyExact = nameKey(companyName);
+  // Company-scoped match only — a same-named candidate at a different
+  // company must surface as "not found for that company" (existing message
+  // path), never silently attach the training record to the wrong company.
   return (
     workforce.find(
       (row) =>
         nameKey(row.candidateName) === cName &&
         nameKey(row.companyName) === companyExact,
-    ) ??
-    workforce.find((row) => nameKey(row.candidateName) === cName) ??
-    null
+    ) ?? null
   );
 }
 

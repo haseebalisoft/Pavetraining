@@ -234,8 +234,10 @@ export async function runExpiryReminderCheck(options?: {
             const scope = recipient.normalizedAccessScope;
             if (scope === "Company" || scope === "All") return true;
             if (scope === "Department") {
+              // Fail closed: no department on the hit or no coverage on the
+              // recipient means "not visible", matching customerAccessService.
               if (!hit.department || recipient.departmentScopes.length === 0) {
-                return true;
+                return false;
               }
               return recipient.departmentScopes.some(
                 (d) => nameKey(d) === nameKey(hit.department),

@@ -15,12 +15,73 @@ import { isValidEmail, normalizeEmail } from "@/lib/validation/email";
 const OTP_TTL_MS = 10 * 60 * 1000;
 const OTP_LENGTH = 6;
 
+/**
+ * Best-effort in-memory brute-force guards. Not shared across serverless
+ * instances, but bounds a single warm instance to a handful of guesses per
+ * challenge and a handful of sends per email — closes the "unlimited
+ * attempts against a stateless HMAC challenge" gap without new infra.
+ */
+const OTP_MAX_VERIFY_ATTEMPTS = 5;
+const OTP_MAX_REQUESTS_PER_WINDOW = 5;
+const OTP_REQUEST_WINDOW_MS = 15 * 60 * 1000;
+
 type OtpChallengePayload = {
   email: string;
   exp: number;
   salt: string;
   hash: string;
 };
+
+type ChallengeAttemptState = { count: number; expiresAt: number };
+const verifyAttemptsByChallenge = new Map<string, ChallengeAttemptState>();
+
+const requestTimestampsByEmail = new Map<string, number[]>();
+
+function purgeExpiredChallengeAttempts(now: number): void {
+  for (const [key, state] of verifyAttemptsByChallenge) {
+    if (state.expiresAt <= now) verifyAttemptsByChallenge.delete(key);
+  }
+}
+
+/** Throws once a challenge has been guessed against too many times. */
+function registerVerifyAttempt(challenge: string, exp: number): void {
+  const now = Date.now();
+  purgeExpiredChallengeAttempts(now);
+  const state = verifyAttemptsByChallenge.get(challenge);
+  if (state && state.count >= OTP_MAX_VERIFY_ATTEMPTS) {
+    throw new ValidationError(
+      "Too many attempts for this code. Request a new one.",
+    );
+  }
+  verifyAttemptsByChallenge.set(challenge, {
+    count: (state?.count ?? 0) + 1,
+    expiresAt: exp,
+  });
+}
+
+/** Marks a challenge fully spent so a leaked code+challenge can't be replayed. */
+function consumeChallenge(challenge: string, exp: number): void {
+  verifyAttemptsByChallenge.set(challenge, {
+    count: OTP_MAX_VERIFY_ATTEMPTS,
+    expiresAt: exp,
+  });
+}
+
+/** Throws once an email has requested too many codes within the window. */
+function registerOtpRequest(email: string): void {
+  const now = Date.now();
+  const cutoff = now - OTP_REQUEST_WINDOW_MS;
+  const existing = (requestTimestampsByEmail.get(email) ?? []).filter(
+    (ts) => ts > cutoff,
+  );
+  if (existing.length >= OTP_MAX_REQUESTS_PER_WINDOW) {
+    throw new ValidationError(
+      "Too many codes requested for this email. Please wait a while and try again.",
+    );
+  }
+  existing.push(now);
+  requestTimestampsByEmail.set(email, existing);
+}
 
 function authSecret(): string {
   const secret = process.env.AUTH_SECRET?.trim();
@@ -99,6 +160,7 @@ export async function requestEmailOtp(input: {
   if (!isValidEmail(email)) {
     throw new ValidationError("Enter a valid email address.");
   }
+  registerOtpRequest(email);
 
   const permission = await getActivePermissionByEmail(email);
   if (!permission) {
@@ -225,12 +287,16 @@ export async function verifyEmailOtp(input: {
     throw new ValidationError("This code has expired. Request a new one.");
   }
 
+  registerVerifyAttempt(challenge, payload.exp);
+
   const expected = codeHash(email, payload.salt, code);
   const a = Buffer.from(expected);
   const b = Buffer.from(payload.hash);
   if (a.length !== b.length || !timingSafeEqual(a, b)) {
     throw new ValidationError("Invalid code. Check the email and try again.");
   }
+
+  consumeChallenge(challenge, payload.exp);
 
   const permission = await getActivePermissionByEmail(email);
   if (!permission) {

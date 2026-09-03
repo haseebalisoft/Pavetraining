@@ -321,13 +321,20 @@ function validateCandidateRow(
       `Workforce Number will be auto-assigned: ${workforceNumber}.`,
     );
   }
-  if (
-    workforceNumber &&
-    !allocatedWorkforceNumbers.some(
+  // A manually-typed number that collides with an earlier row in this same
+  // file must be flagged — `workforce` (the DB duplicate check below) isn't
+  // updated until Phase 3, so two new rows sharing a number would otherwise
+  // both silently pass and create duplicate Workforce Numbers.
+  let duplicateInFileWorkforceNumber = false;
+  if (workforceNumber) {
+    const alreadySeen = allocatedWorkforceNumbers.some(
       (value) => value.toLowerCase() === workforceNumber.toLowerCase(),
-    )
-  ) {
-    allocatedWorkforceNumbers.push(workforceNumber);
+    );
+    if (alreadySeen && !autoAssignedWorkforceNumber) {
+      duplicateInFileWorkforceNumber = true;
+    } else if (!alreadySeen) {
+      allocatedWorkforceNumbers.push(workforceNumber);
+    }
   }
 
   const fieldsWithNumber = {
@@ -349,6 +356,23 @@ function validateCandidateRow(
       matchedEntityId: null,
       matchedEntityName: null,
       duplicateMatch: null,
+      ...reportFields,
+    };
+  }
+
+  if (duplicateInFileWorkforceNumber) {
+    return {
+      rowNumber,
+      status: "Duplicate",
+      messages: [
+        ...messages,
+        `Duplicate: Workforce Number "${workforceNumber}" appears earlier in this file.`,
+      ],
+      fields: fieldsWithNumber,
+      resolvedCompanyName,
+      matchedEntityId: null,
+      matchedEntityName: null,
+      duplicateMatch: "workforceNumber",
       ...reportFields,
     };
   }

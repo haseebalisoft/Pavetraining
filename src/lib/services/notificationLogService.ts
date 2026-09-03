@@ -117,8 +117,12 @@ export async function listNotificationLogs(options?: {
   }
 
   try {
+    // Shared, growing list — SharePoint's default order is oldest-id-first,
+    // so a `top` cap without `orderBy` would silently drop the newest rows
+    // (and with them, recent sends the dedupe check needs to see).
     const items = await getListItemsByKey("trainingManagerLogs", {
       top: 2000,
+      orderBy: "id desc",
     });
     const mapped: NotificationLogEntry[] = [];
 

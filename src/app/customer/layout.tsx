@@ -64,6 +64,7 @@ export default async function CustomerLayout({
         canDownload={context.canDownload}
         trainingManager={assigned.trainingManager}
         supervisor={assigned.supervisor}
+        hideCandidatesNav={context.normalizedAccessScope === "CandidateOnly"}
         signOutAction={signOutAction}
       />
       <main className={styles.main}>{children}</main>

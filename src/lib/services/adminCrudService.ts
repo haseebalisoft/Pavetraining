@@ -113,7 +113,10 @@ function optionalText(value: unknown): string | null {
 }
 
 function optionalBool(value: unknown): boolean | undefined {
-  if (value === undefined) return undefined;
+  // Blank spreadsheet cells parse to `null` (not `undefined`) — treat the
+  // same as "not provided" so bulk imports don't fail on an empty checkbox
+  // cell; callers already default absent values with `?? false`.
+  if (value === undefined || value === null) return undefined;
   if (typeof value === "boolean") return value;
   if (typeof value === "string") {
     const normalized = value.trim().toLowerCase();
@@ -4511,6 +4514,61 @@ export interface AdminEventRecord {
   syncHash: string | null;
 }
 
+const LONDON_TZ = "Europe/London";
+
+/** Offset (minutes, local−UTC) London is running at the given UTC instant. */
+function londonOffsetMinutesAt(utcMillis: number): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: LONDON_TZ,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  })
+    .formatToParts(utcMillis)
+    .reduce<Record<string, string>>((acc, part) => {
+      acc[part.type] = part.value;
+      return acc;
+    }, {});
+  const asIfUtc = Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(parts.hour),
+    Number(parts.minute),
+    Number(parts.second),
+  );
+  return (asIfUtc - utcMillis) / 60_000;
+}
+
+/**
+ * Converts a naive "YYYY-MM-DDTHH:mm[:ss]" wall-clock string (as produced by
+ * <input type="datetime-local">) to the correct UTC instant, treating it as
+ * UK local time. The hosting server's own timezone (UTC year-round) is not
+ * the admin's timezone, so parsing it with the platform default silently
+ * shifted every BST (summer) event by an hour.
+ */
+function londonLocalToUtcIso(text: string): string | null {
+  const match = text.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/,
+  );
+  if (!match) return null;
+  const [, y, mo, d, h, mi, s] = match;
+  const guessUtc = Date.UTC(
+    Number(y),
+    Number(mo) - 1,
+    Number(d),
+    Number(h),
+    Number(mi),
+    Number(s ?? "0"),
+  );
+  const offsetMinutes = londonOffsetMinutesAt(guessUtc);
+  return new Date(guessUtc - offsetMinutes * 60_000).toISOString();
+}
+
 function asDateTimeInput(value: unknown): string | null | undefined {
   if (value === undefined) return undefined;
   if (value === null || value === "") return null;
@@ -4519,8 +4577,14 @@ function asDateTimeInput(value: unknown): string | null | undefined {
 
   // datetime-local: 2026-07-25T10:00
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text)) {
-    const parsed = new Date(text);
-    return Number.isNaN(parsed.getTime()) ? text : parsed.toISOString();
+    // Already a qualified instant (trailing Z or numeric offset) — no
+    // reinterpretation needed.
+    if (/(?:Z|[+-]\d{2}:?\d{2})$/.test(text)) {
+      const parsed = new Date(text);
+      return Number.isNaN(parsed.getTime()) ? text : parsed.toISOString();
+    }
+    const converted = londonLocalToUtcIso(text);
+    return converted ?? text;
   }
 
   // date-only: keep as date midnight UTC-ish for SharePoint

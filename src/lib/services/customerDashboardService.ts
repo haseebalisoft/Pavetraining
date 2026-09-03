@@ -387,6 +387,12 @@ export async function getCustomerMatrixRecords(
 
       const key = nameKey(example.candidateName);
       if (!key) continue;
+      // A legacy row that already carries a company link must belong to
+      // THIS company, or it's excluded outright — never let a known
+      // other-company row leak in (or falsely poison the name-uniqueness
+      // check) just because a same-named candidate exists here too.
+      const legacyCompanyId = String(example.companyItemId ?? "").trim();
+      if (legacyCompanyId && legacyCompanyId !== context.companyId) continue;
       legacyByName.set(
         key,
         legacyByName.has(key)

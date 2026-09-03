@@ -71,6 +71,7 @@ export function CustomerCompanyProfileCard({
         )}
 
         <div className={styles.companyHeroText}>
+          <p className={styles.eyebrow}>Company profile</p>
           <h1 className={styles.companyHeroTitle}>{company.companyName}</h1>
 
           <dl className={styles.companyHeroPrimary}>

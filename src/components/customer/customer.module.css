@@ -19,7 +19,8 @@
   z-index: 60;
   padding-top: env(safe-area-inset-top, 0px);
   background: var(--pave-surface);
-  border-bottom: 1px solid var(--pave-border);
+  border-bottom: 1px solid rgba(var(--pave-charcoal-rgb), 0.07);
+  box-shadow: var(--shadow-sm);
 }
 
 .topNavMenuOpen {
@@ -190,9 +191,9 @@
   gap: 0.4rem;
   max-width: 16rem;
   height: 2.5rem;
-  padding: 0.25rem 0.55rem 0.25rem 0.25rem;
+  padding: 0.25rem 0.75rem 0.25rem 0.25rem;
   border: 1px solid var(--pave-border);
-  border-radius: var(--radius-sm);
+  border-radius: 999px;
   background: var(--pave-surface);
   color: var(--pave-charcoal);
   cursor: pointer;
@@ -200,12 +201,14 @@
   font-family: var(--pave-font-body);
   transition:
     background-color 150ms ease,
-    border-color 150ms ease;
+    border-color 150ms ease,
+    box-shadow 150ms ease;
 }
 
 .topNavProfileButton:hover,
 .topNavProfileButton[aria-expanded="true"] {
   background: var(--pave-bg);
+  border-color: rgba(var(--pave-charcoal-rgb), 0.18);
 }
 
 .topNavProfileButton:focus-visible {
@@ -228,6 +231,7 @@
   font-size: 0.72rem;
   font-weight: 800;
   line-height: 1;
+  box-shadow: 0 0 0 3px var(--pave-lime-tint);
 }
 
 .topNavProfileCompany {
@@ -1467,19 +1471,29 @@
 /* CustomerCompanyProfileCard.tsx for the render contract.                    */
 /* ------------------------------------------------------------------------- */
 .companyHero {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
   margin-bottom: 1.75rem;
   padding: 1.85rem 1.85rem 1.5rem;
+  overflow: hidden;
   background: linear-gradient(
-      180deg,
-      rgba(var(--pave-charcoal-rgb), 0.03) 0%,
-      var(--pave-surface) 55%
+      165deg,
+      rgba(var(--pave-charcoal-rgb), 0.035) 0%,
+      var(--pave-surface) 60%
     );
-  border: 1px solid rgba(var(--pave-charcoal-rgb), 0.08);
+  border: 1px solid rgba(var(--pave-charcoal-rgb), 0.07);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-md);
+}
+
+.companyHero::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 4px;
+  background: linear-gradient(90deg, var(--pave-lime) 0%, var(--pave-lime-dark) 100%);
 }
 
 .companyHeroBand {
@@ -1496,10 +1510,10 @@
   height: clamp(13.5rem, 24vw, 18rem);
   object-fit: contain;
   background: var(--pave-surface);
-  border: 1px solid var(--pave-border);
+  border: 1px solid rgba(var(--pave-charcoal-rgb), 0.1);
   border-radius: var(--radius-lg);
   padding: 1rem;
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-md), inset 0 1px 0 rgba(255, 255, 255, 0.7);
 }
 
 .companyHeroLogoPlaceholder {
@@ -1588,18 +1602,39 @@
 .companyHeroSecondary {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 0.55rem 1.35rem;
-  padding-top: 1rem;
+  align-items: flex-start;
+  gap: 0.65rem 1.5rem;
+  padding-top: 1.1rem;
   border-top: 1px solid rgba(var(--pave-charcoal-rgb), 0.08);
-  font-size: 0.86rem;
-  color: var(--pave-charcoal-light, #667085);
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--pave-charcoal);
+}
+
+.companyHeroSecondary > span {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.companyHeroSecondary > span:not(:first-child)::before {
+  content: "";
+  position: absolute;
+  left: -0.75rem;
+  top: 0.15rem;
+  width: 1px;
+  height: 1.5rem;
+  background: rgba(var(--pave-charcoal-rgb), 0.14);
 }
 
 .companyHeroSecondary strong {
-  color: var(--pave-charcoal);
-  font-weight: 600;
-  margin-right: 0.35rem;
+  margin-right: 0;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--pave-charcoal-light, #667085);
 }
 
 @media (max-width: 640px) {

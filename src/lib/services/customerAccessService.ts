@@ -96,7 +96,6 @@ function personMatchesContext(
 ): boolean {
   if (namesMatch(person, context.candidateScopeName)) return true;
   if (namesMatch(person, context.loggedInEmail)) return true;
-  if (namesMatch(person, context.roleLabel)) return true;
   // Permissions "Name" often matches Workforce Training Manager / Supervisor text.
   const emailLocal = context.loggedInEmail.split("@")[0]?.trim();
   if (emailLocal && namesMatch(person, emailLocal)) return true;
@@ -144,8 +143,13 @@ export function candidateRecordAllowed(
     return false;
   }
 
-  // Department / AssignedCandidates — match department coverage first.
-  if (context.departmentScopes.length > 0) {
+  // Department scope: match department coverage first. AssignedCandidates
+  // is meant to be narrower than Department, so it must not fall into this
+  // branch even if Departments metadata happens to be populated on the row.
+  if (
+    context.normalizedAccessScope === "Department" &&
+    context.departmentScopes.length > 0
+  ) {
     const depts = splitDepartments(candidate.department);
     if (
       depts.some((dept) =>

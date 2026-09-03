@@ -91,14 +91,18 @@ function mapActiveCustomerPermission(
           (fields[permissionFields.company] as { LookupId?: unknown }).LookupId,
         )
       : asString(fields[permissionFields.company]));
-  const accessScope =
-    asString(fields[permissionFields.accessScope])?.trim() || "Full Company";
+  const rawAccessScope = asString(fields[permissionFields.accessScope])?.trim();
 
   if (!userEmail || !status || !roleType || !companyId) return null;
   if (status.toLowerCase() !== "active") return null;
 
-  const customerRole = resolveCustomerRole(sharePointRoleType, accessScope);
+  const customerRole = resolveCustomerRole(sharePointRoleType, rawAccessScope ?? "");
   if (!customerRole) return null;
+
+  // Same rule as permissionService.ts mapPermissionItem: a blank Access
+  // Scope must not widen a Candidate role to company-wide notifications.
+  const accessScope =
+    rawAccessScope || (customerRole === "Candidate" ? "Candidate Only" : "Full Company");
 
   const departmentScopes = Array.from(
     new Set([
@@ -174,8 +178,11 @@ function supervisorRelevant(
   if (scope === "Company" || scope === "All") return true;
 
   if (scope === "Department") {
-    if (!context.department?.trim()) return true;
-    if (permission.departmentScopes.length === 0) return true;
+    // Fail closed to match the in-app visibility rule (customerAccessService's
+    // candidateRecordAllowed): no department coverage or no candidate
+    // department means "not visible", not "visible to everyone".
+    if (!context.department?.trim()) return false;
+    if (permission.departmentScopes.length === 0) return false;
     const dept = nameKey(context.department);
     return permission.departmentScopes.some((d) => nameKey(d) === dept);
   }

@@ -51,6 +51,8 @@ interface CustomerTopNavProps {
   canDownload: boolean;
   trainingManager?: string | null;
   supervisor?: string | null;
+  /** CandidateOnly-scoped users only ever see their own record — the company-wide candidates list isn't meaningful for them. */
+  hideCandidatesNav?: boolean;
   signOutAction: () => Promise<void>;
 }
 
@@ -149,9 +151,16 @@ export function CustomerTopNav({
   canDownload,
   trainingManager = null,
   supervisor = null,
+  hideCandidatesNav = false,
   signOutAction,
 }: CustomerTopNavProps) {
   const pathname = usePathname();
+  const primaryLinks = hideCandidatesNav
+    ? PRIMARY_LINKS.filter((link) => link.href !== "/customer/candidates")
+    : PRIMARY_LINKS;
+  const mobileLinks = hideCandidatesNav
+    ? MOBILE_ALL_LINKS.filter((link) => link.href !== "/customer/candidates")
+    : MOBILE_ALL_LINKS;
   const [mobileOpen, setMobileOpen] = useState(false);
   const [trainingOpen, setTrainingOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -240,7 +249,7 @@ export function CustomerTopNav({
         </div>
 
         <nav className={styles.topNavLinksDesktop} aria-label="Customer">
-          {PRIMARY_LINKS.map((link) => (
+          {primaryLinks.map((link) => (
             <Link
               key={link.href}
               href={link.href}
@@ -395,7 +404,7 @@ export function CustomerTopNav({
           </button>
         </div>
         <nav className={styles.mobileDrawerNav} aria-label="Customer mobile">
-          {MOBILE_ALL_LINKS.map((link) => (
+          {mobileLinks.map((link) => (
             <Link
               key={link.href}
               href={link.href}
