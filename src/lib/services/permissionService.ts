@@ -163,7 +163,7 @@ export function resolveCustomerRole(
 
   if (role === "admin") return null;
 
-  if (role === "training manager" || role === "trainingmanager") {
+  if (role === "training manager" || role === "trainingmanager" || role === "manager") {
     return "TrainingManager";
   }
 

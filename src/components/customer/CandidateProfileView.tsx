@@ -585,15 +585,49 @@ export function CandidateProfileView({
         />
         <div className={styles.profileHero}>
           <div className={styles.profileHeroPhoto}>
-            {candidate.photoUrl ? (
+            {isAdmin ? (
+              <ImageUploadButton
+                uploadUrl={`/api/admin/workforce/${candidate.id}/photo`}
+                label={candidate.photoUrl ? "Change photo" : "Add photo"}
+                variant="button"
+                onUploaded={async () => {
+                  setPhotoRevision(Date.now());
+                  router.refresh();
+                }}
+              >
+                {candidate.photoUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    className={styles.candidatePhoto}
+                    src={
+                      photoRevision
+                        ? `${candidate.photoUrl}${candidate.photoUrl.includes("?") ? "&" : "?"}v=${photoRevision}`
+                        : candidate.photoUrl
+                    }
+                    alt={candidate.candidateName}
+                  />
+                ) : (
+                  <div
+                    className={`${styles.candidatePhotoPlaceholder} ${styles.candidatePhotoAddable}`}
+                    aria-hidden
+                  >
+                    <span>
+                      {candidate.candidateName
+                        .split(/\s+/)
+                        .filter(Boolean)
+                        .slice(0, 2)
+                        .map((part) => part[0]?.toUpperCase() ?? "")
+                        .join("")}
+                    </span>
+                    <span className={styles.candidatePhotoHint}>Add photo</span>
+                  </div>
+                )}
+              </ImageUploadButton>
+            ) : candidate.photoUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 className={styles.candidatePhoto}
-                src={
-                  photoRevision
-                    ? `${candidate.photoUrl}${candidate.photoUrl.includes("?") ? "&" : "?"}v=${photoRevision}`
-                    : candidate.photoUrl
-                }
+                src={candidate.photoUrl}
                 alt={candidate.candidateName}
               />
             ) : (
@@ -606,16 +640,6 @@ export function CandidateProfileView({
                   .join("")}
               </div>
             )}
-            {isAdmin ? (
-              <ImageUploadButton
-                uploadUrl={`/api/admin/workforce/${candidate.id}/photo`}
-                label={candidate.photoUrl ? "Change photo" : "Upload photo"}
-                onUploaded={async () => {
-                  setPhotoRevision(Date.now());
-                  router.refresh();
-                }}
-              />
-            ) : null}
           </div>
           <div className={styles.profileHeroCopy}>
             <p className={styles.eyebrow}>

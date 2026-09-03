@@ -26,10 +26,17 @@ export function LiveTrainingRefresh(): null {
       if (document.visibilityState === "visible") refreshIfStale();
     }
 
+    function onPageShow(event: PageTransitionEvent) {
+      // Back/forward cache restores can keep a stale RSC tree after edits.
+      if (event.persisted) refreshIfStale();
+    }
+
     window.addEventListener("focus", refreshIfStale);
+    window.addEventListener("pageshow", onPageShow);
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       window.removeEventListener("focus", refreshIfStale);
+      window.removeEventListener("pageshow", onPageShow);
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [router]);

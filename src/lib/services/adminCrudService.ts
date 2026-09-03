@@ -3119,7 +3119,13 @@ function registerWritePayload(
   if (key === "nporsRegister" || key === "eusrRegister") {
     const expiry =
       input.expiry === undefined ? undefined : asDateInput(input.expiry);
-    if (mode === "create" && !expiry) {
+    // Blank expiry → training date + 3 years on create, and on update when
+    // the form/API explicitly sent a blank expiry.
+    const blankExpirySubmitted =
+      mode === "create"
+        ? !expiry
+        : input.expiry !== undefined && !expiry;
+    if (blankExpirySubmitted) {
       const fromTraining = addCalendarYearsIso(
         optionalText(input.trainingDate),
         3,
@@ -3131,7 +3137,11 @@ function registerWritePayload(
   if (key === "nrswaRegister") {
     const expiry =
       input.expiry === undefined ? undefined : asDateInput(input.expiry);
-    if (mode === "create" && !expiry) {
+    const blankExpirySubmitted =
+      mode === "create"
+        ? !expiry
+        : input.expiry !== undefined && !expiry;
+    if (blankExpirySubmitted) {
       const fromTraining = addCalendarYearsIso(
         optionalText(input.trainingDate),
         5,

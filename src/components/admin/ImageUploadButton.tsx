@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 
 import { useAdminToast } from "@/components/admin/AdminToast";
 import { readPublicApiError } from "@/lib/errors/publicMessages";
@@ -11,10 +11,16 @@ export function ImageUploadButton({
   uploadUrl,
   label = "Upload image",
   onUploaded,
+  variant = "link",
+  children,
 }: {
   uploadUrl: string;
   label?: string;
   onUploaded?: () => Promise<void> | void;
+  /** `link` = text control (tables). `button` = solid control (profiles). */
+  variant?: "link" | "button";
+  /** Optional trigger (e.g. clickable photo). Still shows the text/button label. */
+  children?: ReactNode;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const { pushToast } = useAdminToast();
@@ -43,8 +49,19 @@ export function ImageUploadButton({
     }
   }
 
+  function openPicker() {
+    if (uploading) return;
+    inputRef.current?.click();
+  }
+
   return (
-    <span className={styles.imageUploadRow}>
+    <span
+      className={
+        children || variant === "button"
+          ? `${styles.imageUploadRow} ${styles.imageUploadRowStacked}`
+          : styles.imageUploadRow
+      }
+    >
       <input
         ref={inputRef}
         type="file"
@@ -52,11 +69,24 @@ export function ImageUploadButton({
         hidden
         onChange={(event) => void onFile(event.target.files?.[0] ?? null)}
       />
+      {children ? (
+        <button
+          type="button"
+          className={styles.imageUploadHit}
+          disabled={uploading}
+          aria-label={uploading ? "Uploading…" : label}
+          onClick={openPicker}
+        >
+          {children}
+        </button>
+      ) : null}
       <button
         type="button"
-        className={styles.linkButton}
+        className={
+          variant === "button" ? styles.imageUploadButton : styles.linkButton
+        }
         disabled={uploading}
-        onClick={() => inputRef.current?.click()}
+        onClick={openPicker}
       >
         {uploading ? "Uploading…" : label}
       </button>

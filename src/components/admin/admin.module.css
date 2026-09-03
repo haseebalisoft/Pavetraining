@@ -2196,6 +2196,54 @@ th.stickyActionsCell {
   gap: 0.5rem;
 }
 
+.imageUploadRowStacked {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.45rem;
+}
+
+.imageUploadHit {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  border-radius: 12px;
+}
+
+.imageUploadHit:disabled {
+  cursor: wait;
+  opacity: 0.75;
+}
+
+.imageUploadHit:focus-visible {
+  outline: 2px solid var(--pave-lime);
+  outline-offset: 3px;
+}
+
+.imageUploadButton {
+  min-height: 2.15rem;
+  padding: 0.4rem 0.85rem;
+  border: 1px solid var(--pave-border);
+  border-radius: 0.55rem;
+  background: var(--pave-surface);
+  color: var(--pave-charcoal);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.imageUploadButton:hover:not(:disabled) {
+  border-color: var(--pave-lime);
+  background: var(--pave-lime-tint);
+}
+
+.imageUploadButton:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
 .imageUploadPreview {
   width: 36px;
   height: 36px;

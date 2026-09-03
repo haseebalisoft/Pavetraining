@@ -2,9 +2,13 @@ import { redirect } from "next/navigation";
 
 import { CandidatesView } from "@/components/customer/CandidatesView";
 import { auth } from "@/auth";
-import { getAllowedWorkforceForCustomer } from "@/lib/services/customerAccessService";
+import {
+  getAllowedWorkforceForCustomer,
+  isCompanyWideScope,
+} from "@/lib/services/customerAccessService";
 import { getCustomerContext } from "@/lib/services/customerContextService";
 import { getCustomerMatrixRecords } from "@/lib/services/customerDashboardService";
+import { getWorkforceByCompanyName } from "@/lib/services/workforceService";
 import type { CustomerContext, CustomerMatrixRecord } from "@/types/models";
 
 export const dynamic = "force-dynamic";
@@ -26,6 +30,23 @@ function enrichFromMatrix(
   );
 }
 
+function accessEmptyHintFor(context: CustomerContext): string | null {
+  if (isCompanyWideScope(context.normalizedAccessScope)) return null;
+  if (context.normalizedAccessScope === "Department") {
+    const depts = context.departmentScopes.join(", ");
+    return depts
+      ? `Your Training Manager access is Department Only (${depts}). No workforce rows match those departments. Ask an admin to set Access Scope to Full Company, or align Workforce department names.`
+      : "Your Training Manager access is Department Only, but no departments are assigned on your Permissions row. Ask an admin to set Access Scope to Full Company or add departments.";
+  }
+  if (context.normalizedAccessScope === "AssignedCandidates") {
+    return "Your access is limited to assigned candidates. None are linked to you as Training Manager or Supervisor yet.";
+  }
+  if (context.normalizedAccessScope === "CandidateOnly") {
+    return "Your access is limited to your own candidate profile.";
+  }
+  return null;
+}
+
 export default async function CustomerCandidatesPage() {
   const session = await auth();
   const email = session?.user?.email?.trim().toLowerCase();
@@ -41,9 +62,14 @@ export default async function CustomerCandidatesPage() {
     redirect("/access-denied");
   }
 
-  const [candidates, matrix] = await Promise.all([
+  const [candidates, matrix, companyWorkforceCount] = await Promise.all([
     getAllowedWorkforceForCustomer(context),
     getCustomerMatrixRecords(context.companyName, context),
+    isCompanyWideScope(context.normalizedAccessScope)
+      ? Promise.resolve(0)
+      : getWorkforceByCompanyName(context.companyName).then(
+          (rows) => rows.length,
+        ),
   ]);
 
   const byId = new Map<string, CustomerMatrixRecord>();
@@ -85,10 +111,18 @@ export default async function CustomerCandidatesPage() {
     };
   });
 
+  const accessEmptyHint =
+    enriched.length === 0 &&
+    (companyWorkforceCount > 0 ||
+      !isCompanyWideScope(context.normalizedAccessScope))
+      ? accessEmptyHintFor(context)
+      : null;
+
   return (
     <CandidatesView
       companyName={context.companyName}
       candidates={enriched}
+      accessEmptyHint={accessEmptyHint}
     />
   );
 }

@@ -9,7 +9,7 @@ import type { SharePointListKey } from "@/lib/schema/sharepointSchema";
  * Lists that feed Workforce profile, Candidate profile, and Training summary.
  * A write to any register / matrix / NVQ can change all three surfaces.
  */
-const TRAINING_SURFACE_LISTS: SharePointListKey[] = [
+export const TRAINING_SURFACE_LISTS: SharePointListKey[] = [
   "nporsRegister",
   "eusrRegister",
   "nrswaRegister",
@@ -21,14 +21,21 @@ const TRAINING_SURFACE_LISTS: SharePointListKey[] = [
   "workforce",
 ];
 
-const TRAINING_SURFACE_PATHS: Array<{ path: string; type?: "layout" | "page" }> =
-  [
-    { path: "/admin/workforce", type: "layout" },
-    { path: "/admin/training-matrix" },
-    { path: "/admin/training-records", type: "layout" },
-    { path: "/admin/nvq" },
-    { path: "/customer", type: "layout" },
-  ];
+/**
+ * App Router paths that must drop cache after register/matrix edits so the
+ * candidate profile reflects new training / expiry dates without a hard reload.
+ */
+export const TRAINING_SURFACE_PATHS: Array<{
+  path: string;
+  type?: "layout" | "page";
+}> = [
+  { path: "/admin/workforce", type: "layout" },
+  { path: "/admin/training-matrix", type: "layout" },
+  { path: "/admin/training-records", type: "layout" },
+  { path: "/admin/nvq", type: "layout" },
+  { path: "/customer", type: "layout" },
+  { path: "/customer/candidates", type: "layout" },
+];
 
 /**
  * After Training Matrix / NPORS / EUSR / Streetworks / In-House / NVQ changes,

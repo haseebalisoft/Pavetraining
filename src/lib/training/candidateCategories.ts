@@ -8,6 +8,7 @@ import { CLIENT_MATRIX_CATEGORY_COLUMNS } from "@/lib/services/bulkUpload/client
 import {
   MATRIX_EDITOR_DATE_HEADERS,
   matrixEditorSectionTitle,
+  matrixStoredExpiryKey,
 } from "@/lib/training/matrixEditorFields";
 import { parseEusrCategories } from "@/lib/training/eusrOptions";
 import { getExpiryStatus, type ExpiryStatus } from "@/lib/training/expiryFilters";
@@ -110,6 +111,11 @@ function isCovered(covered: Set<string>, ...values: Array<string | null | undefi
   return values.some((value) => covered.has(coverKey(value)));
 }
 
+/**
+ * True when a dated NPORS register row already represents this matrix header.
+ * Blank-date NPORS rows must not cover — otherwise matrix dates (including
+ * expired) disappear from the profile with nothing to replace them.
+ */
 function nporsCoversHeader(
   records: CustomerNporsRecord[],
   header: string,
@@ -118,6 +124,7 @@ function nporsCoversHeader(
     (entry) => entry.header.toLowerCase() === header.toLowerCase(),
   );
   for (const row of records) {
+    if (!hasAnyDate(row.trainingDate, row.expiry)) continue;
     const category = row.nporsCategory?.trim().toLowerCase() ?? "";
     if (!category) continue;
     if (category === header.toLowerCase()) return true;
@@ -139,6 +146,9 @@ function matrixExpiry(
 ): string | null {
   const fromColumns = row.columnValues?.[header]?.trim() || null;
   if (fromColumns) return fromColumns;
+  const stored =
+    row.categoryTrainingDates?.[matrixStoredExpiryKey(header)]?.trim() || null;
+  if (stored) return stored;
   return NAMED_EXPIRY[header]?.(row)?.trim() || null;
 }
 

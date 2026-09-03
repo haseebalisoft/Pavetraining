@@ -195,6 +195,68 @@ test("hides register and matrix rows when both training date and expiry are blan
   assert.deepEqual(rows, []);
 });
 
+test("blank-date NPORS row does not hide a matrix category that still has dates", () => {
+  const rows = buildCandidateCategoryRows({
+    nporsRecords: [
+      {
+        id: "blank-n001",
+        candidateName: "A",
+        workforceId: "1",
+        nporsNumber: "1",
+        trainingDate: null,
+        trainingAddress: null,
+        noviceOrEwt: null,
+        nporsCategory: "N001 - Ind FLT",
+        outcome: "Pass",
+        expiry: null,
+      },
+    ],
+    matrixRow: {
+      id: "m1",
+      candidateId: "1",
+      candidateName: "A",
+      companyName: "Co",
+      dateOfBirth: null,
+      department: null,
+      trainingManager: null,
+      supervisor: null,
+      overallStatus: null,
+      needsReview: false,
+      nextExpiryDate: null,
+      nporsCategories: null,
+      nporsExpiry: null,
+      nporsNumber: null,
+      cscsNumber: null,
+      cscsExpiry: null,
+      swqrNumber: null,
+      swqrExpiry: null,
+      eusrNumber: null,
+      eusrExpiry: null,
+      eusrCategoryRows: [],
+      inHouseCourse: null,
+      inHouseExpiry: null,
+      n001Expiry: isoDaysFromNow(-90),
+      n003Expiry: null,
+      n004Expiry: null,
+      n010Expiry: null,
+      n020Expiry: null,
+      n021Expiry: null,
+      n027Expiry: null,
+      n100Expiry: null,
+      categoryTrainingDates: {
+        "SSSTS Expiry::expiry": isoDaysFromNow(-30),
+      },
+    },
+  });
+
+  const byCategory = Object.fromEntries(
+    rows.map((row) => [row.category, row]),
+  );
+  assert.equal(byCategory["N001 - Ind FLT"].expiryStatus.status, "expired");
+  assert.equal(byCategory.SSSTS.expiryStatus.status, "expired");
+  assert.equal(rows.some((row) => row.source === "NPORS"), false);
+});
+
 test("keeps expired and training-date-only categories, including extra matrix headers", () => {
   const rows = buildCandidateCategoryRows({
     nporsRecords: [

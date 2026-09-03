@@ -296,6 +296,22 @@ function shouldAutoFillBlankExpiry(
   return outcome.trim().toLowerCase() === "pass";
 }
 
+/** Fill blank expiry from trainingDate + defaultExpiryYears (NPORS/EUSR = 3). */
+function withAutoFilledBlankExpiry(
+  fields: AdminFieldConfig[],
+  state: FormState,
+): FormState {
+  if (String(state.expiry ?? "").trim()) return state;
+  if (
+    !shouldAutoFillBlankExpiry(fields, String(state.trainingOutcome ?? ""))
+  ) {
+    return state;
+  }
+  const filled = autoExpiryIso(fields, String(state.trainingDate ?? ""));
+  if (!filled) return state;
+  return { ...state, expiry: filled };
+}
+
 function toFormValue(value: unknown, type: AdminFieldType): string | boolean {
   if (typeof value === "boolean") return value;
   if (value === null || value === undefined) return "";
@@ -373,7 +389,7 @@ function buildInitialForm(
       state[field.name] = "";
     }
   }
-  return state;
+  return withAutoFilledBlankExpiry(fields, state);
 }
 
 function idsEqual(
@@ -1129,10 +1145,13 @@ export function AdminCrudPage<T extends { id: string }>({
 
   function openEdit(row: T) {
     setEditing(row);
-    const next = applyCompanyLinkToForm(
-      buildInitialForm(fields, row as unknown as Record<string, unknown>),
-      companies,
-      row as unknown as Record<string, unknown>,
+    const next = withAutoFilledBlankExpiry(
+      fields,
+      applyCompanyLinkToForm(
+        buildInitialForm(fields, row as unknown as Record<string, unknown>),
+        companies,
+        row as unknown as Record<string, unknown>,
+      ),
     );
     setForm(next);
     setFormError(null);

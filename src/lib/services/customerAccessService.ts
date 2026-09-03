@@ -90,20 +90,31 @@ function namesMatch(
   return Boolean(a && b && a === b);
 }
 
+function personMatchesContext(
+  person: string | null | undefined,
+  context: CustomerContext,
+): boolean {
+  if (namesMatch(person, context.candidateScopeName)) return true;
+  if (namesMatch(person, context.loggedInEmail)) return true;
+  if (namesMatch(person, context.roleLabel)) return true;
+  // Permissions "Name" often matches Workforce Training Manager / Supervisor text.
+  const emailLocal = context.loggedInEmail.split("@")[0]?.trim();
+  if (emailLocal && namesMatch(person, emailLocal)) return true;
+  return false;
+}
+
 function supervisorMatchesCandidate(
   candidate: WorkforceCandidate,
   context: CustomerContext,
 ): boolean {
-  if (namesMatch(candidate.supervisor, context.candidateScopeName)) {
-    return true;
-  }
-  if (namesMatch(candidate.supervisor, context.loggedInEmail)) {
-    return true;
-  }
-  if (namesMatch(candidate.supervisor, context.roleLabel)) {
-    return true;
-  }
-  return false;
+  return personMatchesContext(candidate.supervisor, context);
+}
+
+function trainingManagerMatchesCandidate(
+  candidate: Pick<WorkforceCandidate, "trainingManager">,
+  context: CustomerContext,
+): boolean {
+  return personMatchesContext(candidate.trainingManager, context);
 }
 
 /**
@@ -113,7 +124,7 @@ function supervisorMatchesCandidate(
 export function candidateRecordAllowed(
   candidate: Pick<
     WorkforceCandidate,
-    "candidateName" | "department" | "supervisor"
+    "candidateName" | "department" | "supervisor" | "trainingManager"
   > & { email?: string | null },
   context: CustomerContext,
 ): boolean {
@@ -145,12 +156,17 @@ export function candidateRecordAllowed(
     }
   }
 
+  // Training Managers see candidates assigned to them on Workforce.
+  if (trainingManagerMatchesCandidate(candidate, context)) {
+    return true;
+  }
+
   // Supervisors can also see candidates assigned to them by name.
   if (supervisorMatchesCandidate(candidate as WorkforceCandidate, context)) {
     return true;
   }
 
-  // Department-only with no scopes and no supervisor match → nothing visible.
+  // Department-only with no scopes and no assignment match → nothing visible.
   return false;
 }
 

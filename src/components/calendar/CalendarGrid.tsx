@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   formatDate,
@@ -32,6 +32,7 @@ interface CalendarGridProps {
 }
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const WEEKDAY_SHORT = ["M", "T", "W", "T", "F", "S", "S"];
 const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 const HOUR_HEIGHT = 48;
 
@@ -132,6 +133,8 @@ export function CalendarGrid({
   emptyLabel = "No events in this period.",
 }: CalendarGridProps) {
   const today = useMemo(() => startOfDay(new Date()), []);
+  const [selectedDay, setSelectedDay] = useState(() => startOfDay(new Date()));
+
   const parsedEvents = useMemo(
     () =>
       events
@@ -164,6 +167,34 @@ export function CalendarGrid({
     return Array.from({ length: 42 }, (_, index) => addDays(gridStart, index));
   }, [cursor]);
 
+  const cursorMonthKey = `${cursor.getFullYear()}-${cursor.getMonth()}`;
+
+  useEffect(() => {
+    if (view !== "month") return;
+
+    const todayInMonth =
+      today.getMonth() === cursor.getMonth() &&
+      today.getFullYear() === cursor.getFullYear();
+    if (todayInMonth) {
+      setSelectedDay(today);
+      return;
+    }
+
+    const firstWithEvents = monthDays.find(
+      (day) =>
+        day.getMonth() === cursor.getMonth() &&
+        parsedEvents.some((entry) =>
+          eventTouchesDay(entry.start, entry.end, day),
+        ),
+    );
+    setSelectedDay(
+      firstWithEvents ??
+        new Date(cursor.getFullYear(), cursor.getMonth(), 1),
+    );
+    // Reset selection when the visible month changes, not on every day tap.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional month-scoped reset
+  }, [view, cursorMonthKey]);
+
   function move(amount: number) {
     onCursorChange(
       view === "month"
@@ -176,6 +207,16 @@ export function CalendarGrid({
     view === "month"
       ? formatMonthYear(cursor)
       : `${formatDate(weekDays[0])} – ${formatDate(weekDays[6])}`;
+
+  const selectedDayEvents = useMemo(
+    () =>
+      parsedEvents
+        .filter((entry) =>
+          eventTouchesDay(entry.start, entry.end, selectedDay),
+        )
+        .map((entry) => entry.event),
+    [parsedEvents, selectedDay],
+  );
 
   return (
     <section className={styles.calendar} aria-label={`${periodLabel} calendar`}>
@@ -198,86 +239,155 @@ export function CalendarGrid({
       </div>
 
       {view === "month" ? (
-        <div className={styles.monthScroller}>
-          <div className={styles.monthGrid}>
-            {WEEKDAYS.map((day) => (
-              <div key={day} className={styles.weekday}>
-                {day}
-              </div>
-            ))}
-            {monthDays.map((day) => {
-              const dayEvents = parsedEvents
-                .filter((entry) =>
-                  eventTouchesDay(entry.start, entry.end, day),
-                )
-                .map((entry) => entry.event);
-              const isCurrentMonth = day.getMonth() === cursor.getMonth();
-              const classNames = [styles.monthDay];
-              if (!isCurrentMonth) classNames.push(styles.outsideMonth);
-              if (sameDay(day, today)) classNames.push(styles.today);
-              const dayOpensEvent =
-                !onSlotClick && dayEvents.length > 0 && Boolean(onEventClick);
-              return (
-                <div
-                  key={dateKey(day)}
-                  className={classNames.join(" ")}
-                  role={onSlotClick ? "button" : undefined}
-                  tabIndex={onSlotClick ? 0 : undefined}
-                  aria-label={`${formatDate(day)}${dayEvents.length ? `, ${dayEvents.length} events` : ""}`}
-                  onClick={() => {
-                    if (dayOpensEvent) {
-                      onEventClick?.(dayEvents[0]);
-                      return;
-                    }
-                    onSlotClick?.(
-                      new Date(
-                        day.getFullYear(),
-                        day.getMonth(),
-                        day.getDate(),
-                        9,
-                      ),
-                    );
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Enter" && event.key !== " ") return;
-                    event.preventDefault();
-                    if (dayOpensEvent) {
-                      onEventClick?.(dayEvents[0]);
-                      return;
-                    }
-                    onSlotClick?.(
-                      new Date(
-                        day.getFullYear(),
-                        day.getMonth(),
-                        day.getDate(),
-                        9,
-                      ),
-                    );
-                  }}
-                >
-                  <span className={styles.dayNumber}>{day.getDate()}</span>
-                  <div className={styles.monthEvents}>
-                    {dayEvents.slice(0, 3).map((event) => (
-                      <EventChip key={`${event.id}-${dateKey(day)}`} event={event} onClick={onEventClick} />
-                    ))}
-                    {dayEvents.length > 3 ? (
-                      <button
-                        type="button"
-                        className={styles.moreCount}
-                        onClick={(clickEvent) => {
-                          clickEvent.stopPropagation();
-                          onEventClick?.(dayEvents[3] ?? dayEvents[0]);
-                        }}
+        <>
+          <div className={styles.monthScroller}>
+            <div className={styles.monthGrid}>
+              {WEEKDAYS.map((day, index) => (
+                <div key={day} className={styles.weekday} aria-label={day}>
+                  <span className={styles.weekdayFull} aria-hidden="true">
+                    {day}
+                  </span>
+                  <span className={styles.weekdayShort} aria-hidden="true">
+                    {WEEKDAY_SHORT[index]}
+                  </span>
+                </div>
+              ))}
+              {monthDays.map((day) => {
+                const dayEvents = parsedEvents
+                  .filter((entry) =>
+                    eventTouchesDay(entry.start, entry.end, day),
+                  )
+                  .map((entry) => entry.event);
+                const isCurrentMonth = day.getMonth() === cursor.getMonth();
+                const isSelected = sameDay(day, selectedDay);
+                const classNames = [styles.monthDay];
+                if (!isCurrentMonth) classNames.push(styles.outsideMonth);
+                if (sameDay(day, today)) classNames.push(styles.today);
+                if (isSelected) classNames.push(styles.selectedDay);
+                return (
+                  <div
+                    key={dateKey(day)}
+                    className={classNames.join(" ")}
+                    role="button"
+                    tabIndex={0}
+                    aria-pressed={isSelected}
+                    aria-label={`${formatDate(day)}${dayEvents.length ? `, ${dayEvents.length} events` : ""}`}
+                    onClick={() => {
+                      setSelectedDay(startOfDay(day));
+                      if (onSlotClick && dayEvents.length === 0) {
+                        onSlotClick(
+                          new Date(
+                            day.getFullYear(),
+                            day.getMonth(),
+                            day.getDate(),
+                            9,
+                          ),
+                        );
+                      }
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter" && event.key !== " ") return;
+                      event.preventDefault();
+                      setSelectedDay(startOfDay(day));
+                      if (onSlotClick && dayEvents.length === 0) {
+                        onSlotClick(
+                          new Date(
+                            day.getFullYear(),
+                            day.getMonth(),
+                            day.getDate(),
+                            9,
+                          ),
+                        );
+                      }
+                    }}
+                  >
+                    <span className={styles.dayNumber}>{day.getDate()}</span>
+                    <div className={styles.monthEvents}>
+                      {dayEvents.slice(0, 3).map((event) => (
+                        <EventChip
+                          key={`${event.id}-${dateKey(day)}`}
+                          event={event}
+                          onClick={onEventClick}
+                        />
+                      ))}
+                      {dayEvents.length > 3 ? (
+                        <button
+                          type="button"
+                          className={styles.moreCount}
+                          onClick={(clickEvent) => {
+                            clickEvent.stopPropagation();
+                            setSelectedDay(startOfDay(day));
+                            onEventClick?.(dayEvents[3] ?? dayEvents[0]);
+                          }}
+                        >
+                          +{dayEvents.length - 3} more
+                        </button>
+                      ) : null}
+                    </div>
+                    {dayEvents.length > 0 ? (
+                      <div
+                        className={styles.eventDots}
+                        aria-hidden="true"
                       >
-                        +{dayEvents.length - 3} more
-                      </button>
+                        {dayEvents.slice(0, 3).map((event) => (
+                          <span
+                            key={`${event.id}-dot-${dateKey(day)}`}
+                            className={styles.eventDot}
+                          />
+                        ))}
+                        {dayEvents.length > 3 ? (
+                          <span className={styles.eventDotMore}>
+                            +{dayEvents.length - 3}
+                          </span>
+                        ) : null}
+                      </div>
                     ) : null}
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
-        </div>
+
+          <div className={styles.dayAgenda} aria-live="polite">
+            <div className={styles.dayAgendaHeader}>
+              <h3>{formatDate(selectedDay)}</h3>
+              <span>
+                {selectedDayEvents.length} event
+                {selectedDayEvents.length === 1 ? "" : "s"}
+              </span>
+            </div>
+            {selectedDayEvents.length === 0 ? (
+              <p className={styles.dayAgendaEmpty}>
+                No events on this day. Tap another date, or switch to List for
+                all events.
+              </p>
+            ) : (
+              <ul className={styles.dayAgendaList}>
+                {selectedDayEvents.map((event) => (
+                  <li key={event.id}>
+                    <button
+                      type="button"
+                      className={styles.dayAgendaItem}
+                      onClick={() => onEventClick?.(event)}
+                    >
+                      <strong>{event.title}</strong>
+                      <span>{eventTimeLabel(event)}</span>
+                      {event.location ? (
+                        <span className={styles.dayAgendaMeta}>
+                          {event.location}
+                        </span>
+                      ) : event.company ? (
+                        <span className={styles.dayAgendaMeta}>
+                          {event.company}
+                        </span>
+                      ) : null}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </>
       ) : (
         <div className={styles.weekScroller}>
           <div className={styles.weekGrid}>

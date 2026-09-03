@@ -513,7 +513,9 @@ async function syncOneCandidate(
       if (record.nporsCategories.length === 0) {
         continue;
       }
-      if (!record.expiry) {
+      const nporsExpiry =
+        record.expiry ?? addCalendarYearsIso(record.trainingDate, 3);
+      if (!nporsExpiry) {
         needsReviewForced = true;
         continue;
       }
@@ -532,9 +534,15 @@ async function syncOneCandidate(
           continue;
         }
         const existing = columnValues[header];
-        if (shouldApplyPassExpiry(existing, record.expiry, "Pass")) {
-          columnValues[header] = record.expiry;
+        if (shouldApplyPassExpiry(existing, nporsExpiry, "Pass")) {
+          columnValues[header] = nporsExpiry;
           if (!fieldsUpdated.includes(header)) fieldsUpdated.push(header);
+          if (record.trainingDate?.trim()) {
+            categoryTrainingDates[header] = record.trainingDate
+              .trim()
+              .slice(0, 10);
+            trainingDatesDirty = true;
+          }
         } else if (existing) {
           warnings.push(
             `NPORS ${code}: kept existing matrix date (register not newer).`,
@@ -550,7 +558,9 @@ async function syncOneCandidate(
           `EUSR #${record.id}: Pass but no EUSR category mapped to a matrix column.`,
         );
       }
-      if (!record.expiry) {
+      const eusrExpiry =
+        record.expiry ?? addCalendarYearsIso(record.trainingDate, 3);
+      if (!eusrExpiry) {
         needsReviewForced = true;
         warnings.push(`EUSR #${record.id}: Pass but missing Expiry.`);
         continue;
@@ -563,10 +573,10 @@ async function syncOneCandidate(
           continue;
         }
         const existing = columnValues[header];
-        if (shouldApplyPassExpiry(existing, record.expiry, "Pass")) {
+        if (shouldApplyPassExpiry(existing, eusrExpiry, "Pass")) {
           stampEusrCategoryDates(
             header,
-            record.expiry,
+            eusrExpiry,
             record.trainingDate,
             columnValues,
             categoryTrainingDates,
@@ -581,9 +591,9 @@ async function syncOneCandidate(
       }
       if (
         workforceEusrExpiry === undefined ||
-        shouldApplyPassExpiry(workforceEusrExpiry, record.expiry, "Pass")
+        shouldApplyPassExpiry(workforceEusrExpiry, eusrExpiry, "Pass")
       ) {
-        workforceEusrExpiry = record.expiry;
+        workforceEusrExpiry = eusrExpiry;
       }
     }
 
@@ -1123,6 +1133,13 @@ export async function syncAfterRegisterSave(
   });
   if (focus.source === "NRSWA" && !focus.expiry && focus.trainingDate) {
     focus.expiry = addCalendarYearsIso(focus.trainingDate, 5);
+  }
+  if (
+    (focus.source === "NPORS" || focus.source === "EUSR") &&
+    !focus.expiry &&
+    focus.trainingDate
+  ) {
+    focus.expiry = addCalendarYearsIso(focus.trainingDate, 3);
   }
 
   const ctx = await loadSyncContext({ ...options, focusRecords: [focus] });

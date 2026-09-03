@@ -23,6 +23,8 @@ export type CustomerCandidateListRow = WorkforceCandidate & {
 interface Props {
   companyName: string;
   candidates: CustomerCandidateListRow[];
+  /** When access scope filtered the company workforce down to zero. */
+  accessEmptyHint?: string | null;
 }
 
 function mutedDash() {
@@ -57,7 +59,11 @@ function textOrDash(value: string | null | undefined): ReactNode {
   return value;
 }
 
-export function CandidatesView({ companyName, candidates }: Props) {
+export function CandidatesView({
+  companyName,
+  candidates,
+  accessEmptyHint = null,
+}: Props) {
   const [search, setSearch] = useState("");
 
   const filtered = useMemo(() => {
@@ -132,7 +138,8 @@ export function CandidatesView({ companyName, candidates }: Props) {
           <h2>No candidates found</h2>
           <p>
             {candidates.length === 0
-              ? "There are no workforce candidates for your company yet."
+              ? accessEmptyHint ||
+                "There are no workforce candidates for your company yet."
               : "No candidates match your search."}
           </p>
         </div>
