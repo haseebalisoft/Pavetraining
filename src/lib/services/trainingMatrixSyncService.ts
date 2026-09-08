@@ -8,6 +8,10 @@ import {
   type AdminTrainingRecord,
   type AdminWorkforceRecord,
 } from "@/lib/services/adminCrudService";
+import {
+  listHasColumn,
+  updateListItemFieldsByKey,
+} from "@/lib/services/sharePointListService";
 import { computeMatrixStatusFromDates } from "@/lib/services/expiryStatusService";
 import {
   MATRIX_CATEGORY_EXPIRY_COLUMNS,
