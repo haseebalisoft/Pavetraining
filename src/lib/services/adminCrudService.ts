@@ -294,7 +294,9 @@ function normalizeCompanySize(value: string | null | undefined): string | null {
   if (key === "medium") return "Medium";
   if (key === "large") return "Large";
   if (key === "enterprise") return "Enterprise";
-  return value.trim();
+  throw new ValidationError(
+    `Company Size must be one of: Small, Medium, Large, Enterprise (got "${value.trim()}").`,
+  );
 }
 
 /** SharePoint Company Status choices: Active | Inactive. */
@@ -1703,6 +1705,8 @@ export interface AdminMatrixRecord {
   id: string;
   candidateName: string;
   companyName: string | null;
+  /** Portal company number resolved from CompanyItemId / CompanyNumber / Workforce. */
+  companyNumber?: string | null;
   department: string | null;
   dateOfBirth: string | null;
   overallStatus: string | null;
@@ -1959,10 +1963,96 @@ export async function listAdminMatrix(
   options: { includeUnlinked?: boolean } = {},
 ) {
   // Portal matrix UI + register sync both use SharePoint "Training Matrix Update".
-  const [workforce, exampleRows] = await Promise.all([
+  const [workforce, exampleRows, companies] = await Promise.all([
     listAdminWorkforce(),
     listTrainingMatrixExampleRows(),
+    listAdminCompanies(),
   ]);
+
+  const companyById = new Map(
+    companies.map((row) => [String(row.id).trim(), row] as const),
+  );
+  const companyByNumber = new Map<string, (typeof companies)[number]>();
+  for (const row of companies) {
+    const key = (row.companyNumber ?? "").trim().toLowerCase();
+    if (key && !companyByNumber.has(key)) companyByNumber.set(key, row);
+  }
+
+  /**
+   * Display company consistent with Workforce when linked.
+   * Linked → Workforce (Company List by companyId when possible).
+   * Unlinked → CompanyItemId → CompanyNumber → stored name.
+   */
+  const resolveMatrixCompany = (
+    example: {
+      companyItemId: string | null;
+      companyNumber: string | null;
+      storedCompanyName: string | null;
+    },
+    wf: AdminWorkforceRecord | null | undefined,
+  ): { companyName: string | null; companyNumber: string | null } => {
+    if (wf) {
+      const wfCompanyId = String(wf.companyId ?? "").trim();
+      if (wfCompanyId) {
+        const byId = companyById.get(wfCompanyId);
+        if (byId) {
+          return {
+            companyName: byId.companyName,
+            companyNumber: byId.companyNumber ?? wf.companyNumber ?? null,
+          };
+        }
+      }
+      const wfNumberKey = String(wf.companyNumber ?? "").trim().toLowerCase();
+      if (wfNumberKey) {
+        const byNumber = companyByNumber.get(wfNumberKey);
+        if (byNumber) {
+          return {
+            companyName: byNumber.companyName,
+            companyNumber: byNumber.companyNumber ?? wf.companyNumber,
+          };
+        }
+      }
+      return {
+        companyName: wf.companyName?.trim() || null,
+        companyNumber: wf.companyNumber?.trim() || null,
+      };
+    }
+
+    const itemId = String(example.companyItemId ?? "").trim();
+    if (itemId) {
+      const byId = companyById.get(itemId);
+      if (byId) {
+        return {
+          companyName: byId.companyName,
+          companyNumber: byId.companyNumber ?? example.companyNumber ?? null,
+        };
+      }
+    }
+
+    const numberKey = String(example.companyNumber ?? "").trim().toLowerCase();
+    if (numberKey) {
+      const byNumber = companyByNumber.get(numberKey);
+      if (byNumber) {
+        return {
+          companyName: byNumber.companyName,
+          companyNumber: byNumber.companyNumber ?? example.companyNumber,
+        };
+      }
+    }
+
+    const stored = example.storedCompanyName?.trim() || null;
+    if (stored) {
+      return {
+        companyName: stored,
+        companyNumber: example.companyNumber?.trim() || null,
+      };
+    }
+
+    return {
+      companyName: companyName?.trim() || null,
+      companyNumber: example.companyNumber?.trim() || null,
+    };
+  };
 
   const companyKey = companyName?.trim().toLowerCase() || "";
   const workforceForCompany = companyKey
@@ -2047,10 +2137,13 @@ export async function listAdminMatrix(
       const nextExpiryDate =
         example.nextExpiryDate ?? earliestDateFromColumns(columnValues);
 
+      const resolvedCompany = resolveMatrixCompany(example, wf);
+
       const record: AdminMatrixRecord = {
         id: `example:${example.id}`,
         candidateName: example.candidateName,
-        companyName: wf?.companyName ?? (companyName?.trim() || null),
+        companyName: resolvedCompany.companyName,
+        companyNumber: resolvedCompany.companyNumber,
         department: wf?.department ?? null,
         dateOfBirth: example.dateOfBirth ?? wf?.dateOfBirth ?? null,
         overallStatus: null,
@@ -2115,6 +2208,7 @@ export async function listAdminMatrix(
           id: `workforce-only:${wf.id}`,
           candidateName: wf.candidateName,
           companyName: wf.companyName,
+          companyNumber: wf.companyNumber,
           department: wf.department,
           dateOfBirth: wf.dateOfBirth,
           overallStatus: null,
@@ -5344,6 +5438,98 @@ function coercePermissionRoleInput(
   return null;
 }
 
+/** Fill company display name when Graph only returned CompanyLookupId. */
+async function withResolvedPermissionCompany(
+  record: AdminPermissionRecord,
+  fallbackCompanyName?: string | null,
+): Promise<AdminPermissionRecord> {
+  if (record.companyName?.trim()) return record;
+  const fallback = fallbackCompanyName?.trim() || null;
+  if (fallback) return { ...record, companyName: fallback };
+  if (!record.companyId) {
+    if (record.permissionRole === "Admin") {
+      return { ...record, companyName: "PAVE Training" };
+    }
+    return record;
+  }
+  try {
+    const companies = await listAdminCompanies();
+    const match = companies.find(
+      (row) => String(row.id).trim() === String(record.companyId).trim(),
+    );
+    if (match?.companyName?.trim()) {
+      return { ...record, companyName: match.companyName.trim() };
+    }
+  } catch (error) {
+    console.warn("[permissions] could not resolve company name for invite", error);
+  }
+  if (record.permissionRole === "Admin") {
+    return { ...record, companyName: "PAVE Training" };
+  }
+  return record;
+}
+
+/**
+ * Portal invite for Permissions create/update. Best-effort — never throws.
+ * Requires Company + Role (Admin uses "PAVE Training" when no company).
+ */
+async function notifyPermissionPortalInvite(
+  record: AdminPermissionRecord,
+  options: {
+    reason: "created" | "updated";
+    fallbackCompanyName?: string | null;
+  },
+): Promise<void> {
+  try {
+    const resolved = await withResolvedPermissionCompany(
+      record,
+      options.fallbackCompanyName,
+    );
+    const companyName = resolved.companyName?.trim() || null;
+    const roleLabel = resolved.roleLabel?.trim() || null;
+    if (!companyName || !roleLabel) {
+      console.warn(
+        `[permissions] portal invite skipped (${options.reason}) for ${resolved.userEmail}: missing ${
+          !companyName ? "Company" : "Role"
+        }.`,
+      );
+      return;
+    }
+
+    // Skip placeholder bulk-created emails — not real mailboxes.
+    if (resolved.userEmail.toLowerCase().endsWith("@pave.local")) {
+      return;
+    }
+
+    const { sendPortalInviteNotification } = await import(
+      "@/lib/services/notificationService"
+    );
+    const result = await sendPortalInviteNotification({
+      to: resolved.userEmail,
+      displayName: resolved.name,
+      companyName,
+      roleLabel,
+      itemId: resolved.id,
+      detail:
+        options.reason === "created"
+          ? "Permissions list invite (created)"
+          : "Permissions list invite (updated)",
+    });
+    if (result.status !== "sent" && result.status !== "queued") {
+      console.warn(
+        `[permissions] portal invite ${result.status} (${options.reason}) to ${resolved.userEmail}: ${
+          result.errorMessage ?? "unknown"
+        }`,
+      );
+    }
+  } catch (error) {
+    console.warn(
+      `[permissions] portal invite failed (${options.reason}):`,
+      error instanceof Error ? error.message : error,
+    );
+  }
+}
+
 export async function createAdminPermission(input: Record<string, unknown>) {
   const userEmail = requiredEmail(input.userEmail, "User email");
   const permissionRole = coercePermissionRoleInput(input);
@@ -5480,21 +5666,13 @@ export async function createAdminPermission(input: Record<string, unknown>) {
     }
   }
 
-  // One invite email when someone is added to Permissions (never fail create).
-  try {
-    const { sendPortalInviteNotification } = await import(
-      "@/lib/services/notificationService"
-    );
-    await sendPortalInviteNotification({
-      to: mapped.userEmail,
-      displayName: mapped.name,
-      companyName: mapped.companyName,
-      roleLabel: mapped.roleLabel,
-      itemId: mapped.id,
-    });
-  } catch {
-    // Invite delivery is best-effort; permission row is already saved.
-  }
+  // Resolve Company LookupId → display name (Graph often omits LookupValue).
+  mapped = await withResolvedPermissionCompany(mapped, companyName);
+
+  await notifyPermissionPortalInvite(mapped, {
+    reason: "created",
+    fallbackCompanyName: companyName,
+  });
 
   return mapped;
 }
@@ -5690,6 +5868,16 @@ export async function updateAdminPermission(
   let mapped = mapPermission(refreshed ?? item);
   if (!mapped) {
     // Graph sometimes returns sparse fields after patch — build from input + prior.
+    const nextPermissionRole = permissionRole ?? previous?.permissionRole ?? null;
+    const nextSharePointRole =
+      sharePointRole ?? previous?.sharePointRoleType ?? "";
+    const nextAccessScope = accessScope ?? previous?.accessScope ?? null;
+    const nextCustomerRole = previous
+      ? resolveCustomerRole(
+          nextSharePointRole,
+          nextAccessScope || "Full Company",
+        )
+      : null;
     mapped = previous
       ? {
           ...previous,
@@ -5700,11 +5888,17 @@ export async function updateAdminPermission(
               ? previous.name
               : (optionalText(input.name) ?? previous.name),
           status: optionalText(input.status) ?? previous.status,
-          accessScope: accessScope ?? previous.accessScope,
+          accessScope: nextAccessScope ?? previous.accessScope,
           companyId: optionalText(input.companyId) ?? previous.companyId,
           companyName:
             optionalText(input.companyName) ?? previous.companyName,
-          permissionRole: permissionRole ?? previous.permissionRole,
+          permissionRole: nextPermissionRole ?? previous.permissionRole,
+          sharePointRoleType: nextSharePointRole || previous.sharePointRoleType,
+          customerRole: nextCustomerRole ?? previous.customerRole,
+          roleLabel: roleLabelFor(
+            nextSharePointRole || previous.sharePointRoleType,
+            nextCustomerRole ?? previous.customerRole,
+          ),
           canView: optionalBool(input.canView) ?? previous.canView,
           canDownload: optionalBool(input.canDownload) ?? previous.canDownload,
           canEdit: optionalBool(input.canEdit) ?? previous.canEdit,
@@ -5715,6 +5909,31 @@ export async function updateAdminPermission(
     throw new ValidationError(
       "Permission was saved but could not be reloaded. Refresh the page.",
     );
+  }
+
+  mapped = await withResolvedPermissionCompany(
+    mapped,
+    optionalText(input.companyName),
+  );
+
+  // Email when access is granted/changed (never fail the save).
+  const wasActive = (previous?.status ?? "").toLowerCase() === "active";
+  const isActive = (mapped.status ?? "").toLowerCase() === "active";
+  const accessChanged =
+    !previous ||
+    previous.userEmail.toLowerCase() !== mapped.userEmail.toLowerCase() ||
+    previous.roleLabel !== mapped.roleLabel ||
+    previous.companyId !== mapped.companyId ||
+    (previous.companyName ?? "").trim().toLowerCase() !==
+      (mapped.companyName ?? "").trim().toLowerCase() ||
+    (previous.accessScope ?? "") !== (mapped.accessScope ?? "") ||
+    (!wasActive && isActive);
+
+  if (isActive && accessChanged) {
+    await notifyPermissionPortalInvite(mapped, {
+      reason: "updated",
+      fallbackCompanyName: optionalText(input.companyName),
+    });
   }
 
   return { record: mapped, choiceWarnings };
@@ -5748,9 +5967,11 @@ export async function deleteAdminPermission(
 
   // Workforce Training manager / Supervisor are Lookups → Permissions with
   // Restrict Delete. Clear those refs first or SharePoint blocks the delete.
-  const { clearInboundLookupsToPermission } = await import(
-    "@/lib/services/adminSafeDelete"
-  );
+  const {
+    clearInboundLookupsToPermission,
+    describeBlockingReferences,
+    PERMISSION_INBOUND_LOOKUPS,
+  } = await import("@/lib/services/adminSafeDelete");
   await clearInboundLookupsToPermission(trimmed);
 
   try {
@@ -5758,14 +5979,46 @@ export async function deleteAdminPermission(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const related =
-      /related to another item|cannot be deleted because/i.test(message);
-    throw new ValidationError(
-      related
-        ? "SharePoint still blocks deleting this permission because another list row references it. Cleared Workforce Training manager / Supervisor links — if it keeps failing, ask a Site Owner which list has a lookup to Permissions with “Restrict delete”."
-        : message.includes("SharePoint") || message.includes("delete")
+      /related to another item|cannot be deleted because|restrict/i.test(
+        message,
+      );
+    if (related) {
+      // Clear again in case a concurrent edit re-linked during the first pass.
+      await clearInboundLookupsToPermission(trimmed);
+      try {
+        await deleteListItemByKey("permissions", trimmed);
+      } catch (retryError) {
+        const retryMessage =
+          retryError instanceof Error ? retryError.message : String(retryError);
+        const stillRelated =
+          /related to another item|cannot be deleted because|restrict/i.test(
+            retryMessage,
+          );
+        if (stillRelated) {
+          const blockers = await describeBlockingReferences(
+            trimmed,
+            PERMISSION_INBOUND_LOOKUPS,
+          );
+          throw new ValidationError(
+            blockers.length
+              ? `SharePoint still blocks deleting this permission because these rows still reference it: ${blockers.join("; ")}. Reassign or clear those Workforce Training manager / Supervisor fields, then retry.`
+              : "SharePoint still blocks deleting this permission because another list references it, and the reference is outside Workforce Training manager / Supervisor. Ask a Site Owner which list has a lookup to Permissions with “Restrict delete”.",
+          );
+        }
+        throw new ValidationError(
+          retryMessage.includes("SharePoint") ||
+            retryMessage.includes("delete")
+            ? retryMessage
+            : `Could not delete this permission. ${retryMessage}`,
+        );
+      }
+    } else {
+      throw new ValidationError(
+        message.includes("SharePoint") || message.includes("delete")
           ? message
           : `Could not delete this permission. ${message}`,
-    );
+      );
+    }
   }
 
   // Prove the Graph delete/recycle stuck before telling the UI it worked.

@@ -6,7 +6,6 @@ import {
   ValidationError,
 } from "@/lib/services/errorHandler";
 import {
-  buildFieldLookupIdEqualsFilter,
   deleteListItemByKey,
   extractLookupId,
   getListItemsByKey,
@@ -128,6 +127,10 @@ function extractMultiLookupIds(
  * Null out (or strip from multi-lookup) every inbound ref so SharePoint
  * Restrict Delete allows removing the target item. Best-effort per row;
  * continues on individual patch failures and logs warnings.
+ *
+ * Always full-scans the source list. Filtered `*LookupId eq N` reads often
+ * return empty without error (non-indexed / HonorNonIndexedQueries), which
+ * left Restrict Delete refs in place and made Permissions deletes fail.
  */
 export async function clearInboundLookupRefs(
   targetItemId: string,
@@ -144,19 +147,18 @@ export async function clearInboundLookupRefs(
       target.lookupIdFields.map(async (lookupIdField) => {
         const fieldInternal = lookupIdField.replace(/LookupId$/, "");
 
-        if (target.multi) {
-          try {
-            // Multi-lookup OData filters are unreliable — scan and strip.
-            const items = await getListItemsByKey(target.listKey, { top: 5000 });
-            await Promise.all(
-              items.map(async (item) => {
-                const ids = extractMultiLookupIds(item.fields, fieldInternal);
-                if (!ids.some((id) => idsMatch(id, trimmed))) return;
-                const next = ids
-                  .filter((id) => !idsMatch(id, trimmed))
-                  .map((id) => Number(id))
-                  .filter((id) => Number.isFinite(id));
-                try {
+        try {
+          const items = await getListItemsByKey(target.listKey, { top: 5000 });
+          await Promise.all(
+            items.map(async (item) => {
+              try {
+                if (target.multi) {
+                  const ids = extractMultiLookupIds(item.fields, fieldInternal);
+                  if (!ids.some((id) => idsMatch(id, trimmed))) return;
+                  const next = ids
+                    .filter((id) => !idsMatch(id, trimmed))
+                    .map((id) => Number(id))
+                    .filter((id) => Number.isFinite(id));
                   await updateListItemFieldsByKey(
                     target.listKey,
                     item.id,
@@ -165,40 +167,18 @@ export async function clearInboundLookupRefs(
                     },
                     { skipReload: true },
                   );
-                  cleared += 1;
-                } catch (error) {
-                  console.warn(
-                    `[safeDelete] clear multi ${target.listKey}#${item.id} ${lookupIdField}:`,
-                    error instanceof Error ? error.message : error,
+                } else {
+                  const id = extractLookupId(item.fields, fieldInternal);
+                  if (!idsMatch(id, trimmed)) return;
+                  await updateListItemFieldsByKey(
+                    target.listKey,
+                    item.id,
+                    {
+                      [lookupIdField]: null,
+                    },
+                    { skipReload: true },
                   );
                 }
-              }),
-            );
-          } catch (error) {
-            console.warn(
-              `[safeDelete] multi scan ${target.listKey}.${lookupIdField}:`,
-              error instanceof Error ? error.message : error,
-            );
-          }
-          return;
-        }
-
-        try {
-          const items = await getListItemsByKey(target.listKey, {
-            filter: buildFieldLookupIdEqualsFilter(lookupIdField, numericId),
-            top: 5000,
-          });
-          await Promise.all(
-            items.map(async (item) => {
-              try {
-                await updateListItemFieldsByKey(
-                  target.listKey,
-                  item.id,
-                  {
-                    [lookupIdField]: null,
-                  },
-                  { skipReload: true },
-                );
                 cleared += 1;
               } catch (error) {
                 console.warn(
@@ -209,45 +189,10 @@ export async function clearInboundLookupRefs(
             }),
           );
         } catch (error) {
-          // Filter unsupported — fall back to full scan for this field.
           console.warn(
-            `[safeDelete] filter ${target.listKey}.${lookupIdField} failed, scanning:`,
+            `[safeDelete] scan ${target.listKey}.${lookupIdField}:`,
             error instanceof Error ? error.message : error,
           );
-          try {
-            const items = await getListItemsByKey(target.listKey, {
-              top: 5000,
-            });
-            await Promise.all(
-              items.map(async (item) => {
-                const id = extractLookupId(item.fields, fieldInternal);
-                if (!idsMatch(id, trimmed)) return;
-                try {
-                  await updateListItemFieldsByKey(
-                    target.listKey,
-                    item.id,
-                    {
-                      [lookupIdField]: null,
-                    },
-                    { skipReload: true },
-                  );
-                  cleared += 1;
-                } catch (patchError) {
-                  console.warn(
-                    `[safeDelete] scan-clear ${target.listKey}#${item.id}:`,
-                    patchError instanceof Error
-                      ? patchError.message
-                      : patchError,
-                  );
-                }
-              }),
-            );
-          } catch (scanError) {
-            console.warn(
-              `[safeDelete] scan ${target.listKey}.${lookupIdField}:`,
-              scanError instanceof Error ? scanError.message : scanError,
-            );
-          }
         }
       }),
     ),
@@ -298,17 +243,20 @@ export async function describeBlockingReferences(
       target.lookupIdFields.map(async (lookupIdField) => {
         const fieldInternal = lookupIdField.replace(/LookupId$/, "");
         try {
-          const items = target.multi
-            ? (await getListItemsByKey(target.listKey, { top: 5000 })).filter(
-                (item) =>
-                  extractMultiLookupIds(item.fields, fieldInternal).some((id) =>
-                    idsMatch(id, trimmed),
-                  ),
-              )
-            : await getListItemsByKey(target.listKey, {
-                filter: buildFieldLookupIdEqualsFilter(lookupIdField, numericId),
-                top: 5000,
-              });
+          // Same full-scan rule as clearInboundLookupRefs — filtered probes
+          // miss Restrict Delete refs and report "unknown list" falsely.
+          const items = (await getListItemsByKey(target.listKey, {
+            top: 5000,
+          })).filter((item) =>
+            target.multi
+              ? extractMultiLookupIds(item.fields, fieldInternal).some((id) =>
+                  idsMatch(id, trimmed),
+                )
+              : idsMatch(
+                  extractLookupId(item.fields, fieldInternal),
+                  trimmed,
+                ),
+          );
           if (items.length) {
             const rows = items
               .slice(0, 5)

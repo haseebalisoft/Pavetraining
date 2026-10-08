@@ -7,6 +7,7 @@ import {
   TrainingRecordsTable,
   type TrainingRecordColumn,
 } from "@/components/customer/TrainingRecordsTable";
+import { splitNporsCategory } from "@/lib/training/nporsCategoryOptions";
 import { formatDate } from "@/lib/utils/formatDate";
 import type { CustomerNporsRecord } from "@/types/models";
 
@@ -17,9 +18,25 @@ const columns: TrainingRecordColumn<CustomerNporsRecord>[] = [
     render: (row) => formatTextCell(row.candidateName),
   },
   {
-    key: "nporsNumber",
-    header: "NPORS Number",
-    render: (row) => formatTextCell(row.nporsNumber),
+    key: "categoryName",
+    header: "Category name",
+    render: (row) => {
+      const split = splitNporsCategory(row.nporsCategory);
+      return formatTextCell(split.categoryName || row.nporsCategory);
+    },
+  },
+  {
+    key: "nNumber",
+    header: "N number",
+    render: (row) => {
+      const split = splitNporsCategory(row.nporsCategory);
+      return formatTextCell(split.nNumber || row.nporsNumber);
+    },
+  },
+  {
+    key: "expiry",
+    header: "Expiry date",
+    render: (row) => formatExpiryCell(row.expiry),
   },
   {
     key: "trainingDate",
@@ -27,29 +44,14 @@ const columns: TrainingRecordColumn<CustomerNporsRecord>[] = [
     render: (row) => formatDate(row.trainingDate),
   },
   {
-    key: "trainingAddress",
-    header: "Training Address",
-    render: (row) => formatTextCell(row.trainingAddress),
-  },
-  {
-    key: "noviceOrEwt",
-    header: "Novice or EWT",
-    render: (row) => formatTextCell(row.noviceOrEwt),
-  },
-  {
-    key: "nporsCategory",
-    header: "NPORS Category",
-    render: (row) => formatTextCell(row.nporsCategory),
+    key: "nporsNumber",
+    header: "NPORS card number",
+    render: (row) => formatTextCell(row.nporsNumber),
   },
   {
     key: "outcome",
     header: "Outcome Pass/Fail",
     render: (row) => formatOutcomeCell(row.outcome),
-  },
-  {
-    key: "expiry",
-    header: "Expiry",
-    render: (row) => formatExpiryCell(row.expiry),
   },
 ];
 
@@ -70,8 +72,6 @@ export function NporsRecordsView({ companyName, records }: Props) {
         [
           row.candidateName,
           row.nporsNumber,
-          row.trainingAddress,
-          row.noviceOrEwt,
           row.nporsCategory,
           row.outcome,
         ]

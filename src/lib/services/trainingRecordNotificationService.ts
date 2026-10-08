@@ -3,7 +3,11 @@ import "server-only";
 import { getSharePointFields } from "@/lib/schema/sharepointSchema";
 import { hasRecentNotificationDedupe } from "@/lib/services/notificationLogService";
 import { sendNotification } from "@/lib/services/notificationService";
-import { emailLogoHtml } from "@/lib/services/notificationTemplateService";
+import {
+  loadEmailBrandAttachments,
+  trainingRecordChangeEmailTemplate,
+} from "@/lib/services/notificationTemplateService";
+import { splitNporsCategory } from "@/lib/training/nporsCategoryOptions";
 import {
   asString,
   extractLookupId,
@@ -52,6 +56,8 @@ export interface TrainingRecordNotificationRecord {
   expiry?: string | null;
   /** Register-specific category / course fields — first non-empty wins. */
   nporsCategory?: string | null;
+  /** NPORS card / registration number from the register row. */
+  nporsNumber?: string | null;
   eusrCategory?: string | null;
   streetworksCategory?: string | null;
   certificateCategory?: string | null;
@@ -81,15 +87,6 @@ const REGISTER_LABELS: Record<Register, string> = {
   inHouseCertificates: "In-House",
   nvqRegister: "NVQ",
 };
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
 
 function isConfirmedOutcome(outcome: string | null | undefined): boolean {
   const value = outcome?.trim().toLowerCase();
@@ -201,7 +198,7 @@ async function loadTrainingManagerContact(
 /**
  * Compose the email body. Keeps the exact contract the client specified:
  *   Candidate name / Training category / Training date / Expiry date /
- *   Company / Updated by
+ *   Company / Updated by — plus a portal link for external customers.
  */
 function buildEmail(input: {
   action: ChangeAction;
@@ -210,6 +207,7 @@ function buildEmail(input: {
   category: string;
   actor: string;
   tmName: string | null;
+  includeCompanyLogo?: boolean;
 }): { subject: string; text: string; html: string } {
   const registerLabel = REGISTER_LABELS[input.register];
   const actionLabel =
@@ -228,40 +226,34 @@ function buildEmail(input: {
   const outcome = input.record.trainingOutcome?.trim();
   const greeting = input.tmName ? `Hi ${input.tmName},` : "Hi,";
 
-  const subject = `Training ${actionLabel}: ${candidate} — ${registerLabel} · ${input.category}`;
+  const nporsSplit =
+    input.register === "nporsRegister"
+      ? splitNporsCategory(input.record.nporsCategory)
+      : null;
+  const categoryName =
+    nporsSplit?.categoryName ||
+    (input.register === "nporsRegister" ? input.category : input.category);
+  const nNumber =
+    nporsSplit?.nNumber ||
+    (input.register === "nporsRegister"
+      ? input.record.nporsNumber?.trim() || null
+      : null);
 
-  const text = [
+  return trainingRecordChangeEmailTemplate({
     greeting,
-    "",
-    `A ${registerLabel} training record has been ${actionLabel} in the PAVE Training Portal.`,
-    "",
-    `Candidate name: ${candidate}`,
-    `Training category: ${input.category}`,
-    `Training date: ${trainingDate}`,
-    `Expiry date: ${expiry}`,
-    `Company: ${company}`,
-    outcome ? `Outcome: ${outcome}` : null,
-    `Updated by: ${input.actor}`,
-    "",
-    "Sign in to the PAVE Training Portal to review the record and any candidate documents.",
-  ]
-    .filter((line): line is string => line !== null)
-    .join("\n");
-
-  const html = `${emailLogoHtml()}<p>${escapeHtml(greeting)}</p>
-<p>A <strong>${escapeHtml(registerLabel)}</strong> training record has been <strong>${escapeHtml(actionLabel)}</strong> in the PAVE Training Portal.</p>
-<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
-  <tr><td style="padding:2px 12px 2px 0"><strong>Candidate name</strong></td><td style="padding:2px 0">${escapeHtml(candidate)}</td></tr>
-  <tr><td style="padding:2px 12px 2px 0"><strong>Training category</strong></td><td style="padding:2px 0">${escapeHtml(input.category)}</td></tr>
-  <tr><td style="padding:2px 12px 2px 0"><strong>Training date</strong></td><td style="padding:2px 0">${escapeHtml(trainingDate)}</td></tr>
-  <tr><td style="padding:2px 12px 2px 0"><strong>Expiry date</strong></td><td style="padding:2px 0">${escapeHtml(expiry)}</td></tr>
-  <tr><td style="padding:2px 12px 2px 0"><strong>Company</strong></td><td style="padding:2px 0">${escapeHtml(company)}</td></tr>
-  ${outcome ? `<tr><td style="padding:2px 12px 2px 0"><strong>Outcome</strong></td><td style="padding:2px 0">${escapeHtml(outcome)}</td></tr>` : ""}
-  <tr><td style="padding:2px 12px 2px 0"><strong>Updated by</strong></td><td style="padding:2px 0">${escapeHtml(input.actor)}</td></tr>
-</table>
-<p>Sign in to the PAVE Training Portal to review the record and any candidate documents.</p>`;
-
-  return { subject, text, html };
+    registerLabel,
+    actionLabel,
+    candidate,
+    category: input.category,
+    categoryName,
+    nNumber,
+    trainingDate,
+    expiry,
+    company,
+    outcome,
+    actor: input.actor,
+    includeCompanyLogo: input.includeCompanyLogo,
+  });
 }
 
 /**
@@ -323,6 +315,9 @@ export async function notifyTrainingRecordChange(input: {
       };
     }
 
+    const brand = await loadEmailBrandAttachments({
+      companyName: input.record.companyName,
+    });
     const template = buildEmail({
       action,
       register: input.register,
@@ -330,6 +325,7 @@ export async function notifyTrainingRecordChange(input: {
       category,
       actor,
       tmName: contact.displayName,
+      includeCompanyLogo: brand.includeCompanyLogo,
     });
 
     const result = await sendNotification({
@@ -344,6 +340,7 @@ export async function notifyTrainingRecordChange(input: {
       actorEmail: input.actorEmail,
       detail: `${REGISTER_LABELS[input.register]} training ${action}`,
       fromName: "PAVE Training",
+      attachments: brand.attachments.length ? brand.attachments : undefined,
     });
 
     return {

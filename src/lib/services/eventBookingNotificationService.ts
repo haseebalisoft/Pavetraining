@@ -9,7 +9,10 @@ import { getNotificationSettings } from "@/lib/services/notificationConfig";
 import { hasRecentNotificationDedupe } from "@/lib/services/notificationLogService";
 import { resolveTrainingManagerRecipients } from "@/lib/services/notificationRecipientService";
 import { sendNotification } from "@/lib/services/notificationService";
-import { bookingConfirmedEmailTemplate } from "@/lib/services/notificationTemplateService";
+import {
+  bookingConfirmedEmailTemplate,
+  loadPaveLogoAttachment,
+} from "@/lib/services/notificationTemplateService";
 import { formatDate, formatTime } from "@/lib/utils/formatDate";
 import type { NotificationSendResult } from "@/types/notifications";
 
@@ -91,6 +94,7 @@ export async function notifyBookingConfirmed(input: {
   const settings = await getNotificationSettings();
   const organizerEmail =
     settings.fromEmail?.trim() || "info@pavetraining.co.uk";
+  const logo = await loadPaveLogoAttachment();
   const results: NotificationSendResult[] = [];
   const recipients: string[] = [];
 
@@ -130,6 +134,20 @@ export async function notifyBookingConfirmed(input: {
       attendeeName: manager.displayName,
     });
 
+    const attachments = [
+      ...(logo ? [logo] : []),
+      ...(ics
+        ? [
+            {
+              filename: ics.filename,
+              contentType: ics.contentType,
+              content: ics.content,
+              encoding: "utf8" as const,
+            },
+          ]
+        : []),
+    ];
+
     recipients.push(manager.email);
     results.push(
       await sendNotification({
@@ -144,16 +162,7 @@ export async function notifyBookingConfirmed(input: {
         actorEmail: input.actorEmail,
         detail: `Booking confirmed: ${input.title}`,
         fromName: "PAVE Training",
-        attachments: ics
-          ? [
-              {
-                filename: ics.filename,
-                contentType: ics.contentType,
-                content: ics.content,
-                encoding: "utf8",
-              },
-            ]
-          : undefined,
+        attachments: attachments.length ? attachments : undefined,
       }),
     );
   }

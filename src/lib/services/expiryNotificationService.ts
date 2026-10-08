@@ -15,7 +15,7 @@ import {
   sendAdminAlert,
   sendNotification,
 } from "@/lib/services/notificationService";
-import { expiryReminderEmailTemplate } from "@/lib/services/notificationTemplateService";
+import { expiryReminderEmailTemplate, loadEmailBrandAttachments } from "@/lib/services/notificationTemplateService";
 import {
   daysUntilExpiry,
 } from "@/lib/training/expiryFilters";
@@ -308,10 +308,16 @@ export async function runExpiryReminderCheck(options?: {
           continue;
         }
 
+        const companyMeta = companyByName.get(nameKey(companyName));
+        const brand = await loadEmailBrandAttachments({
+          companyId: companyMeta?.id,
+          companyName,
+        });
         const template = expiryReminderEmailTemplate({
           companyName,
           windowLabel: windowLabel(window, urgentDays, upcomingDays),
           candidateCount: visibleHits.length,
+          includeCompanyLogo: brand.includeCompanyLogo,
         });
 
         if (dryRun) {
@@ -343,6 +349,8 @@ export async function runExpiryReminderCheck(options?: {
                 `${h.candidateName} · ${h.nextExpiryDate} · ${h.daysUntil}d`,
             )
             .join(" | "),
+          fromName: "PAVE Training",
+          attachments: brand.attachments.length ? brand.attachments : undefined,
         });
 
         // Record per-candidate dedupe markers via the same log key pattern

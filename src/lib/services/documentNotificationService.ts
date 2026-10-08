@@ -12,7 +12,10 @@ import {
 } from "@/lib/services/notificationConfig";
 import { resolveNotificationRecipients } from "@/lib/services/notificationRecipientService";
 import { sendAdminAlert, sendNotification } from "@/lib/services/notificationService";
-import { documentUploadEmailTemplate } from "@/lib/services/notificationTemplateService";
+import {
+  documentUploadEmailTemplate,
+  loadEmailBrandAttachments,
+} from "@/lib/services/notificationTemplateService";
 import {
   getListItemByKey,
   listHasColumn,
@@ -191,10 +194,14 @@ export async function notifyDocumentUpload(
     };
   }
 
+  const brand = await loadEmailBrandAttachments({
+    companyName: document.company,
+  });
   const template = documentUploadEmailTemplate({
     companyName: document.company ?? "your company",
     candidateName: document.candidate,
     documentType: document.documentType ?? "Document",
+    includeCompanyLogo: brand.includeCompanyLogo,
   });
 
   const results = [];
@@ -211,6 +218,7 @@ export async function notifyDocumentUpload(
         actorEmail: options.actorEmail,
         dedupeKey: `document:${document.id}:${recipient.email}`,
         detail: `DocumentType=${document.documentType}; Candidate=${document.candidate ?? "—"}`,
+        attachments: brand.attachments.length ? brand.attachments : undefined,
       }),
     );
   }

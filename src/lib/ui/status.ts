@@ -20,8 +20,8 @@ export function toneForExpiryStatus(status: ExpiryStatusCode): StatusTone {
     case "missing":
       return "missing";
     case "expired":
-    case "urgent":
       return "danger";
+    case "urgent":
     case "upcoming":
       return "warn";
     case "valid":

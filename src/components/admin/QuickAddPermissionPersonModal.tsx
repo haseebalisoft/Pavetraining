@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { createPortal } from "react-dom";
 
 import { readPublicApiError } from "@/lib/errors/publicMessages";
 import type { AdminPermissionRecord } from "@/lib/services/adminCrudService";
@@ -66,14 +67,19 @@ export function QuickAddPermissionPersonModal({
 
   useEffect(() => {
     if (!open) return;
+    // Capture-phase so Escape closes this modal instead of the parent
+    // Workforce SlideOverPanel (which also listens on window).
     function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (!saving) onClose();
     }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open, onClose, saving]);
 
-  if (!open) return null;
+  if (!open || typeof document === "undefined") return null;
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -123,7 +129,10 @@ export function QuickAddPermissionPersonModal({
     }
   }
 
-  return (
+  // Portal above the Workforce edit SlideOver (z-index ~12000). Rendering
+  // inside the page tree left this dialog behind the drawer so "+ Add new"
+  // looked broken.
+  return createPortal(
     <div
       className={styles.quickAddScrim}
       role="dialog"
@@ -210,6 +219,7 @@ export function QuickAddPermissionPersonModal({
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

@@ -147,19 +147,28 @@ function flattenMatrixEditorRow(row: AdminMatrixRecord): AdminMatrixRecord {
   return { ...row, ...extra };
 }
 
-/** Name first (sticky), then company, then template headers / status. */
+/** Candidate name + Company Name sticky; number/workforce follow. */
 const columns: AdminColumn<AdminMatrixRecord>[] = [
   {
     key: "Name",
-    header: "Name",
+    header: "Candidate Name",
     render: (row) => matrixCell(row, "Name"),
   },
   {
-    key: "company",
-    header: "Company",
+    key: "companyName",
+    header: "Company Name",
+    render: (row) => (
+      <span className={styles.matrixTextCell} title={row.companyName ?? undefined}>
+        {row.companyName?.trim() || "—"}
+      </span>
+    ),
+  },
+  {
+    key: "companyNumber",
+    header: "Company Number",
     render: (row) => (
       <span className={styles.matrixTextCell}>
-        {row.companyName?.trim() || "—"}
+        {row.companyNumber?.trim() || "—"}
       </span>
     ),
   },
@@ -224,7 +233,14 @@ const fields: AdminFieldConfig[] = [
   },
   {
     name: "companyName",
-    label: "Company (from Workforce)",
+    label: "Company Name (from Workforce when linked)",
+    type: "text",
+    readOnly: true,
+    section: "Candidate",
+  },
+  {
+    name: "companyNumber",
+    label: "Company Number",
     type: "text",
     readOnly: true,
     section: "Candidate",
@@ -287,7 +303,7 @@ function SyncResultsPanel({ result }: { result: MatrixSyncResult }) {
     <div className={styles.syncPanel} role="status">
       <div className={styles.syncPanelHeader}>
         <strong>
-          {result.dryRun ? "Dry run" : "Sync"} · {result.scope}
+          {result.dryRun ? "Dry run" : "Refresh"} · {result.scope}
         </strong>
         <span>
           Updated {result.summary.updated} · Created {result.summary.created} ·
@@ -366,12 +382,9 @@ export function AdminMatrixClient({
   const { pushToast } = useAdminToast();
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<MatrixSyncResult | null>(null);
-  const [syncCompanyId, setSyncCompanyId] = useState("");
-  // New behaviour (client sign-off requirement): Admin sees ALL rows by
-  // default — Linked, Needs Review, and Orphan. A tab strip narrows the view.
+  // Admin sees ALL rows by default — Linked, Needs Review, and Orphan.
+  // Tabs narrow the view.
   const [linkFilter, setLinkFilter] = useState<LinkFilter>("all");
-  // Row currently being linked to a Workforce candidate via the repair modal.
-  // Null when the modal is closed.
   const [linkTarget, setLinkTarget] = useState<AdminMatrixRecord | null>(null);
 
   const orphanCount = initialRows.filter(
@@ -471,8 +484,7 @@ export function AdminMatrixClient({
             ({needsReviewCount} need review, {orphanCount} orphan
             {orphanCount === 1 ? "" : "s"}). Visible to Admin but hidden from
             Customer until linked. Use <strong>Link to Workforce</strong> on
-            the row or click <strong>Sync candidate</strong> after fixing the
-            name.
+            the row to fix them.
           </span>
         </div>
       ) : null}
@@ -501,7 +513,7 @@ export function AdminMatrixClient({
 
       <AdminCrudPage<AdminMatrixRecord>
         title="Training Matrix"
-        description="Register sync (NPORS / EUSR / Streetworks / In-House Asbestos → N031) and direct admin edits both update this matrix. The editor lists every configured category with a training date and an expiry date. Cells marked Manual are not overwritten by register sync. Pass updates expiry when newer; Fail never extends."
+        description="Company Name matches Workforce when the row is linked. Edit category training and expiry dates below — cells marked Manual are not overwritten when registers refresh. Pass updates expiry when newer; Fail never extends."
         columns={columns}
         fields={fields}
         companies={companies}
@@ -511,7 +523,7 @@ export function AdminMatrixClient({
         drawerWide
         wideTable
         stickyLeadColumns
-        tableClassName={styles.matrixTable}
+        tableClassName={`${styles.matrixTable} ${styles.matrixStickyCompany}`}
         listUrl="/api/admin/training-matrix"
         updateUrl={(id) => `/api/admin/training-matrix/${id}`}
         deleteUrl={(id) => `/api/admin/training-matrix/${id}`}
@@ -527,6 +539,7 @@ export function AdminMatrixClient({
         searchKeys={[
           (row) => row.candidateName,
           (row) => row.companyName,
+          (row) => row.companyNumber,
           (row) => row.department,
           (row) => row.overallStatus,
         ]}
@@ -541,91 +554,45 @@ export function AdminMatrixClient({
               >
                 <option value="all">All expiries</option>
                 <option value="expired">Expired (red)</option>
-                <option value="within-3m">Expiring within 3 months (0–90 days, red)</option>
-                <option value="within-6m">Expiring within 6 months (0–180 days, red + amber)</option>
+                <option value="within-3m">Expiring within 3 months (0–90 days, amber)</option>
+                <option value="within-6m">Expiring within 6 months (0–180 days, amber)</option>
                 <option value="6m-plus">6 months or more / in date (181+ days, green)</option>
                 <option value="review">Records to Review (missing dates)</option>
               </select>
             </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Sync company</span>
-              <select
-                className={styles.select}
-                value={syncCompanyId}
-                onChange={(event) => setSyncCompanyId(event.target.value)}
-                disabled={syncing}
-              >
-                <option value="">Select company…</option>
-                {companies.map((company) => (
-                  <option key={company.id} value={company.id}>
-                    {company.companyName}
-                  </option>
-                ))}
-              </select>
-            </label>
             <button
               type="button"
               className={styles.secondaryButton}
-              disabled={syncing || !syncCompanyId}
+              disabled={syncing}
+              title="Pull latest Pass/Fail dates from NPORS, EUSR, Streetworks, and In-House into linked matrix rows"
               onClick={() =>
-                void runSync(
-                  { companyId: syncCompanyId },
-                  "Sync company records",
-                )
+                void runSync({}, "Refresh from registers")
               }
             >
-              Sync company
+              {syncing ? "Refreshing…" : "Refresh from registers"}
             </button>
-            <button
-              type="button"
-              className={styles.secondaryButton}
-              disabled={syncing}
-              onClick={() => void runSync({ dryRun: true }, "Matrix dry run")}
-            >
-              {syncing ? "Working…" : "Dry run"}
-            </button>
-            <button
-              type="button"
-              className={styles.primaryButton}
-              disabled={syncing}
-              onClick={() => void runSync({}, "Sync Matrix")}
-            >
-              {syncing ? "Syncing…" : "Sync Matrix"}
-            </button>
-          </div>
-        }
-        extraActions={(row, { reload }) => (
-          <>
-            {row.matrixLinkStatus !== "Linked" ? (
+            {syncResult ? (
               <button
                 type="button"
                 className={styles.linkButton}
-                onClick={() => setLinkTarget(row)}
+                onClick={() => setSyncResult(null)}
               >
-                Link to Workforce
+                Hide results
               </button>
             ) : null}
+          </div>
+        }
+        extraActions={(row) =>
+          row.matrixLinkStatus !== "Linked" ? (
             <button
               type="button"
               className={styles.linkButton}
-              disabled={syncing || !row.companyName}
-              onClick={() => {
-                void (async () => {
-                  await runSync(
-                    {
-                      candidateName: row.candidateName,
-                      companyName: row.companyName,
-                    },
-                    `Sync ${row.candidateName}`,
-                  );
-                  await reload();
-                })();
-              }}
+              onClick={() => setLinkTarget(row)}
             >
-              Sync candidate
+              Link to Workforce
             </button>
-          </>
-        )}
+          ) : null
+        }
       />
       {syncResult ? <SyncResultsPanel result={syncResult} /> : null}
       <LinkMatrixToWorkforceModal

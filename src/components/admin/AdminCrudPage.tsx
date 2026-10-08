@@ -127,6 +127,13 @@ export interface AdminFieldConfig {
    * trainingDate + this many calendar years (NPORS / EUSR = 3, Streetworks = 5).
    */
   defaultExpiryYears?: number;
+  /**
+   * On create, `type: "workforce"` becomes a company-scoped checkbox list so
+   * one training entry can be saved for several candidates at once (NPORS).
+   * Edit remains a single select. Selected Workforce ids are stored in
+   * `candidateWorkforceIds` (semicolon-separated).
+   */
+  workforceMultiSelect?: boolean;
 }
 
 type AdminSelectOption = { value: string; label: string };
@@ -185,10 +192,16 @@ function withAssignedWorkforcePersonOption(
   return [{ value: "", label: "— None —" }, ...merged];
 }
 
-export interface AdminColumn<T> {
+export type AdminColumnRenderContext<T extends { id: string }> = {
+  reload: () => void | Promise<void>;
+  /** Merge fields into the in-memory row after a successful inline save. */
+  patchRow: (id: string, patch: Partial<T>) => void;
+};
+
+export interface AdminColumn<T extends { id: string }> {
   key: string;
   header: string;
-  render: (row: T) => ReactNode;
+  render: (row: T, ctx: AdminColumnRenderContext<T>) => ReactNode;
 }
 
 interface AdminCrudPageProps<T extends { id: string }> {
@@ -413,6 +426,23 @@ function isSelectNone(value: string | null | undefined): boolean {
   return !text || text === SELECT_NONE;
 }
 
+/** Drop duplicate SharePoint company rows so select keys/values stay unique. */
+function uniqueCompanies(companies: Company[]): Company[] {
+  const seenIds = new Set<string>();
+  const seenNames = new Set<string>();
+  const unique: Company[] = [];
+  for (const company of companies) {
+    const id = String(company.id ?? "").trim();
+    const nameKey = company.companyName.trim().toLowerCase();
+    if (id && seenIds.has(id)) continue;
+    if (nameKey && seenNames.has(nameKey)) continue;
+    if (id) seenIds.add(id);
+    if (nameKey) seenNames.add(nameKey);
+    unique.push(company);
+  }
+  return unique.sort((a, b) => a.companyName.localeCompare(b.companyName));
+}
+
 function findCompanyById(
   companies: Company[],
   id: string | null | undefined,
@@ -508,6 +538,18 @@ function matchWorkforceId(
       : (workforce.find((row) => row.candidateName.trim().toLowerCase() === name)
           ?.id ?? ""))
   );
+}
+
+/** Semicolon-separated Workforce ids for multi-candidate create. */
+function parseWorkforceIdList(raw: unknown): string[] {
+  return String(raw ?? "")
+    .split(/[;,|]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function formatWorkforceIdList(ids: string[]): string {
+  return [...new Set(ids.map((id) => id.trim()).filter(Boolean))].join(";");
 }
 
 async function readError(response: Response): Promise<string> {
@@ -828,6 +870,24 @@ export function AdminCrudPage<T extends { id: string }>({
     hiddenIds,
     removeHiddenId,
   ]);
+
+  const patchRow = useCallback(
+    (id: string, patch: Partial<T>) => {
+      setRows((current) => {
+        const next = current.map((row) =>
+          row.id === id ? { ...row, ...patch } : row,
+        );
+        onRowsChange?.(next);
+        return next;
+      });
+    },
+    [onRowsChange],
+  );
+
+  const columnRenderCtx = useMemo(
+    () => ({ reload: load, patchRow }),
+    [load, patchRow],
+  );
 
   const filtered = useMemo(() => {
     let next = rows;
@@ -1163,6 +1223,16 @@ export function AdminCrudPage<T extends { id: string }>({
   function validate(next: FormState): string | null {
     for (const field of fields) {
       const value = next[field.name];
+      if (
+        field.type === "workforce" &&
+        field.workforceMultiSelect &&
+        !editing
+      ) {
+        if (field.required && parseWorkforceIdList(next.candidateWorkforceIds).length === 0) {
+          return "Select at least one candidate.";
+        }
+        continue;
+      }
       if (field.required && field.type !== "boolean") {
         if (
           value === "" ||
@@ -1271,6 +1341,100 @@ export function AdminCrudPage<T extends { id: string }>({
       if (!isCreate && !updateUrl) {
         throw new Error("Editing is not available for this list.");
       }
+
+      const multiWorkforceField = fields.find(
+        (field) => field.type === "workforce" && field.workforceMultiSelect,
+      );
+      const multiIds =
+        isCreate && multiWorkforceField
+          ? parseWorkforceIdList(next.candidateWorkforceIds)
+          : [];
+
+      if (multiIds.length > 1) {
+        delete body.candidateWorkforceIds;
+        const created: string[] = [];
+        const failures: string[] = [];
+        for (const id of multiIds) {
+          const hit = workforce.find((row) => row.id === id);
+          if (!hit) {
+            failures.push(`Unknown Workforce id ${id}`);
+            continue;
+          }
+          const perBody: Record<string, unknown> = {
+            ...body,
+            workforceId: hit.id,
+            candidateName: hit.candidateName,
+            companyName: hit.companyName || body.companyName,
+            companyId: hit.companyId || body.companyId,
+            nporsNumber: hit.nporsNumbers || "",
+            eusrNumber: hit.eusrNumber || "",
+            swqrNumber: hit.swqrNumber || "",
+            inHouseCertificationNumber: hit.inHouseCertificationNumber || "",
+            workforceNumber: hit.workforceNumber || "",
+            niNumber: hit.niNumber || "",
+          };
+          try {
+            const response = await fetch(createUrl ?? listUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(perBody),
+            });
+            if (!response.ok) {
+              failures.push(
+                `${hit.candidateName}: ${await readError(response)}`,
+              );
+              continue;
+            }
+            created.push(hit.candidateName);
+          } catch (error) {
+            failures.push(
+              `${hit.candidateName}: ${
+                error instanceof Error ? error.message : "Save failed."
+              }`,
+            );
+          }
+        }
+        if (created.length === 0) {
+          throw new Error(
+            failures[0] || "Could not save training for any selected candidate.",
+          );
+        }
+        const syncNote =
+          failures.length > 0
+            ? ` ${failures.length} failed: ${failures.slice(0, 3).join("; ")}${failures.length > 3 ? "…" : ""}`
+            : "";
+        pushToast(
+          `Created ${created.length} NPORS record${created.length === 1 ? "" : "s"}.${syncNote}`,
+          failures.length > 0 ? "error" : "success",
+        );
+        if (failures.length > 0) {
+          setFormError(
+            `Saved ${created.length}, but ${failures.length} failed. ${failures.slice(0, 5).join(" · ")}`,
+          );
+        } else {
+          setDrawerOpen(false);
+          openedFromQueryRef.current = false;
+        }
+        await load();
+        router.refresh();
+        return;
+      }
+
+      if (multiIds.length === 1) {
+        const hit = workforce.find((row) => row.id === multiIds[0]);
+        if (hit) {
+          body.workforceId = hit.id;
+          body.candidateName = hit.candidateName;
+          body.nporsNumber = hit.nporsNumbers || body.nporsNumber || "";
+          body.eusrNumber = hit.eusrNumber || body.eusrNumber || "";
+          body.swqrNumber = hit.swqrNumber || body.swqrNumber || "";
+          body.workforceNumber =
+            hit.workforceNumber || body.workforceNumber || "";
+          body.niNumber = hit.niNumber || body.niNumber || "";
+        }
+      }
+      delete body.candidateWorkforceIds;
+
       const response = await fetch(
         isCreate ? (createUrl ?? listUrl) : updateUrl!(editing.id),
         {
@@ -1381,6 +1545,14 @@ export function AdminCrudPage<T extends { id: string }>({
         next.supervisor = "";
         next.department = "";
         next.departmentsAllowed = "";
+        next.candidateName = "";
+        next.candidateWorkforceIds = "";
+        next.nporsNumber = "";
+        next.eusrNumber = "";
+        next.swqrNumber = "";
+        next.workforceNumber = "";
+        next.niNumber = "";
+        next.inHouseCertificationNumber = "";
       }
 
       if (field.name === "companyName") {
@@ -1597,7 +1769,7 @@ export function AdminCrudPage<T extends { id: string }>({
               onChange={(event) => setCompanyFilter(event.target.value)}
             >
               <option value="">All companies</option>
-              {companies.map((company) => (
+              {uniqueCompanies(companies).map((company) => (
                 <option key={company.id} value={company.companyName}>
                   {company.companyName}
                 </option>
@@ -1718,7 +1890,7 @@ export function AdminCrudPage<T extends { id: string }>({
                           : undefined
                       }
                     >
-                      {column.render(row)}
+                      {column.render(row, columnRenderCtx)}
                     </td>
                   ))}
                   <td
@@ -1897,6 +2069,11 @@ export function AdminCrudPage<T extends { id: string }>({
                   })
                 : companyWorkforce;
               const candidateDisabled = field.readOnly || !hasCompany;
+              const useMulti =
+                Boolean(field.workforceMultiSelect) && !editing;
+              const selectedMultiIds = new Set(
+                parseWorkforceIdList(form.candidateWorkforceIds),
+              );
               const emptyOptionLabel = !hasCompany
                 ? "Select a company first…"
                 : companyWorkforce.length === 0
@@ -1904,14 +2081,103 @@ export function AdminCrudPage<T extends { id: string }>({
                   : query && filteredWorkforce.length === 0
                     ? `No matches for “${workforceQuery.trim()}”`
                     : "Select candidate…";
+
+              function applyWorkforceHit(hit: AdminWorkforceOption | null) {
+                if (!hit) {
+                  setForm((current) => ({
+                    ...current,
+                    candidateName: "",
+                    candidateWorkforceIds: "",
+                    companyName: current.companyName,
+                    companyNumber: current.companyNumber,
+                    nporsNumber: "",
+                    eusrNumber: "",
+                    swqrNumber: "",
+                    inHouseCertificationNumber: "",
+                    workforceNumber: "",
+                    niNumber: "",
+                  }));
+                  return;
+                }
+                const companyMatch =
+                  companies.find((company) =>
+                    idsEqual(company.id, hit.companyId),
+                  ) ??
+                  companies.find(
+                    (company) =>
+                      company.companyName.trim().toLowerCase() ===
+                      hit.companyName.trim().toLowerCase(),
+                  );
+                setForm((current) => ({
+                  ...current,
+                  candidateName: hit.candidateName,
+                  candidateWorkforceIds: hit.id,
+                  companyName: hit.companyName,
+                  companyId: hit.companyId || current.companyId,
+                  companyNumber:
+                    companyMatch?.companyNumber?.trim() ||
+                    String(current.companyNumber ?? ""),
+                  nporsNumber: hit.nporsNumbers || "",
+                  eusrNumber: hit.eusrNumber || "",
+                  swqrNumber: hit.swqrNumber || "",
+                  inHouseCertificationNumber:
+                    hit.inHouseCertificationNumber || "",
+                  workforceNumber: hit.workforceNumber || "",
+                  niNumber: hit.niNumber || "",
+                }));
+              }
+
+              function toggleMultiWorkforce(id: string, checked: boolean) {
+                setForm((current) => {
+                  const prev = parseWorkforceIdList(
+                    current.candidateWorkforceIds,
+                  );
+                  const nextIds = checked
+                    ? formatWorkforceIdList([...prev, id])
+                    : formatWorkforceIdList(prev.filter((entry) => entry !== id));
+                  const ordered = parseWorkforceIdList(nextIds)
+                    .map((entry) => workforce.find((row) => row.id === entry))
+                    .filter((row): row is AdminWorkforceOption => Boolean(row));
+                  const first = ordered[0] ?? null;
+                  return {
+                    ...current,
+                    candidateWorkforceIds: nextIds,
+                    candidateName: ordered
+                      .map((row) => row.candidateName)
+                      .join("; "),
+                    nporsNumber:
+                      ordered.length === 1 ? first?.nporsNumbers || "" : "",
+                    eusrNumber:
+                      ordered.length === 1 ? first?.eusrNumber || "" : "",
+                    swqrNumber:
+                      ordered.length === 1 ? first?.swqrNumber || "" : "",
+                    inHouseCertificationNumber:
+                      ordered.length === 1
+                        ? first?.inHouseCertificationNumber || ""
+                        : "",
+                    workforceNumber:
+                      ordered.length === 1
+                        ? first?.workforceNumber || ""
+                        : ordered.length > 1
+                          ? `${ordered.length} selected`
+                          : "",
+                    niNumber: ordered.length === 1 ? first?.niNumber || "" : "",
+                  };
+                });
+              }
+
               control = (
-                <label className={styles.field}>
-                  <span className={styles.fieldLabel}>
-                    {field.label}
+                <fieldset className={styles.field}>
+                  <legend className={styles.fieldLabel}>
+                    {useMulti
+                      ? `${field.label}s (same company)`
+                      : field.label}
                     {hasCompany
-                      ? " (scoped to selected company)"
+                      ? useMulti
+                        ? " — tick everyone who took this course"
+                        : " (scoped to selected company)"
                       : " — select a company first"}
-                  </span>
+                  </legend>
                   <input
                     className={`${styles.input} ${styles.workforceFilter}`}
                     type="search"
@@ -1924,66 +2190,126 @@ export function AdminCrudPage<T extends { id: string }>({
                     disabled={candidateDisabled}
                     onChange={(event) => setWorkforceQuery(event.target.value)}
                   />
-                  <select
-                    className={styles.select}
-                    value={selectedId}
-                    disabled={candidateDisabled}
-                    onChange={(event) => {
-                      const hit = workforce.find(
-                        (row) => row.id === event.target.value,
-                      );
-                      if (!hit) {
-                        setForm((current) => ({
-                          ...current,
-                          candidateName: "",
-                          companyName: current.companyName,
-                          companyNumber: current.companyNumber,
-                          nporsNumber: "",
-                          eusrNumber: "",
-                          swqrNumber: "",
-                          inHouseCertificationNumber: "",
-                          workforceNumber: "",
-                          niNumber: "",
-                        }));
-                        return;
-                      }
-                      const companyMatch =
-                        companies.find((company) =>
-                          idsEqual(company.id, hit.companyId),
-                        ) ??
-                        companies.find(
-                          (company) =>
-                            company.companyName.trim().toLowerCase() ===
-                            hit.companyName.trim().toLowerCase(),
-                        );
-                      setForm((current) => ({
-                        ...current,
-                        candidateName: hit.candidateName,
-                        companyName: hit.companyName,
-                        companyId: hit.companyId || current.companyId,
-                        companyNumber:
-                          companyMatch?.companyNumber?.trim() ||
-                          String(current.companyNumber ?? ""),
-                        // Always refresh projected Workforce numbers for the chosen candidate.
-                        nporsNumber: hit.nporsNumbers || "",
-                        eusrNumber: hit.eusrNumber || "",
-                        swqrNumber: hit.swqrNumber || "",
-                        inHouseCertificationNumber:
-                          hit.inHouseCertificationNumber || "",
-                        workforceNumber: hit.workforceNumber || "",
-                        niNumber: hit.niNumber || "",
-                      }));
-                    }}
-                  >
-                    <option value="">{emptyOptionLabel}</option>
-                    {filteredWorkforce.map((row) => (
-                      <option key={row.id} value={row.id}>
-                        {row.workforceNumber?.trim()
-                          ? `${row.candidateName} (${row.workforceNumber})`
-                          : row.candidateName}
-                      </option>
-                    ))}
-                  </select>
+                  {useMulti ? (
+                    <>
+                      {hasCompany && filteredWorkforce.length > 0 ? (
+                        <div className={styles.workforceMultiActions}>
+                          <button
+                            type="button"
+                            className={styles.linkButton}
+                            disabled={candidateDisabled}
+                            onClick={() => {
+                              const ids = filteredWorkforce.map((row) => row.id);
+                              setForm((current) => {
+                                const merged = formatWorkforceIdList([
+                                  ...parseWorkforceIdList(
+                                    current.candidateWorkforceIds,
+                                  ),
+                                  ...ids,
+                                ]);
+                                const ordered = parseWorkforceIdList(merged)
+                                  .map((entry) =>
+                                    workforce.find((row) => row.id === entry),
+                                  )
+                                  .filter(
+                                    (row): row is AdminWorkforceOption =>
+                                      Boolean(row),
+                                  );
+                                return {
+                                  ...current,
+                                  candidateWorkforceIds: merged,
+                                  candidateName: ordered
+                                    .map((row) => row.candidateName)
+                                    .join("; "),
+                                  nporsNumber: "",
+                                  eusrNumber: "",
+                                  swqrNumber: "",
+                                  workforceNumber:
+                                    ordered.length > 0
+                                      ? `${ordered.length} selected`
+                                      : "",
+                                  niNumber: "",
+                                  inHouseCertificationNumber: "",
+                                };
+                              });
+                            }}
+                          >
+                            Select all shown
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.linkButton}
+                            disabled={
+                              candidateDisabled || selectedMultiIds.size === 0
+                            }
+                            onClick={() => applyWorkforceHit(null)}
+                          >
+                            Clear
+                          </button>
+                          {selectedMultiIds.size > 0 ? (
+                            <span className={styles.helpText}>
+                              {selectedMultiIds.size} selected
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      <div className={styles.multiSelectList}>
+                        {!hasCompany ? (
+                          <p className={styles.helpText}>{emptyOptionLabel}</p>
+                        ) : filteredWorkforce.length === 0 ? (
+                          <p className={styles.helpText}>{emptyOptionLabel}</p>
+                        ) : (
+                          filteredWorkforce.map((row) => {
+                            const checked = selectedMultiIds.has(row.id);
+                            const label = row.workforceNumber?.trim()
+                              ? `${row.candidateName} (${row.workforceNumber})`
+                              : row.candidateName;
+                            return (
+                              <label
+                                key={row.id}
+                                className={styles.multiSelectOption}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  disabled={candidateDisabled}
+                                  onChange={(event) =>
+                                    toggleMultiWorkforce(
+                                      row.id,
+                                      event.target.checked,
+                                    )
+                                  }
+                                />
+                                <span>{label}</span>
+                              </label>
+                            );
+                          })
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <select
+                      className={styles.select}
+                      value={selectedId}
+                      disabled={candidateDisabled}
+                      onChange={(event) => {
+                        const hit =
+                          workforce.find(
+                            (row) => row.id === event.target.value,
+                          ) ?? null;
+                        applyWorkforceHit(hit);
+                      }}
+                    >
+                      <option value="">{emptyOptionLabel}</option>
+                      {filteredWorkforce.map((row) => (
+                        <option key={row.id} value={row.id}>
+                          {row.workforceNumber?.trim()
+                            ? `${row.candidateName} (${row.workforceNumber})`
+                            : row.candidateName}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                   {hasCompany && companyWorkforce.length === 0 ? (
                     <p className={styles.helpText}>
                       Add this person under Admin → Workforce for this company
@@ -2001,7 +2327,7 @@ export function AdminCrudPage<T extends { id: string }>({
                       company.
                     </p>
                   ) : null}
-                </label>
+                </fieldset>
               );
             } else if (field.type === "multiselect") {
               const selected = String(form[field.name] ?? "")
@@ -2183,7 +2509,7 @@ export function AdminCrudPage<T extends { id: string }>({
 
               let options: Array<{ value: string; label: string }>;
               if (field.type === "company") {
-                options = companies.map((company) => ({
+                options = uniqueCompanies(companies).map((company) => ({
                   value:
                     field.name === "companyId"
                       ? String(company.id)
@@ -2522,8 +2848,11 @@ export function AdminCrudPage<T extends { id: string }>({
                     field.sharePointRoleTypeFilter ? null : (
                       <option value={SELECT_NONE}>Select…</option>
                     )}
-                    {options.map((option) => (
-                      <option key={`${option.value}-${option.label}`} value={option.value}>
+                    {options.map((option, index) => (
+                      <option
+                        key={`${field.name}-${option.value}-${index}`}
+                        value={option.value}
+                      >
                         {option.label}
                       </option>
                     ))}
@@ -2652,7 +2981,25 @@ export function AdminCrudPage<T extends { id: string }>({
         companyName={quickAdd?.companyName ?? ""}
         onClose={() => setQuickAdd(null)}
         onCreated={(record: AdminPermissionRecord) => {
-          // Refresh the underlying dropdown data.
+          // Show the new person in the dropdown immediately (don't wait on
+          // the list refresh), then refresh in the background for consistency.
+          setPermissionPeopleLive((current) => {
+            const next = current ?? permissionPeople;
+            const entry: AdminPermissionPersonOption = {
+              id: record.id,
+              userEmail: record.userEmail,
+              name: record.name ?? null,
+              status: record.status,
+              permissionRole: record.permissionRole,
+              sharePointRoleType: record.sharePointRoleType ?? null,
+              companyId: record.companyId ?? null,
+              companyName: record.companyName ?? null,
+            };
+            if (next.some((row) => row.id === entry.id)) {
+              return next.map((row) => (row.id === entry.id ? entry : row));
+            }
+            return [...next, entry];
+          });
           void refreshPermissionPeople();
           // Auto-select the newly created person on the field that opened
           // this modal. The dropdown value is the Permissions row's Name
@@ -2660,10 +3007,20 @@ export function AdminCrudPage<T extends { id: string }>({
           // resolves back to a Lookup id.
           const selectValue = record.name?.trim() || record.userEmail;
           if (quickAdd) {
-            setForm((current) => ({
-              ...current,
-              [quickAdd.fieldName]: selectValue,
-            }));
+            setForm((current) => {
+              const next: FormState = {
+                ...current,
+                [quickAdd.fieldName]: selectValue,
+              };
+              // Email helps Workforce save resolve the Permissions row when
+              // the display name collides or refresh is still in flight.
+              if (quickAdd.fieldName === "trainingManager") {
+                next.trainingManagerEmail = record.userEmail;
+              } else if (quickAdd.fieldName === "supervisor") {
+                next.supervisorEmail = record.userEmail;
+              }
+              return next;
+            });
           }
           pushToast(`Added ${record.name ?? record.userEmail}`, "success");
           setQuickAdd(null);

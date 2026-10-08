@@ -1,0 +1,24 @@
+EMERGENCY RECOVERY — site is 500 (broken functions.php)
+
+GoDaddy → File Manager → open:
+  wp-content/themes/pave-training/functions.php
+
+1) Scroll near the END of the file.
+2) Find the line that starts with:
+     /* PAVE COMING SOON
+   OR search for: PAVE_PREVIEW_SECREV
+3) DELETE from that Coming Soon comment all the way to the END of the file.
+4) Save.
+5) Flush cache in GoDaddy.
+
+Site should load again.
+
+THEN paste the full contents of coming-soon-block.php
+(from this same wp-repair folder) at the END of functions.php and Save again.
+
+That restores the public Coming Soon page (screenshot style).
+Editors + this preview link still see the full site:
+  https://pavetraining.co.uk/?preview=pave-preview-af39212fb2b53178
+
+Also in WP Admin → Appearance → PAVE Site Content:
+  tick "Lock public site" / Coming Soon = ON

@@ -1040,6 +1040,57 @@
   border-color: var(--pave-lime);
 }
 
+/* Workforce table inline Department / TM / Supervisor editors. */
+.inlineSelectWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 9.5rem;
+  max-width: 14rem;
+}
+
+.inlineTableSelect {
+  width: 100%;
+  border: 1px solid var(--pave-border);
+  border-radius: 0.5rem;
+  background: var(--pave-surface);
+  min-height: 2.1rem;
+  padding: 0.3rem 0.5rem;
+  color: var(--admin-text);
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1.25;
+  cursor: pointer;
+}
+
+.inlineTableSelect:focus {
+  outline: 2px solid rgba(var(--pave-lime-rgb), 0.35);
+  outline-offset: 1px;
+  border-color: var(--pave-lime);
+}
+
+.inlineTableSelect:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.inlineSelectSaving {
+  font-size: 0.7rem;
+  color: var(--admin-muted);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .multiSelectList {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
@@ -1534,7 +1585,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 200;
+  /* Above SlideOverPanel root (12000) / panel (12010). */
+  z-index: 13000;
   padding: 1rem;
 }
 .quickAddPanel {
@@ -1985,6 +2037,52 @@
   max-width: var(--matrix-company-col-width);
 }
 
+/*
+ * Training Matrix has a leading select/delete column, so Candidate Name is
+ * nth-child(2) and Company Name is nth-child(3). Stick those two so company
+ * stays visible while scrolling category dates.
+ */
+.matrixStickyCompany.stickyLeadColumns th:nth-child(1),
+.matrixStickyCompany.stickyLeadColumns td:nth-child(1),
+.matrixStickyCompany.stickyLeadColumns th:nth-child(2),
+.matrixStickyCompany.stickyLeadColumns td:nth-child(2),
+.matrixStickyCompany.stickyLeadColumns th:nth-child(3),
+.matrixStickyCompany.stickyLeadColumns td:nth-child(3) {
+  position: sticky;
+  z-index: 1;
+  background: var(--pave-surface);
+  box-shadow: 4px 0 10px rgba(var(--pave-charcoal-rgb), 0.06);
+}
+
+.matrixStickyCompany.stickyLeadColumns th:nth-child(1),
+.matrixStickyCompany.stickyLeadColumns th:nth-child(2),
+.matrixStickyCompany.stickyLeadColumns th:nth-child(3) {
+  z-index: 3;
+  background: var(--pave-bg);
+}
+
+.matrixStickyCompany.stickyLeadColumns th:nth-child(1),
+.matrixStickyCompany.stickyLeadColumns td:nth-child(1) {
+  left: 0;
+  min-width: 2.75rem;
+  max-width: 2.75rem;
+  box-shadow: none;
+}
+
+.matrixStickyCompany.stickyLeadColumns th:nth-child(2),
+.matrixStickyCompany.stickyLeadColumns td:nth-child(2) {
+  left: 2.75rem;
+  min-width: var(--matrix-name-col-width);
+  max-width: var(--matrix-name-col-width);
+}
+
+.matrixStickyCompany.stickyLeadColumns th:nth-child(3),
+.matrixStickyCompany.stickyLeadColumns td:nth-child(3) {
+  left: calc(2.75rem + var(--matrix-name-col-width));
+  min-width: var(--matrix-company-col-width);
+  max-width: var(--matrix-company-col-width);
+}
+
 /* Pin a single identity column (Company Name / Candidate Name) to the left
    edge while the rest of the wide table scrolls horizontally. A solid
    background keeps scrolling content from showing through, and the right
@@ -2003,7 +2101,8 @@ td.stickyIdentityCell {
 }
 
 th.stickyIdentityCell {
-  /* Sits above other sticky headers (z-index: 2) and sticky body cells. */
+  /* Corner cell: stick to top (headers) and left (name column). */
+  top: 0;
   z-index: 4;
   background: #f3f4f2;
 }
@@ -2040,6 +2139,7 @@ td.stickyActionsCell {
 }
 
 th.stickyActionsCell {
+  top: 0;
   z-index: 4;
   background: #f3f4f2;
 }
@@ -2132,10 +2232,12 @@ th.stickyActionsCell {
 .matrixTextCell {
   display: block;
   color: var(--pave-charcoal);
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  max-width: 100%;
 }
 
 .dataTable th {
@@ -2255,6 +2357,14 @@ th.stickyActionsCell {
 
 .workforceFilter {
   margin-bottom: 0.35rem;
+}
+
+.workforceMultiActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem;
+  margin: 0 0 0.45rem;
 }
 
 .linkButtonDanger {
@@ -3214,7 +3324,9 @@ th.stickyActionsCell {
   .stickyLeadColumns th:nth-child(1),
   .stickyLeadColumns td:nth-child(1),
   .stickyLeadColumns th:nth-child(2),
-  .stickyLeadColumns td:nth-child(2) {
+  .stickyLeadColumns td:nth-child(2),
+  .matrixStickyCompany.stickyLeadColumns th:nth-child(3),
+  .matrixStickyCompany.stickyLeadColumns td:nth-child(3) {
     position: static;
     left: auto;
     box-shadow: none;

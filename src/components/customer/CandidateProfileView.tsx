@@ -22,6 +22,7 @@ import {
 } from "@/lib/training/candidateCategories";
 import { expandEusrRecordsForDisplay } from "@/lib/training/eusrOptions";
 import { getExpiryStatus } from "@/lib/training/expiryFilters";
+import { splitNporsCategory } from "@/lib/training/nporsCategoryOptions";
 import { formatDate } from "@/lib/utils/formatDate";
 import type {
   CustomerDocumentRecord,
@@ -54,12 +55,7 @@ function formatTrainingStatusCell(
     return <StatusBadge label="Expired" tone="danger" />;
   }
   if (status.status === "urgent" || status.status === "upcoming") {
-    return (
-      <StatusBadge
-        label="Expiring soon"
-        tone={status.status === "urgent" ? "danger" : "warn"}
-      />
-    );
+    return <StatusBadge label="Expiring soon" tone="warn" />;
   }
   if (status.status === "valid") {
     return <StatusBadge label="Active" tone="ok" />;
@@ -147,14 +143,25 @@ function safeReturnHref(
 
 const nporsColumns: TrainingRecordColumn<CustomerNporsRecord>[] = [
   {
-    key: "nporsNumber",
-    header: "NPORS Number",
-    render: (row) => formatTextCell(row.nporsNumber),
+    key: "categoryName",
+    header: "Category name",
+    render: (row) => {
+      const split = splitNporsCategory(row.nporsCategory);
+      return formatTextCell(split.categoryName || row.nporsCategory);
+    },
   },
   {
-    key: "nporsCategory",
-    header: "NPORS Category",
-    render: (row) => formatTextCell(row.nporsCategory),
+    key: "nNumber",
+    header: "N number",
+    render: (row) => {
+      const split = splitNporsCategory(row.nporsCategory);
+      return formatTextCell(split.nNumber || row.nporsNumber);
+    },
+  },
+  {
+    key: "expiry",
+    header: "Expiry date",
+    render: (row) => formatExpiryCell(row.expiry),
   },
   {
     key: "trainingDate",
@@ -162,24 +169,14 @@ const nporsColumns: TrainingRecordColumn<CustomerNporsRecord>[] = [
     render: (row) => formatDate(row.trainingDate),
   },
   {
-    key: "expiry",
-    header: "Expiry Date",
-    render: (row) => formatExpiryCell(row.expiry),
-  },
-  {
     key: "status",
     header: "Status",
     render: (row) => formatTrainingStatusCell(row.expiry, row.trainingDate),
   },
   {
-    key: "trainingAddress",
-    header: "Training Address",
-    render: (row) => formatTextCell(row.trainingAddress),
-  },
-  {
-    key: "noviceOrEwt",
-    header: "Novice or EWT",
-    render: (row) => formatTextCell(row.noviceOrEwt),
+    key: "nporsNumber",
+    header: "NPORS card number",
+    render: (row) => formatTextCell(row.nporsNumber),
   },
   {
     key: "outcome",
@@ -754,9 +751,9 @@ export function CandidateProfileView({
           getSearchText={(row) =>
             [
               row.nporsNumber,
+              row.nporsCategory,
               row.trainingAddress,
               row.noviceOrEwt,
-              row.nporsCategory,
               row.outcome,
             ]
               .filter(Boolean)

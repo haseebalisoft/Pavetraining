@@ -119,7 +119,7 @@ export const BULK_IMPORT_TEMPLATES: BulkImportTemplate[] = [
     importType: "company",
     label: "Companies",
     description:
-      "Use the exact client Company list.xlsx headers. Creates or updates SharePoint Company List rows.",
+      "Use the exact client Company list.xlsx headers. Company Logo accepts an https image URL (stored via the same SharePoint Thumbnail path as Admin logo upload). Missing logos warn but do not fail the row.",
     fileName: "Company-list-template.xlsx",
     columns: COMPANY_COLUMNS,
     implemented: true,

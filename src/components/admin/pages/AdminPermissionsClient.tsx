@@ -386,6 +386,12 @@ export function AdminPermissionsClient({
       updateUrl={(id) => `/api/admin/permissions/${id}`}
       deleteUrl={(id) => `/api/admin/permissions/${id}`}
       optimistic
+      optimisticRowLabel={(row) =>
+        row.name?.trim() ||
+        row.userEmail?.trim() ||
+        row.companyName?.trim() ||
+        `#${row.id}`
+      }
       deleteConfirmExtra="This removes portal access for this user. Training records are not deleted."
       drawerWide
       stickyColumnKey="email"

@@ -55,6 +55,8 @@ export interface TrainingMatrixExampleRow {
   workforceNumber: string | null;
   companyItemId: string | null;
   companyNumber: string | null;
+  /** Free-text Company / Company Name column when present on the list. */
+  storedCompanyName: string | null;
   matrixLinkStatus: string | null;
 }
 
@@ -366,6 +368,8 @@ function mapItemToRow(
     workforceNumber: readLinkField("WorkforceNumber"),
     companyItemId: readLinkField("CompanyItemId"),
     companyNumber: readLinkField("CompanyNumber"),
+    storedCompanyName:
+      readLinkField("Company Name") ?? readLinkField("Company") ?? null,
     matrixLinkStatus: readLinkField("MatrixLinkStatus"),
     categoryTrainingDates,
   };
@@ -778,6 +782,11 @@ export async function syncWorkforceToTrainingMatrix(
         dateOfBirth: source.DOB ?? existing.dateOfBirth ?? null,
         columnValues,
         nextExpiryDate: earliestDateFromColumns(columnValues),
+        storedCompanyName:
+          profileFields["Company Name"] ??
+          profileFields.Company ??
+          existing.storedCompanyName ??
+          null,
         ...linkFieldValues,
       }
     : {
@@ -787,6 +796,8 @@ export async function syncWorkforceToTrainingMatrix(
         columnValues,
         nextExpiryDate: earliestDateFromColumns(columnValues),
         manualOverrides: [],
+        storedCompanyName:
+          profileFields["Company Name"] ?? profileFields.Company ?? null,
         ...linkFieldValues,
       };
 
@@ -853,6 +864,11 @@ export async function upsertUnlinkedMatrixRow(input: {
       workforceNumber: null,
       companyItemId: existing?.companyItemId ?? null,
       companyNumber: linkFields.text.CompanyNumber ?? existing?.companyNumber ?? null,
+      storedCompanyName:
+        profileFields["Company Name"] ??
+        profileFields.Company ??
+        existing?.storedCompanyName ??
+        null,
       matrixLinkStatus: linkFields.text.MatrixLinkStatus ?? "Needs Review",
     },
   };

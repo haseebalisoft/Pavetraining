@@ -41,7 +41,7 @@ const IMPORT_OPTIONS: Array<{
   {
     value: "company",
     label: "Companies",
-    hint: "Use Company list.xlsx exactly. Preview shows every Excel column. Creates or updates Company List rows.",
+    hint: "Use Company list.xlsx exactly. Company Logo = https image URL (optional — missing logo warns only). Preview shows every Excel column. Creates or updates Company List rows.",
     implemented: true,
   },
   {
@@ -159,17 +159,23 @@ function PreviewTable({
       ];
 
   const cellValue = (row: BulkPreviewRow, header: string): string => {
+    const key = header.trim().toLowerCase();
+    // Prefer normalized Company Size so preview shows the SharePoint choice value
+    // (Small | Medium | Large | Enterprise), not a raw/casing variant from Excel.
+    if (key === "company size" && row.fields.companySize?.trim()) {
+      return row.fields.companySize.trim();
+    }
     const fromSource = row.source?.[header];
     if (fromSource != null && String(fromSource).trim() !== "") {
       return String(fromSource);
     }
     // Fallbacks for mapped internal keys when source cell is blank/missing.
-    const key = header.trim().toLowerCase();
     const mapped: Record<string, string | null | undefined> = {
       "candidate name": row.fields.candidateName,
       name: row.fields.candidateName,
-      "company name": row.fields.company,
-      company: row.fields.company,
+      "company name": row.fields.companyName ?? row.fields.company,
+      company: row.fields.company ?? row.fields.companyName,
+      "company size": row.fields.companySize,
       "workforce number": row.fields.workforceNumber,
       "date of birth": row.fields.dateOfBirth,
       dob: row.fields.dateOfBirth,

@@ -31,7 +31,7 @@ const titles: Record<RegisterKind, string> = {
 
 const descriptions: Record<RegisterKind, string> = {
   npors:
-    "Select company, then candidate — Workforce / NPORS numbers fill from Workforce. Pass updates the Training Matrix and profile.",
+    "Select company, then one or more candidates from that company. Shared training details are saved as a separate NPORS record for each selected person. Workforce / NPORS numbers fill from Workforce. Pass updates the Training Matrix and profile.",
   eusr:
     "Select company, then candidate — Workforce / EUSR numbers fill from Workforce. Each EUSR category can have its own training and expiry dates — add a separate record when those dates differ. Pass updates the Training Matrix and profile.",
   streetworks:
@@ -66,6 +66,7 @@ function fieldsFor(
       type: "workforce",
       required: true,
       section: "Candidate",
+      workforceMultiSelect: kind === "npors",
     },
     workforceNumberField,
   ];
@@ -404,7 +405,7 @@ function columnsFor(kind: RegisterKind): AdminColumn<AdminTrainingRecord>[] {
     {
       key: "expiry",
       header: "Expiry",
-      render: (row) => <ExpiryDateBadge date={row.expiry} />,
+      render: (row) => <ExpiryDateBadge date={row.expiry} fillCell />,
     },
   );
   return base;

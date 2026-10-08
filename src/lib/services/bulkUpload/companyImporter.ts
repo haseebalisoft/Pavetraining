@@ -25,6 +25,10 @@ import {
   createBulkLogger,
   type BulkLogger,
 } from "@/lib/services/bulkUpload/bulkUploadLog";
+import {
+  applyCompanyLogoFromImportCell,
+  planCompanyLogoImport,
+} from "@/lib/services/bulkUpload/companyLogoImport";
 import type {
   BulkCommitRowInput,
   BulkDuplicateMode,
@@ -140,9 +144,17 @@ function normalizeStatus(value: string | null | undefined): {
   };
 }
 
+/** SharePoint Company Size choices — only these values are accepted on import. */
+export const COMPANY_SIZE_CHOICES = [
+  "Small",
+  "Medium",
+  "Large",
+  "Enterprise",
+] as const;
+
 function normalizeCompanySize(value: string | null | undefined): {
   size: string | null;
-  warning?: string;
+  error?: string;
 } {
   const raw = value?.trim() ?? "";
   if (!raw) return { size: null };
@@ -152,15 +164,9 @@ function normalizeCompanySize(value: string | null | undefined): {
   if (lower === "large") return { size: "Large" };
   if (lower === "enterprise") return { size: "Enterprise" };
   return {
-    size: raw,
-    warning: `Company Size "${raw}" is unusual — expected Small, Medium, Large, or Enterprise.`,
+    size: null,
+    error: `Company Size must be one of: ${COMPANY_SIZE_CHOICES.join(", ")} (got "${raw}").`,
   };
-}
-
-function normalizeLogo(value: string | null | undefined): string | null {
-  // Thumbnail column — spreadsheet text/placeholders are never written to SharePoint.
-  void value;
-  return null;
 }
 
 function companyWritePayload(
@@ -176,6 +182,9 @@ function companyWritePayload(
   const assign = (key: string, value: string | null | undefined) => {
     if (value?.trim()) payload[key] = value.trim();
   };
+  if (sizeInfo.error) {
+    throw new Error(sizeInfo.error);
+  }
   if (sizeInfo.size) payload.companySize = sizeInfo.size;
   assign("registeredAddress", fields.registeredAddress);
   assign("companyRegNumber", fields.companyRegNumber);
@@ -188,9 +197,34 @@ function companyWritePayload(
   assign("accountsContactNumber", fields.accountsContactNumber);
   assign("accountsEmail", fields.accountsEmail);
   assign("notesPricesAgreed", fields.notesPricesAgreed);
-  const logo = normalizeLogo(fields.companyLogo);
-  if (logo) payload.companyLogo = logo;
+  // CompanyLogo is a SharePoint Thumbnail — never write Excel text here.
+  // Logos are applied after create/update via applyCompanyLogoFromImportCell.
   return payload;
+}
+
+/** Apply logo after the company row exists; logo issues never fail the import. */
+async function withCompanyLogoResult(
+  companyId: string,
+  fields: Record<string, string | null>,
+  base: BulkPreviewRow,
+): Promise<BulkPreviewRow> {
+  const logoWarning = await applyCompanyLogoFromImportCell(
+    companyId,
+    fields.companyLogo,
+  );
+  if (!logoWarning) {
+    return {
+      ...base,
+      messages: [
+        ...base.messages,
+        "Company Logo uploaded to SharePoint CompanyLogo.",
+      ],
+    };
+  }
+  return {
+    ...base,
+    messages: [...base.messages, logoWarning],
+  };
 }
 
 /** Existing company whose Company Number equals `number` (case/space-insensitive). */
@@ -309,10 +343,15 @@ function validateCompanyRow(
   }
 
   const sizeInfo = normalizeCompanySize(fields.companySize);
-  if (sizeInfo.warning) messages.push(sizeInfo.warning);
+  if (sizeInfo.error) messages.push(sizeInfo.error);
 
   const statusInfo = normalizeStatus(fields.status);
   if (statusInfo.warning) messages.push(statusInfo.warning);
+
+  const logoPlan = planCompanyLogoImport(fields.companyLogo);
+  if (logoPlan.kind === "missing" || logoPlan.kind === "invalid") {
+    messages.push(logoPlan.warning);
+  }
 
   const normalizedFields = {
     ...fields,
@@ -328,7 +367,8 @@ function validateCompanyRow(
     !companyNumber ||
     !fields.email?.trim() ||
     !fields.registeredAddress?.trim() ||
-    !fields.companySize?.trim()
+    !fields.companySize?.trim() ||
+    !!sizeInfo.error
   ) {
     return {
       rowNumber,
@@ -517,17 +557,19 @@ export async function commitCompanyImport(input: {
             : company,
         );
         updated += 1;
-        results.push({
-          rowNumber: row.rowNumber,
-          status: "Imported",
-          messages: [
-            `Updated existing company #${decision.targetId} (${target?.companyName ?? companyName}); Company Number ${finalNumber} preserved.`,
-          ],
-          fields,
-          matchedEntityId: decision.targetId,
-          matchedEntityName: target?.companyName ?? null,
-          duplicateMatch: null,
-        });
+        results.push(
+          await withCompanyLogoResult(decision.targetId, fields, {
+            rowNumber: row.rowNumber,
+            status: "Imported",
+            messages: [
+              `Updated existing company #${decision.targetId} (${target?.companyName ?? companyName}); Company Number ${finalNumber} preserved.`,
+            ],
+            fields,
+            matchedEntityId: decision.targetId,
+            matchedEntityName: target?.companyName ?? null,
+            duplicateMatch: null,
+          }),
+        );
         log.debug("row updated", {
           row: row.rowNumber,
           number: finalNumber,
@@ -580,19 +622,21 @@ export async function commitCompanyImport(input: {
       // write staleness.
       companies = [...companies, createdCompany];
       created += 1;
-      results.push({
-        rowNumber: row.rowNumber,
-        status: "Imported",
-        messages: [
-          target
-            ? `Created new company despite duplicate (number set to ${finalNumber}).`
-            : `Created company #${createdCompany.id} (${finalNumber}).`,
-        ],
-        fields: { ...fields, companyNumber: finalNumber },
-        matchedEntityId: createdCompany.id,
-        matchedEntityName: createdCompany.companyName,
-        duplicateMatch: null,
-      });
+      results.push(
+        await withCompanyLogoResult(createdCompany.id, fields, {
+          rowNumber: row.rowNumber,
+          status: "Imported",
+          messages: [
+            target
+              ? `Created new company despite duplicate (number set to ${finalNumber}).`
+              : `Created company #${createdCompany.id} (${finalNumber}).`,
+          ],
+          fields: { ...fields, companyNumber: finalNumber },
+          matchedEntityId: createdCompany.id,
+          matchedEntityName: createdCompany.companyName,
+          duplicateMatch: null,
+        }),
+      );
       log.debug("row created", {
         row: row.rowNumber,
         number: finalNumber,

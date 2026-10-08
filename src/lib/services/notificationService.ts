@@ -5,6 +5,7 @@ import { getNotificationSettings, getPortalSettingsCached } from "@/lib/services
 import { writeNotificationLog } from "@/lib/services/notificationLogService";
 import {
   adminAlertEmailTemplate,
+  loadEmailBrandAttachments,
   loadPaveLogoAttachment,
   portalInviteEmailTemplate,
   testEmailTemplate,
@@ -359,6 +360,7 @@ export async function sendTestNotification(input: {
   actorEmail?: string | null;
 }): Promise<NotificationSendResult> {
   const template = testEmailTemplate();
+  const logo = await loadPaveLogoAttachment();
   return sendNotification({
     type: "test",
     to: input.to,
@@ -367,6 +369,8 @@ export async function sendTestNotification(input: {
     html: template.html,
     actorEmail: input.actorEmail,
     detail: "Manual admin test email",
+    fromName: "PAVE Training",
+    attachments: logo ? [logo] : undefined,
   });
 }
 
@@ -380,6 +384,7 @@ export async function sendAdminAlert(input: {
     title: input.title,
     detail: input.detail,
   });
+  const logo = await loadPaveLogoAttachment();
   const recipients = await resolveAdminAlertRecipients();
   if (recipients.length === 0) {
     await writeNotificationLog({
@@ -407,6 +412,8 @@ export async function sendAdminAlert(input: {
         actorEmail: input.actorEmail,
         detail: input.detail,
         dedupeKey: `admin-alert:${input.title}:${input.itemId ?? "none"}:${email}:${new Date().toISOString().slice(0, 10)}`,
+        fromName: "PAVE Training",
+        attachments: logo ? [logo] : undefined,
       }),
     );
   }
@@ -420,6 +427,7 @@ export async function sendPortalInviteNotification(input: {
   roleLabel?: string | null;
   itemId?: string | null;
   actorEmail?: string | null;
+  detail?: string | null;
 }): Promise<NotificationSendResult> {
   // Client-approved rule: portal invitations must always carry Company + Role
   // context so recipients know exactly which company they are joining and in
@@ -439,12 +447,16 @@ export async function sendPortalInviteNotification(input: {
     };
   }
 
+  const brand = await loadEmailBrandAttachments({
+    companyName,
+  });
   const template = portalInviteEmailTemplate({
     displayName: input.displayName,
     companyName,
     roleLabel,
+    includeCompanyLogo: brand.includeCompanyLogo,
   });
-  const logo = await loadPaveLogoAttachment();
+  const detail = input.detail?.trim() || "Permissions list invite";
   return sendNotification({
     type: "portal_invite",
     to: input.to,
@@ -454,10 +466,12 @@ export async function sendPortalInviteNotification(input: {
     companyName: input.companyName,
     itemId: input.itemId,
     actorEmail: input.actorEmail,
-    detail: "Permissions list invite",
+    detail,
     fromName: "PAVE Training",
-    dedupeKey: `portal-invite:${input.to.toLowerCase()}:${input.itemId ?? "new"}`,
-    attachments: logo ? [logo] : undefined,
+    // Include detail so create vs update (and rapid re-saves) are not collapsed
+    // into one log key; Graph still sends each time.
+    dedupeKey: `portal-invite:${input.to.toLowerCase()}:${input.itemId ?? "new"}:${detail}`,
+    attachments: brand.attachments.length ? brand.attachments : undefined,
   });
 }
 

@@ -1,12 +1,14 @@
 /**
  * Shared expiry colour / status model — single source of truth for all portals.
  *
- * Grey  = missing date → Records to Review
- * Red   = expired (< 0) or urgent (0–90 days / within 3 months)
- * Amber = upcoming (91–180 days / within 6 months)
- * Green = valid (181+ days / 6 months or more, open-ended)
+ * Grey  = missing date → Missing
+ * Red   = expired (past the expiry date)
+ * Amber = expiring soon (0–180 days remaining)
+ * Green = active (181+ days / 6 months or more, open-ended)
  *
  * The 3- and 6-month filters are cumulative; 6m-plus is open-ended from day 181.
+ * Status codes `urgent` (0–90) and `upcoming` (91–180) both display as amber
+ * “Expiring soon”; filters can still target one window or the other.
  */
 
 export type ExpiryStatusCode =
@@ -19,10 +21,10 @@ export type ExpiryStatusCode =
 export type ExpiryColour = "grey" | "red" | "amber" | "green";
 
 export type ExpiryStatusLabel =
-  | "Not applicable"
+  | "Missing"
   | "Expired"
   | "Expiring soon"
-  | "Compliant";
+  | "Active";
 
 export interface ExpiryStatus {
   status: ExpiryStatusCode;
@@ -65,7 +67,7 @@ export type ExpiryFilter =
 
 const MS_PER_DAY = 86_400_000;
 
-/** Urgent / within 3 months (inclusive) — red. */
+/** Urgent / within 3 months (inclusive) — amber “Expiring soon”. */
 export const EXPIRY_URGENT_DAYS = 90;
 /** End of 6-month amber window / start of green (open-ended). */
 export const EXPIRY_WITHIN_6M_DAYS = 180;
@@ -79,14 +81,9 @@ export function daysUntilExpiry(
   expiry: string | null | undefined,
   now = new Date(),
 ): number | null {
-  if (!expiry?.trim()) {
-    return null;
-  }
-
-  const expiryDate = new Date(expiry);
-  if (Number.isNaN(expiryDate.getTime())) {
-    return null;
-  }
+  if (!expiry?.trim()) return null;
+  const parsed = new Date(expiry);
+  if (Number.isNaN(parsed.getTime())) return null;
 
   const startOfToday = new Date(
     now.getFullYear(),
@@ -94,9 +91,9 @@ export function daysUntilExpiry(
     now.getDate(),
   );
   const startOfExpiry = new Date(
-    expiryDate.getFullYear(),
-    expiryDate.getMonth(),
-    expiryDate.getDate(),
+    parsed.getFullYear(),
+    parsed.getMonth(),
+    parsed.getDate(),
   );
 
   return Math.round(
@@ -117,7 +114,7 @@ export function getExpiryStatus(
   if (daysUntilExpiryValue === null) {
     return {
       status: "missing",
-      label: "Not applicable",
+      label: "Missing",
       colour: "grey",
       daysUntilExpiry: null,
     };
@@ -136,7 +133,7 @@ export function getExpiryStatus(
     return {
       status: "urgent",
       label: "Expiring soon",
-      colour: "red",
+      colour: "amber",
       daysUntilExpiry: daysUntilExpiryValue,
     };
   }
@@ -152,7 +149,7 @@ export function getExpiryStatus(
 
   return {
     status: "valid",
-    label: "Compliant",
+    label: "Active",
     colour: "green",
     daysUntilExpiry: daysUntilExpiryValue,
   };
@@ -169,7 +166,6 @@ export function getExpiryTone(
     case "expired":
       return "expired";
     case "urgent":
-      return "critical";
     case "upcoming":
       return "warning";
     case "valid":
@@ -244,7 +240,9 @@ export function matchesAnyExpiryFilter(
   return dates.some((date) => matchesExpiryFilter(date, normalized, now));
 }
 
-/** Earliest non-null date among candidates (ISO-ish strings). */
+/**
+ * Earliest non-null parseable date — used for Next Expiry rollups.
+ */
 export function earliestExpiryDate(
   dates: Array<string | null | undefined>,
 ): string | null {
@@ -269,21 +267,15 @@ export const EXPIRY_STATUS_LEGEND: ReadonlyArray<{
 }> = [
   {
     status: "valid",
-    label: "Compliant",
+    label: "Active",
     colour: "green",
-    description: "6–9 months and beyond (181+ days) — compliant",
+    description: "181+ days remaining",
   },
   {
     status: "upcoming",
     label: "Expiring soon",
     colour: "amber",
-    description: "Within 3–6 months (91–180 days)",
-  },
-  {
-    status: "urgent",
-    label: "Expiring soon",
-    colour: "red",
-    description: "Within 3 months (0–90 days)",
+    description: "0–180 days remaining (includes within 3 months)",
   },
   {
     status: "expired",
@@ -293,8 +285,8 @@ export const EXPIRY_STATUS_LEGEND: ReadonlyArray<{
   },
   {
     status: "missing",
-    label: "Not applicable",
+    label: "Missing",
     colour: "grey",
-    description: "No expiry date recorded — Records to Review",
+    description: "No expiry date recorded",
   },
 ];

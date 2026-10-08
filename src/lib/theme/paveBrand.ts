@@ -39,7 +39,7 @@ export type MatrixStatusKey =
 export const MATRIX_STATUS = {
   compliant: {
     key: "compliant" as const,
-    label: "Compliant",
+    label: "Active",
     bg: PAVE_BRAND.greenTint,
     text: PAVE_BRAND.charcoal,
     accent: PAVE_BRAND.green,
@@ -60,7 +60,7 @@ export const MATRIX_STATUS = {
   },
   notApplicable: {
     key: "notApplicable" as const,
-    label: "Not applicable",
+    label: "Missing",
     bg: PAVE_BRAND.neutralTint,
     text: PAVE_BRAND.textSecondary,
     accent: PAVE_BRAND.border,

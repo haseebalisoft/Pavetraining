@@ -166,3 +166,37 @@ export function getNporsShortTitle(code: string | null | undefined): string | nu
   const key = code.trim().toUpperCase();
   return OFFICIAL_SHORT_TITLES[key] ?? null;
 }
+
+/**
+ * Split stored NPORS category text into N-number + category name.
+ * Accepts "N001 - Ind FLT", "N001 – Title", or bare "N001".
+ */
+export function splitNporsCategory(raw: string | null | undefined): {
+  nNumber: string | null;
+  categoryName: string | null;
+} {
+  const text = String(raw ?? "")
+    .split(/[;,|]+/)
+    .map((part) => part.trim())
+    .find(Boolean);
+  if (!text) return { nNumber: null, categoryName: null };
+
+  const dashed = text.match(/^(N\d+[A-Z]?)\s*[-–—:]\s*(.+)$/i);
+  if (dashed) {
+    return {
+      nNumber: dashed[1]!.toUpperCase(),
+      categoryName: dashed[2]!.trim() || null,
+    };
+  }
+
+  const codeOnly = text.match(/^(N\d+[A-Z]?)$/i);
+  if (codeOnly) {
+    const nNumber = codeOnly[1]!.toUpperCase();
+    return {
+      nNumber,
+      categoryName: getNporsShortTitle(nNumber),
+    };
+  }
+
+  return { nNumber: null, categoryName: text };
+}
