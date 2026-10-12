@@ -9,6 +9,7 @@ import {
   isDepartmentActive,
   listAdminDepartments,
 } from "@/lib/services/departmentService";
+import { getSettings } from "@/lib/services/settingsService";
 
 export const dynamic = "force-dynamic";
 
@@ -28,9 +29,10 @@ export default async function AdminWorkforcePage() {
   // permissions / departments on top of the page's own Promise.all (very slow
   // after a large bulk import).
   const companies = await listAdminCompanies();
-  const [departments, permissionPeople] = await Promise.all([
+  const [departments, permissionPeople, portalSettings] = await Promise.all([
     listAdminDepartments(),
     listAdminPermissions(companies),
+    getSettings(),
   ]);
   const records = await listAdminWorkforce(null, {
     companies,
@@ -47,6 +49,9 @@ export default async function AdminWorkforcePage() {
       departments={departments.filter(isDepartmentActive)}
       initialRows={records}
       permissionPeople={permissionPeople}
+      expiryRemindersOffIds={
+        portalSettings.settings.expiryRemindersOffWorkforceIds
+      }
     />
   );
 }

@@ -1593,6 +1593,17 @@ export async function updateAdminWorkforce(
     },
   );
 
+  const tmLookupField = `${workforceFields.trainingManager}LookupId`;
+  const supervisorLookupField = `${workforceFields.supervisor}LookupId`;
+  const previousTmId = extractLookupId(
+    existing.fields,
+    workforceFields.trainingManager,
+  );
+  const previousSupervisorId = extractLookupId(
+    existing.fields,
+    workforceFields.supervisor,
+  );
+
   const item = await updateListItemFieldsByKey("workforce", id, payload);
   const companies = await listAdminCompanies();
   const companyNameById = new Map(
@@ -1619,9 +1630,95 @@ export async function updateAdminWorkforce(
     } catch (error) {
       console.error("[workforce] matrix sync on update failed:", error);
     }
+
+    // Tell the people affected when the Training Manager / Supervisor
+    // changes: the one removed and the one now assigned.
+    const changes: Array<{
+      role: "Training Manager" | "Supervisor";
+      before: string | null;
+      after: string | null;
+    }> = [];
+    if (tmLookupField in payload) {
+      changes.push({
+        role: "Training Manager",
+        before: previousTmId,
+        after: lookupIdText(payload[tmLookupField]),
+      });
+    }
+    if (supervisorLookupField in payload) {
+      changes.push({
+        role: "Supervisor",
+        before: previousSupervisorId,
+        after: lookupIdText(payload[supervisorLookupField]),
+      });
+    }
+    await notifyCandidateAssignmentChanges(mapped, changes, {
+      actorEmail: optionalText(input.actorEmail),
+    });
   }
 
   return mapped;
+}
+
+function lookupIdText(value: unknown): string | null {
+  const text = String(value ?? "").trim();
+  return /^\d+$/.test(text) ? text : null;
+}
+
+/**
+ * Emails for Training Manager / Supervisor changes on a candidate. Best
+ * effort — a mail problem never fails the Workforce save.
+ */
+async function notifyCandidateAssignmentChanges(
+  candidate: AdminWorkforceRecord,
+  changes: Array<{
+    role: "Training Manager" | "Supervisor";
+    before: string | null;
+    after: string | null;
+  }>,
+  options: { actorEmail?: string | null },
+): Promise<void> {
+  const real = changes.filter((change) => change.before !== change.after);
+  if (real.length === 0) return;
+  try {
+    const { sendCandidateAssignmentNotification } = await import(
+      "@/lib/services/notificationService"
+    );
+    for (const change of real) {
+      const sends: Array<["assigned" | "removed", string | null]> = [
+        ["removed", change.before],
+        ["assigned", change.after],
+      ];
+      for (const [action, personId] of sends) {
+        if (!personId) continue;
+        const person = await loadPermissionPersonById(personId);
+        const email = person?.userEmail?.trim();
+        if (!email || email.endsWith("@pave.local")) continue;
+        const result = await sendCandidateAssignmentNotification({
+          to: email,
+          displayName: person?.name,
+          action,
+          roleLabel: change.role,
+          candidateName: candidate.candidateName,
+          companyName: candidate.companyName,
+          itemId: candidate.id,
+          actorEmail: options.actorEmail,
+        });
+        if (result.status !== "sent" && result.status !== "queued") {
+          console.warn(
+            `[workforce] ${change.role} ${action} email to ${email} ${result.status}: ${
+              result.errorMessage ?? ""
+            }`,
+          );
+        }
+      }
+    }
+  } catch (error) {
+    console.warn(
+      "[workforce] assignment change email failed:",
+      error instanceof Error ? error.message : error,
+    );
+  }
 }
 
 /**
@@ -5525,6 +5622,8 @@ async function notifyPermissionPortalInvite(
   options: {
     reason: "created" | "updated";
     fallbackCompanyName?: string | null;
+    /** What changed, one line each (update emails). */
+    changes?: string[];
   },
 ): Promise<PermissionAccessEmailResult> {
   try {
@@ -5563,6 +5662,7 @@ async function notifyPermissionPortalInvite(
       roleLabel,
       itemId: resolved.id,
       reason: options.reason,
+      changes: options.changes,
       detail:
         options.reason === "created"
           ? "Permissions list invite (created)"
@@ -5590,6 +5690,82 @@ async function notifyPermissionPortalInvite(
     console.warn(`[permissions] portal invite failed (${options.reason}):`, detail);
     return { sent: false, message: `Access email failed — ${detail}.` };
   }
+}
+
+/** "Your access has been removed" email. Best-effort — never throws. */
+async function notifyPermissionAccessRemoved(
+  record: AdminPermissionRecord,
+): Promise<PermissionAccessEmailResult> {
+  const email = record.userEmail?.trim();
+  if (!email || email.toLowerCase().endsWith("@pave.local")) {
+    return { sent: false, message: "No access-removed email — no real email address." };
+  }
+  try {
+    const resolved = await withResolvedPermissionCompany(record);
+    const { sendAccessRemovedNotification } = await import(
+      "@/lib/services/notificationService"
+    );
+    const result = await sendAccessRemovedNotification({
+      to: email,
+      displayName: resolved.name,
+      companyName: resolved.companyName,
+      roleLabel: resolved.roleLabel,
+      itemId: resolved.id,
+    });
+    if (result.status === "sent" || result.status === "queued") {
+      return { sent: true, message: `Access-removed email sent to ${email}.` };
+    }
+    return {
+      sent: false,
+      message: `Access-removed email not sent to ${email} — ${result.errorMessage ?? result.status}.`,
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.warn("[permissions] access-removed email failed:", detail);
+    return { sent: false, message: `Access-removed email failed — ${detail}.` };
+  }
+}
+
+/** Plain-English list of what changed on a Permissions row. */
+function describePermissionChanges(
+  before: AdminPermissionRecord,
+  after: AdminPermissionRecord,
+): string[] {
+  const lines: string[] = [];
+  if (before.roleLabel !== after.roleLabel) {
+    lines.push(`Role: ${before.roleLabel || "—"} → ${after.roleLabel || "—"}`);
+  }
+  if (
+    (before.companyName ?? "").trim().toLowerCase() !==
+    (after.companyName ?? "").trim().toLowerCase()
+  ) {
+    lines.push(
+      `Company: ${before.companyName || "—"} → ${after.companyName || "—"}`,
+    );
+  }
+  if ((before.accessScope ?? "") !== (after.accessScope ?? "")) {
+    lines.push(
+      `Access: ${before.accessScope || "—"} → ${after.accessScope || "—"}`,
+    );
+  }
+  const rights: Array<[string, boolean, boolean]> = [
+    ["View", before.canView, after.canView],
+    ["Download", before.canDownload, after.canDownload],
+    ["Edit", before.canEdit, after.canEdit],
+  ];
+  for (const [label, was, now] of rights) {
+    if (was !== now) lines.push(`${label}: ${now ? "allowed" : "removed"}`);
+  }
+  const beforeDepts = new Set(before.departmentScopes);
+  const afterDepts = new Set(after.departmentScopes);
+  const added = [...afterDepts].filter((name) => !beforeDepts.has(name));
+  const removed = [...beforeDepts].filter((name) => !afterDepts.has(name));
+  if (added.length) lines.push(`Departments added: ${added.join(", ")}`);
+  if (removed.length) lines.push(`Departments removed: ${removed.join(", ")}`);
+  if (before.userEmail.toLowerCase() !== after.userEmail.toLowerCase()) {
+    lines.push(`Email: ${after.userEmail}`);
+  }
+  return lines;
 }
 
 export async function createAdminPermission(input: Record<string, unknown>) {
@@ -6001,7 +6177,12 @@ export async function updateAdminPermission(
     accessEmail = await notifyPermissionPortalInvite(mapped, {
       reason: "updated",
       fallbackCompanyName: optionalText(input.companyName),
+      changes:
+        previous && wasActive ? describePermissionChanges(previous, mapped) : [],
     });
+  } else if (wasActive && !isActive) {
+    // Switched off — tell them their access has been removed.
+    accessEmail = await notifyPermissionAccessRemoved(previous ?? mapped);
   } else if (!isActive) {
     accessEmail = {
       sent: false,
@@ -6103,6 +6284,9 @@ export async function deleteAdminPermission(
   }
   revalidateSharePointList("permissions");
   revalidatePath("/admin/permissions");
+  if (mapped && (mapped.status ?? "").toLowerCase() === "active") {
+    await notifyPermissionAccessRemoved(mapped);
+  }
   return mapped;
 }
 

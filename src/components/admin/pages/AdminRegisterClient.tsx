@@ -177,7 +177,9 @@ function fieldsFor(
       },
       {
         name: "nporsCategory",
-        label: "NPORS category",
+        // With several candidates ticked above, every ticked test is saved
+        // for each of them (e.g. John, Wayne, Paul → Paver, Roller, 360).
+        label: "NPORS tests done (tick all that apply)",
         type: "multiselect",
         required: true,
         section: "Training",

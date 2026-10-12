@@ -17,6 +17,8 @@ export interface PortalSettings {
   send6MonthReminders: boolean;
   sendExpiredReminders: boolean;
   reminderFrequency: ReminderFrequency;
+  /** Workforce item ids whose expiry reminder emails are switched off. */
+  expiryRemindersOffWorkforceIds: string[];
 
   // 3. Document settings
   notifyOnCertificateUpload: boolean;

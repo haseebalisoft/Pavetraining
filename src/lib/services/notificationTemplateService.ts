@@ -287,6 +287,8 @@ export function portalInviteEmailTemplate(input: {
   includeCompanyLogo?: boolean;
   /** "updated" = existing access changed (role, company, rights, departments). */
   reason?: "created" | "updated";
+  /** What changed, one line each — shown on "updated" emails. */
+  changes?: string[];
 }): { subject: string; text: string; html: string } {
   const loginUrl = portalLoginUrl();
   const updated = input.reason === "updated";
@@ -313,6 +315,9 @@ export function portalInviteEmailTemplate(input: {
     "Role:",
     role,
     "",
+    ...(updated && input.changes?.length
+      ? ["What changed:", ...input.changes.map((line) => `- ${line}`), ""]
+      : []),
     portalCtaText(loginUrl, "Sign in here"),
     "",
     "Use your work email with Microsoft sign-in, or request a one-time code from the login screen. If your organisation uses multi-factor authentication, you will be prompted as usual.",
@@ -322,9 +327,91 @@ export function portalInviteEmailTemplate(input: {
 <p>${escapeHtml(intro)}</p>
 <p><strong>Company:</strong><br/>${escapeHtml(company)}</p>
 <p><strong>Role:</strong><br/>${escapeHtml(role)}</p>
+${
+  updated && input.changes?.length
+    ? `<p><strong>What changed:</strong></p><ul>${input.changes
+        .map((line) => `<li>${escapeHtml(line)}</li>`)
+        .join("")}</ul>`
+    : ""
+}
 ${portalCtaHtml(loginUrl, "Sign in to the portal")}
 <p>Use your work email with Microsoft sign-in, or request a one-time code from the login screen. If your organisation uses multi-factor authentication, you will be prompted as usual.</p>`;
 
+  return { subject, text, html };
+}
+
+/**
+ * Training Manager / Supervisor assigned to, or removed from, a candidate.
+ */
+export function candidateAssignmentEmailTemplate(input: {
+  displayName?: string | null;
+  action: "assigned" | "removed";
+  roleLabel: "Training Manager" | "Supervisor";
+  candidateName: string;
+  companyName?: string | null;
+  includeCompanyLogo?: boolean;
+}): { subject: string; text: string; html: string } {
+  const portalUrl = portalMatrixUrl();
+  const who = input.displayName?.trim() || "there";
+  const company = input.companyName?.trim() || "—";
+  const assigned = input.action === "assigned";
+  const subject = assigned
+    ? `You have been assigned to ${input.candidateName}`
+    : `You have been removed from ${input.candidateName}`;
+  const line = assigned
+    ? `You have been assigned as ${input.roleLabel} for ${input.candidateName}.`
+    : `You have been removed as ${input.roleLabel} for ${input.candidateName}. You will no longer receive updates for this candidate.`;
+
+  const text = [
+    `Hi ${who},`,
+    "",
+    line,
+    "",
+    `Candidate: ${input.candidateName}`,
+    `Company: ${company}`,
+    `Role: ${input.roleLabel}`,
+    "",
+    portalCtaText(portalUrl, "Open the portal"),
+  ].join("\n");
+
+  const html = `${emailLogoHtml({ includeCompanyLogo: input.includeCompanyLogo })}<p>Hi ${escapeHtml(who)},</p>
+<p>${escapeHtml(line)}</p>
+<p><strong>Candidate:</strong> ${escapeHtml(input.candidateName)}<br/>
+<strong>Company:</strong> ${escapeHtml(company)}<br/>
+<strong>Role:</strong> ${escapeHtml(input.roleLabel)}</p>
+${portalCtaHtml(portalUrl, "Open the PAVE Training Portal")}`;
+
+  return { subject, text, html };
+}
+
+/** Portal access switched off (Inactive) or deleted. */
+export function accessRemovedEmailTemplate(input: {
+  displayName?: string | null;
+  companyName?: string | null;
+  roleLabel?: string | null;
+  includeCompanyLogo?: boolean;
+}): { subject: string; text: string; html: string } {
+  const who = input.displayName?.trim() || "there";
+  const company = input.companyName?.trim() || "—";
+  const role = input.roleLabel?.trim() || "—";
+  const subject = "Your PAVE Training Portal access has been removed";
+  const line =
+    "Your access to the PAVE Training Portal has been removed. If you think this is a mistake, please contact PAVE Training.";
+  const text = [
+    `Hi ${who},`,
+    "",
+    line,
+    "",
+    `Company: ${company}`,
+    `Role: ${role}`,
+    "",
+    "Any questions please contact: Info@pavetraining.co.uk",
+  ].join("\n");
+  const html = `${emailLogoHtml({ includeCompanyLogo: input.includeCompanyLogo })}<p>Hi ${escapeHtml(who)},</p>
+<p>${escapeHtml(line)}</p>
+<p><strong>Company:</strong> ${escapeHtml(company)}<br/>
+<strong>Role:</strong> ${escapeHtml(role)}</p>
+<p>Any questions please contact:<br/><a href="mailto:info@pavetraining.co.uk">Info@pavetraining.co.uk</a></p>`;
   return { subject, text, html };
 }
 

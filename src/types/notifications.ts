@@ -7,6 +7,8 @@ export type NotificationType =
   | "expiry_expired"
   | "admin_alert"
   | "portal_invite"
+  /** Assigned to / removed from a candidate, or portal access removed. */
+  | "access_change"
   | "login_otp"
   | "test";
 

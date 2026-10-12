@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import {
   AdminCrudPage,
@@ -11,6 +11,7 @@ import {
   type AdminPermissionPersonOption,
 } from "@/components/admin/AdminCrudPage";
 import styles from "@/components/admin/admin.module.css";
+import { useAdminToast } from "@/components/admin/AdminToast";
 import { ImageUploadButton } from "@/components/admin/ImageUploadButton";
 import {
   WorkforceInlineSelect,
@@ -27,6 +28,7 @@ import type { AdminDepartmentRecord } from "@/lib/services/departmentTypes";
 import { EXPIRY_STATUS_LEGEND } from "@/lib/training/expiryFilters";
 import { toneForExpiryStatus } from "@/lib/ui/status";
 import { allocateNextWorkforceNumber } from "@/lib/workforceNumber";
+import { readPublicApiError } from "@/lib/errors/publicMessages";
 import { formatDate } from "@/lib/utils/formatDate";
 import type { Company } from "@/types/models";
 
@@ -135,9 +137,45 @@ function permissionPeopleFromRecords(
   }));
 }
 
+/** On/Off switch for one candidate's expiry reminder emails. */
+function ExpiryRemindersToggle({
+  enabled,
+  saving,
+  onToggle,
+}: {
+  enabled: boolean;
+  saving: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={styles.linkButton}
+      disabled={saving}
+      aria-pressed={enabled}
+      title={
+        enabled
+          ? "Expiry reminder emails are ON for this candidate — click to turn off"
+          : "Expiry reminder emails are OFF for this candidate — click to turn on"
+      }
+      onClick={onToggle}
+    >
+      <StatusBadge
+        label={saving ? "Saving…" : enabled ? "On" : "Off"}
+        tone={enabled ? "ok" : "neutral"}
+      />
+    </button>
+  );
+}
+
 function buildColumns(
   departments: AdminDepartmentRecord[],
   people: AdminPermissionPersonOption[],
+  reminders: {
+    isOn: (id: string) => boolean;
+    isSaving: (id: string) => boolean;
+    toggle: (id: string) => void;
+  },
 ): AdminColumn<AdminWorkforceRecord>[] {
   const inlineSaved =
     (ctx: AdminColumnRenderContext<AdminWorkforceRecord>) =>
@@ -298,6 +336,17 @@ function buildColumns(
       render: (row) => text(row.status),
     },
     {
+      key: "expiryReminders",
+      header: "Expiry emails",
+      render: (row) => (
+        <ExpiryRemindersToggle
+          enabled={reminders.isOn(row.id)}
+          saving={reminders.isSaving(row.id)}
+          onToggle={() => reminders.toggle(row.id)}
+        />
+      ),
+    },
+    {
       key: "notes",
       header: "Notes",
       render: (row) => text(row.notes),
@@ -372,15 +421,15 @@ const fields: AdminFieldConfig[] = [
   },
   {
     name: "status",
-    // Today Status is a record-keeping label only — nothing is hidden or
-    // filtered by it. The option text says what each value means.
-    label: "Status (record only — does not hide the candidate)",
+    // Inactive candidates are hidden from the customer Training Matrix;
+    // admins still see them everywhere.
+    label: "Status (Inactive = hidden from the customer Training Matrix)",
     type: "select",
     options: [
       { value: "Active", label: "Active — currently working for this company" },
       {
         value: "Inactive",
-        label: "Inactive — left / no longer working (kept for history)",
+        label: "Inactive — left / no longer working (admin only, kept for history)",
       },
     ],
   },
@@ -392,19 +441,78 @@ export function AdminWorkforceClient({
   departments,
   initialRows,
   permissionPeople,
+  expiryRemindersOffIds = [],
 }: {
   companies: Company[];
   departments: AdminDepartmentRecord[];
   initialRows: AdminWorkforceRecord[];
   permissionPeople: AdminPermissionRecord[];
+  /** Candidates whose expiry reminder emails are switched off. */
+  expiryRemindersOffIds?: string[];
 }) {
+  const { pushToast } = useAdminToast();
   const people = useMemo(
     () => permissionPeopleFromRecords(permissionPeople),
     [permissionPeople],
   );
+  const [remindersOff, setRemindersOff] = useState(
+    () => new Set(expiryRemindersOffIds),
+  );
+  const [remindersSaving, setRemindersSaving] = useState<Set<string>>(
+    () => new Set(),
+  );
+
+  const toggleReminders = useCallback(
+    async (id: string) => {
+      const enable = remindersOff.has(id);
+      setRemindersSaving((current) => new Set(current).add(id));
+      try {
+        const response = await fetch(
+          `/api/admin/workforce/${id}/expiry-reminders`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: enable }),
+          },
+        );
+        if (!response.ok) throw new Error(await readPublicApiError(response));
+        const payload = (await response.json()) as { enabled: boolean };
+        setRemindersOff((current) => {
+          const next = new Set(current);
+          if (payload.enabled) next.delete(id);
+          else next.add(id);
+          return next;
+        });
+        pushToast(
+          payload.enabled
+            ? "Expiry reminder emails turned on for this candidate."
+            : "Expiry reminder emails turned off for this candidate.",
+          "success",
+        );
+      } catch (error) {
+        pushToast(
+          error instanceof Error ? error.message : "Could not save.",
+          "error",
+        );
+      } finally {
+        setRemindersSaving((current) => {
+          const next = new Set(current);
+          next.delete(id);
+          return next;
+        });
+      }
+    },
+    [pushToast, remindersOff],
+  );
+
   const columns = useMemo(
-    () => buildColumns(departments, people),
-    [departments, people],
+    () =>
+      buildColumns(departments, people, {
+        isOn: (id) => !remindersOff.has(id),
+        isSaving: (id) => remindersSaving.has(id),
+        toggle: (id) => void toggleReminders(id),
+      }),
+    [departments, people, remindersOff, remindersSaving, toggleReminders],
   );
 
   return (

@@ -137,6 +137,9 @@ export async function runExpiryReminderCheck(options?: {
     ]),
   );
 
+  // Candidates whose expiry emails an admin has switched off (Workforce table).
+  const remindersOff = new Set(portal.expiryRemindersOffWorkforceIds);
+
   const hits: ExpiryHit[] = [];
 
   for (const row of matrixRows) {
@@ -159,6 +162,8 @@ export async function runExpiryReminderCheck(options?: {
       workforceByNameCompany.get(
         `${nameKey(row.candidateName)}|${nameKey(row.companyName)}`,
       ) ?? null;
+    const workforceId = String(wf?.id ?? row.workforceId ?? "").trim();
+    if (workforceId && remindersOff.has(workforceId)) continue;
 
     hits.push({
       candidateName: row.candidateName,

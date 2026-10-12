@@ -42,9 +42,18 @@ export async function PATCH(request: Request) {
           ? body.settings
           : (body as Partial<PortalSettings>);
 
-      return updateSettings(partial, {
-        actorEmail: context.loggedInEmail,
-      });
+      // The per-candidate expiry email switches live on the Workforce page,
+      // not here — keep the current list so a stale Settings tab (or a
+      // reset) never switches anyone's reminders back on.
+      const current = await getSettings({ bypassCache: true });
+      return updateSettings(
+        {
+          ...partial,
+          expiryRemindersOffWorkforceIds:
+            current.settings.expiryRemindersOffWorkforceIds,
+        },
+        { actorEmail: context.loggedInEmail },
+      );
     },
     {
       errorMessage: "Failed to update portal settings",

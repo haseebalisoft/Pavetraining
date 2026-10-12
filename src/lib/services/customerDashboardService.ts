@@ -470,6 +470,10 @@ export async function getCustomerMatrixRecords(
     }
 
     for (const candidate of workforce) {
+      // Inactive candidates are admin-only — customers never see them here.
+      if ((candidate.status ?? "").trim().toLowerCase() === "inactive") {
+        continue;
+      }
       const key = nameKey(candidate.candidateName);
       const matrix =
         matrixById.get(String(candidate.id).trim()) ??

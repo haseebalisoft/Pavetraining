@@ -4,7 +4,9 @@ import { getGraphClient } from "@/lib/graph/graphClient";
 import { getNotificationSettings, getPortalSettingsCached } from "@/lib/services/notificationConfig";
 import { writeNotificationLog } from "@/lib/services/notificationLogService";
 import {
+  accessRemovedEmailTemplate,
   adminAlertEmailTemplate,
+  candidateAssignmentEmailTemplate,
   loadEmailBrandAttachments,
   loadPaveLogoAttachment,
   portalInviteEmailTemplate,
@@ -128,7 +130,8 @@ export async function sendNotification(
 
   const isTrainingRecordChange = input.type === "training_record_change";
   const isAdminAlert = input.type === "admin_alert";
-  const isPortalInvite = input.type === "portal_invite";
+  const isPortalInvite =
+    input.type === "portal_invite" || input.type === "access_change";
   const isLoginOtp = input.type === "login_otp";
   const isBookingConfirmed = input.type === "booking_confirmed";
   const isExpiry =
@@ -429,6 +432,7 @@ export async function sendPortalInviteNotification(input: {
   actorEmail?: string | null;
   detail?: string | null;
   reason?: "created" | "updated";
+  changes?: string[];
 }): Promise<NotificationSendResult> {
   // Client-approved rule: portal invitations must always carry Company + Role
   // context so recipients know exactly which company they are joining and in
@@ -457,6 +461,7 @@ export async function sendPortalInviteNotification(input: {
     roleLabel,
     includeCompanyLogo: brand.includeCompanyLogo,
     reason: input.reason,
+    changes: input.changes,
   });
   const detail = input.detail?.trim() || "Permissions list invite";
   return sendNotification({
@@ -473,6 +478,72 @@ export async function sendPortalInviteNotification(input: {
     // Include detail so create vs update (and rapid re-saves) are not collapsed
     // into one log key; Graph still sends each time.
     dedupeKey: `portal-invite:${input.to.toLowerCase()}:${input.itemId ?? "new"}:${detail}`,
+    attachments: brand.attachments.length ? brand.attachments : undefined,
+  });
+}
+
+/** Training Manager / Supervisor assigned to or removed from a candidate. */
+export async function sendCandidateAssignmentNotification(input: {
+  to: string;
+  displayName?: string | null;
+  action: "assigned" | "removed";
+  roleLabel: "Training Manager" | "Supervisor";
+  candidateName: string;
+  companyName?: string | null;
+  itemId?: string | null;
+  actorEmail?: string | null;
+}): Promise<NotificationSendResult> {
+  const brand = await loadEmailBrandAttachments(
+    input.companyName ? { companyName: input.companyName } : undefined,
+  );
+  const template = candidateAssignmentEmailTemplate({
+    ...input,
+    includeCompanyLogo: brand.includeCompanyLogo,
+  });
+  return sendNotification({
+    type: "access_change",
+    to: input.to,
+    subject: template.subject,
+    text: template.text,
+    html: template.html,
+    companyName: input.companyName,
+    itemId: input.itemId,
+    actorEmail: input.actorEmail,
+    detail: `${input.roleLabel} ${input.action}: ${input.candidateName}`,
+    fromName: "PAVE Training",
+    dedupeKey: `candidate-assignment:${input.to.toLowerCase()}:${input.itemId ?? input.candidateName}:${input.action}:${Date.now()}`,
+    attachments: brand.attachments.length ? brand.attachments : undefined,
+  });
+}
+
+/** Portal access removed (Permissions row set Inactive or deleted). */
+export async function sendAccessRemovedNotification(input: {
+  to: string;
+  displayName?: string | null;
+  companyName?: string | null;
+  roleLabel?: string | null;
+  itemId?: string | null;
+  actorEmail?: string | null;
+}): Promise<NotificationSendResult> {
+  const brand = await loadEmailBrandAttachments(
+    input.companyName ? { companyName: input.companyName } : undefined,
+  );
+  const template = accessRemovedEmailTemplate({
+    ...input,
+    includeCompanyLogo: brand.includeCompanyLogo,
+  });
+  return sendNotification({
+    type: "access_change",
+    to: input.to,
+    subject: template.subject,
+    text: template.text,
+    html: template.html,
+    companyName: input.companyName,
+    itemId: input.itemId,
+    actorEmail: input.actorEmail,
+    detail: "Portal access removed",
+    fromName: "PAVE Training",
+    dedupeKey: `access-removed:${input.to.toLowerCase()}:${input.itemId ?? "row"}:${Date.now()}`,
     attachments: brand.attachments.length ? brand.attachments : undefined,
   });
 }

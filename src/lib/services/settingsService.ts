@@ -41,6 +41,7 @@ export function getDefaultSettings(): PortalSettings {
     send6MonthReminders: true,
     sendExpiredReminders: false,
     reminderFrequency: "Weekly",
+    expiryRemindersOffWorkforceIds: [],
 
     notifyOnCertificateUpload: true,
     notifyOnCardScanUpload: true,
@@ -112,6 +113,13 @@ function asSyncDirection(
   return fallback;
 }
 
+function asIdList(value: unknown, fallback: string[]): string[] {
+  if (!Array.isArray(value)) return fallback;
+  return Array.from(
+    new Set(value.map((entry) => String(entry ?? "").trim()).filter(Boolean)),
+  );
+}
+
 export function mergeWithDefaults(
   partial: Partial<PortalSettings> | null | undefined,
 ): PortalSettings {
@@ -163,6 +171,10 @@ export function mergeWithDefaults(
     reminderFrequency: asReminderFrequency(
       partial.reminderFrequency,
       defaults.reminderFrequency,
+    ),
+    expiryRemindersOffWorkforceIds: asIdList(
+      partial.expiryRemindersOffWorkforceIds,
+      defaults.expiryRemindersOffWorkforceIds,
     ),
 
     notifyOnCertificateUpload: asBool(
