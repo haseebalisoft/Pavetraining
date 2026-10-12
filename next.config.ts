@@ -16,6 +16,11 @@ const withSerwist = withSerwistInit({
 });
 
 const nextConfig: NextConfig = {
+  // Emails embed the PAVE logo from disk; make sure it ships with every
+  // server function (public/ is not traced by default).
+  outputFileTracingIncludes: {
+    "/**": ["./public/brand/pave-logo.png"],
+  },
   turbopack: {
     root: path.join(__dirname),
   },

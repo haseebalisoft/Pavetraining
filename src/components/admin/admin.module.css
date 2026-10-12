@@ -1962,8 +1962,15 @@
   -webkit-overflow-scrolling: touch;
 }
 
+/*
+ * Wide tables scroll inside their own box, and that box is as tall as the
+ * screen under the top nav. Once the table is in view, scrolling down moves
+ * the rows while the sticky column headers stay at the top. A shorter box
+ * meant scrolling the page instead, and the headers went off screen.
+ */
 .tableWrapWide {
-  max-height: min(70vh, 44rem);
+  max-height: calc(100vh - 5.5rem);
+  max-height: calc(100dvh - 5.5rem);
 }
 
 .bulkPreviewTableWrap {
@@ -2007,80 +2014,41 @@
   text-overflow: ellipsis;
 }
 
-.stickyLeadColumns th:nth-child(1),
-.stickyLeadColumns td:nth-child(1),
-.stickyLeadColumns th:nth-child(2),
-.stickyLeadColumns td:nth-child(2) {
-  position: sticky;
-  left: 0;
-  z-index: 1;
-  background: var(--pave-surface);
-  box-shadow: 4px 0 10px rgba(var(--pave-charcoal-rgb), 0.06);
-}
-
-.stickyLeadColumns th:nth-child(1),
-.stickyLeadColumns th:nth-child(2) {
-  z-index: 3;
-  background: var(--pave-bg);
-}
-
-.stickyLeadColumns th:nth-child(1),
-.stickyLeadColumns td:nth-child(1) {
-  min-width: var(--matrix-name-col-width);
-  max-width: var(--matrix-name-col-width);
-}
-
-.stickyLeadColumns th:nth-child(2),
-.stickyLeadColumns td:nth-child(2) {
-  left: var(--matrix-name-col-width);
-  min-width: var(--matrix-company-col-width);
-  max-width: var(--matrix-company-col-width);
-}
-
 /*
- * Training Matrix has a leading select/delete column, so Candidate Name is
- * nth-child(2) and Company Name is nth-child(3). Stick those two so company
- * stays visible while scrolling category dates.
+ * Training Matrix lead columns: row-select, Candidate Name, Company Name.
+ * Widths only — pin offsets are measured by useStickyLeadColumns, so a long
+ * name widens its column instead of sliding under Company Name.
  */
-.matrixStickyCompany.stickyLeadColumns th:nth-child(1),
-.matrixStickyCompany.stickyLeadColumns td:nth-child(1),
-.matrixStickyCompany.stickyLeadColumns th:nth-child(2),
-.matrixStickyCompany.stickyLeadColumns td:nth-child(2),
-.matrixStickyCompany.stickyLeadColumns th:nth-child(3),
-.matrixStickyCompany.stickyLeadColumns td:nth-child(3) {
-  position: sticky;
-  z-index: 1;
-  background: var(--pave-surface);
-  box-shadow: 4px 0 10px rgba(var(--pave-charcoal-rgb), 0.06);
+.matrixTable {
+  --sticky-lead-head-bg: var(--pave-bg);
+  --sticky-lead-bg: var(--pave-surface);
 }
 
-.matrixStickyCompany.stickyLeadColumns th:nth-child(1),
-.matrixStickyCompany.stickyLeadColumns th:nth-child(2),
-.matrixStickyCompany.stickyLeadColumns th:nth-child(3) {
-  z-index: 3;
-  background: var(--pave-bg);
-}
-
-.matrixStickyCompany.stickyLeadColumns th:nth-child(1),
-.matrixStickyCompany.stickyLeadColumns td:nth-child(1) {
-  left: 0;
+.matrixTable th.selectCol,
+.matrixTable td.selectCol {
+  width: 2.75rem;
   min-width: 2.75rem;
-  max-width: 2.75rem;
-  box-shadow: none;
 }
 
-.matrixStickyCompany.stickyLeadColumns th:nth-child(2),
-.matrixStickyCompany.stickyLeadColumns td:nth-child(2) {
-  left: 2.75rem;
+.matrixTable tr > :nth-child(2) {
+  width: var(--matrix-name-col-width);
   min-width: var(--matrix-name-col-width);
-  max-width: var(--matrix-name-col-width);
 }
 
-.matrixStickyCompany.stickyLeadColumns th:nth-child(3),
-.matrixStickyCompany.stickyLeadColumns td:nth-child(3) {
-  left: calc(2.75rem + var(--matrix-name-col-width));
+.matrixTable tr > :nth-child(3) {
+  width: var(--matrix-company-col-width);
   min-width: var(--matrix-company-col-width);
-  max-width: var(--matrix-company-col-width);
+}
+
+/* Long candidate / company names wrap instead of being cut off. */
+.matrixTable td:nth-child(2),
+.matrixTable td:nth-child(3),
+.matrixTable td:nth-child(2) .matrixNameLink,
+.matrixTable td:nth-child(2) .matrixNameCell,
+.matrixTable td:nth-child(3) .matrixTextCell {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
 }
 
 /* Pin a single identity column (Company Name / Candidate Name) to the left
@@ -3321,16 +3289,6 @@ th.stickyActionsCell {
     flex: 1 1 auto;
   }
 
-  .stickyLeadColumns th:nth-child(1),
-  .stickyLeadColumns td:nth-child(1),
-  .stickyLeadColumns th:nth-child(2),
-  .stickyLeadColumns td:nth-child(2),
-  .matrixStickyCompany.stickyLeadColumns th:nth-child(3),
-  .matrixStickyCompany.stickyLeadColumns td:nth-child(3) {
-    position: static;
-    left: auto;
-    box-shadow: none;
-  }
 }
 
 @keyframes fadeIn {
@@ -3706,6 +3664,14 @@ th.stickyActionsCell {
 
 .bulkFileInput {
   display: none;
+}
+
+.bulkLogoPicker {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 1rem 0 0;
 }
 
 .bulkFileName {

@@ -13,12 +13,19 @@ const PLACEHOLDER_LOGO = /^(logo(\s+placeholder)?|placeholder|n\/?a|none|null|-|
 export type CompanyLogoPlan =
   | { kind: "missing"; warning: string }
   | { kind: "invalid"; warning: string }
-  | { kind: "url"; url: string; fileName: string };
+  | { kind: "url"; url: string; fileName: string }
+  /** Image file name — the admin attaches the file on the upload page. */
+  | { kind: "file"; fileName: string };
+
+const IMAGE_FILE_NAME = /^[^/\:*?"<>|]+\.(png|jpe?g|gif|webp|bmp|svg)$/i;
 
 /**
- * Company Logo cells accept an https/http image URL. Placeholders and blanks
- * are treated as missing (warning only — row still imports). Free text is
- * never written into the SharePoint Thumbnail column.
+ * Company Logo cells accept an https/http image URL, or the file name of a
+ * logo image (e.g. "alder-finch.png") that the admin attaches under "Company
+ * logo files" on the bulk upload page — the browser uploads those after the
+ * import. Placeholders and blanks are treated as missing (warning only — row
+ * still imports). Free text is never written into the SharePoint Thumbnail
+ * column.
  */
 export function planCompanyLogoImport(
   value: string | null | undefined,
@@ -28,8 +35,12 @@ export function planCompanyLogoImport(
     return {
       kind: "missing",
       warning:
-        "Company Logo missing — company will import without a logo. Put an https image URL in Company Logo to upload one.",
+        "Company Logo missing — company will import without a logo. Put an image URL or a logo file name (attached under Company logo files) in Company Logo to add one.",
     };
+  }
+
+  if (IMAGE_FILE_NAME.test(raw) && !/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
+    return { kind: "file", fileName: raw };
   }
 
   let parsed: URL;
@@ -132,6 +143,8 @@ export async function applyCompanyLogoFromImportCell(
   if (plan.kind === "missing" || plan.kind === "invalid") {
     return plan.warning;
   }
+  // Attached file — the bulk upload page uploads it once the row exists.
+  if (plan.kind === "file") return null;
 
   try {
     const downloaded = await downloadLogoBytes(plan.url);

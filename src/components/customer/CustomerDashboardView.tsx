@@ -13,56 +13,8 @@ import type {
   DashboardStats,
 } from "@/types/models";
 
-import styles from "./customer.module.css";
-import dashStyles from "./customerDashboard.module.css";
-
-const SECTIONS = [
-  {
-    href: "/customer",
-    title: "Training Matrix",
-    description: "Workforce competency overview and upcoming renewals.",
-  },
-  {
-    href: "/customer/courses",
-    title: "PAVE Training Courses",
-    description: "Everything PAVE can deliver — NPORS, Streetworks, EUSR, NVQ and more.",
-  },
-  {
-    href: "/customer/candidates",
-    title: "Candidates",
-    description: "Browse people in your organisation.",
-  },
-  {
-    href: "/customer/training-records",
-    title: "Training Records",
-    description: "NPORS, EUSR, Streetworks, and In-House registers.",
-  },
-  {
-    href: "/customer/nvq-progress",
-    title: "NVQ Progress",
-    description: "Active and completed NVQ programmes.",
-  },
-  {
-    href: "/customer/documents",
-    title: "Documents",
-    description: "Shared company documents and downloads.",
-  },
-  {
-    href: "/customer/events",
-    title: "Events",
-    description: "Upcoming and visible training events.",
-  },
-  {
-    href: "/customer/offers",
-    title: "Offers",
-    description: "Current promotions shared with your company.",
-  },
-  {
-    href: "/customer/support",
-    title: "Support",
-    description: "Contact PAVE Training with a form or call us.",
-  },
-] as const;
+import { DashboardIcon, type DashboardIconName } from "./DashboardIcons";
+import styles from "./customerDashboard.module.css";
 
 interface CustomerDashboardViewProps {
   companyName: string;
@@ -74,13 +26,172 @@ interface CustomerDashboardViewProps {
   profileShortcut: { href: string; label: string };
 }
 
-type StatTone = "danger" | "warn" | "ok" | undefined;
+type StatTone = "danger" | "warn" | "ok" | "neutral";
 
-function toneClass(tone: StatTone): string {
-  if (tone === "danger") return styles.statDanger;
-  if (tone === "warn") return styles.statWarn;
-  if (tone === "ok") return styles.statOk;
-  return "";
+interface StatCard {
+  label: string;
+  value: number;
+  icon: DashboardIconName;
+  tone: StatTone;
+  hint?: string;
+  href: string;
+}
+
+const TONE_CLASS: Record<StatTone, string> = {
+  danger: styles.toneDanger,
+  warn: styles.toneWarn,
+  ok: styles.toneOk,
+  neutral: styles.toneNeutral,
+};
+
+function plural(count: number, word: string): string {
+  return `${count} ${word}${count === 1 ? "" : "s"}`;
+}
+
+function percent(part: number, total: number): number {
+  if (total <= 0) return 0;
+  return Math.round((part / total) * 100);
+}
+
+function fileExtension(name: string): string {
+  const match = /\.([a-z0-9]{2,5})$/i.exec(name.trim());
+  return match ? match[1].toUpperCase() : "DOC";
+}
+
+function initials(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("");
+}
+
+function ComplianceCard({ stats }: { stats: DashboardStats }) {
+  const total = stats.trainingMatrixCount;
+  const expired = stats.expiredCount;
+  const urgent = stats.expiringSoonCount;
+  const upcoming = stats.upcomingExpiryCount;
+  const other = Math.max(total - expired - urgent - upcoming, 0);
+
+  const segments = [
+    { label: "In date / no renewal due", value: other, color: "var(--pave-lime)" },
+    { label: "Due 91–270 days", value: upcoming, color: "#c9e8ad" },
+    { label: "Due 0–90 days", value: urgent, color: "var(--pave-amber)" },
+    { label: "Expired", value: expired, color: "var(--pave-red)" },
+  ];
+
+  let cursor = 0;
+  const stops = segments
+    .filter((segment) => segment.value > 0)
+    .map((segment) => {
+      const start = cursor;
+      cursor += (segment.value / total) * 100;
+      return `${segment.color} ${start}% ${cursor}%`;
+    });
+  const ring =
+    total > 0 && stops.length > 0
+      ? `conic-gradient(${stops.join(", ")})`
+      : "conic-gradient(var(--pave-border) 0 100%)";
+
+  return (
+    <article className={styles.complianceCard} aria-label="Compliance split">
+      <div className={styles.complianceRing} style={{ background: ring }}>
+        <div className={styles.complianceRingInner}>
+          <strong>{total > 0 ? `${percent(total - expired, total)}%` : "—"}</strong>
+          <span>not expired</span>
+        </div>
+      </div>
+      <h3>Compliance split</h3>
+      <ul className={styles.complianceLegend}>
+        {segments.map((segment) => (
+          <li key={segment.label}>
+            <span
+              className={styles.legendDot}
+              style={{ background: segment.color }}
+              aria-hidden="true"
+            />
+            <span>{segment.label}</span>
+            <strong>{percent(segment.value, total)}%</strong>
+          </li>
+        ))}
+      </ul>
+    </article>
+  );
+}
+
+function RecentDocuments({ documents }: { documents: CustomerDocumentRecord[] }) {
+  return (
+    <section className={styles.splitColumn} aria-labelledby="recent-documents">
+      <div className={styles.sectionHeader}>
+        <h2 id="recent-documents">Recent documents</h2>
+        <Link href="/customer/documents" className={styles.viewAllLink}>
+          View all <DashboardIcon name="arrow" />
+        </Link>
+      </div>
+
+      <div className={styles.listCard}>
+        {documents.length === 0 ? (
+          <div className={styles.listEmpty}>
+            <strong>No documents yet</strong>
+            <span>Documents shared with your company will appear here.</span>
+          </div>
+        ) : (
+          documents.map((doc) => {
+            const ext = fileExtension(doc.name);
+            const actionHref = doc.downloadPath ?? doc.viewPath;
+            return (
+              <div key={doc.id} className={styles.docRow}>
+                <span
+                  className={
+                    ext === "PDF" ? styles.docIconPdf : styles.docIconOther
+                  }
+                  aria-hidden="true"
+                >
+                  <DashboardIcon name="file" />
+                  <small>{ext}</small>
+                </span>
+                <span className={styles.docBody}>
+                  <span className={styles.docName} title={doc.name}>
+                    {doc.name}
+                  </span>
+                  <span className={styles.docType}>
+                    {doc.documentType ?? "Document"}
+                  </span>
+                </span>
+                {doc.candidate ? (
+                  <span className={styles.docCandidate}>
+                    <span className={styles.miniAvatar} aria-hidden="true">
+                      {initials(doc.candidate)}
+                    </span>
+                    <span>{doc.candidate}</span>
+                  </span>
+                ) : (
+                  <span className={styles.docCandidate}>Company</span>
+                )}
+                <span className={styles.docDate}>
+                  {formatDate(doc.uploadedDate, "—")}
+                </span>
+                {actionHref ? (
+                  <a
+                    href={actionHref}
+                    className={styles.iconButton}
+                    target={doc.downloadPath ? undefined : "_blank"}
+                    rel={doc.downloadPath ? undefined : "noreferrer"}
+                    aria-label={`${doc.downloadPath ? "Download" : "Open"} ${doc.name}`}
+                  >
+                    <DashboardIcon name={doc.downloadPath ? "download" : "eye"} />
+                  </a>
+                ) : (
+                  <span />
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </section>
+  );
 }
 
 export function CustomerDashboardView({
@@ -91,180 +202,225 @@ export function CustomerDashboardView({
   recentDocuments,
   profileShortcut,
 }: CustomerDashboardViewProps) {
-  const sections = SECTIONS.map((section) =>
-    section.href === "/customer/candidates"
-      ? { ...section, href: profileShortcut.href, title: profileShortcut.label }
-      : section,
-  );
-  const warningCards = [
-    {
-      href: "/customer?filter=expired",
-      title: "Expired training",
-      value: stats.expiredCount,
-      detail: "Matrix rows with an expired next date",
-      show: stats.expiredCount > 0,
-    },
-    {
-      href: "/customer?filter=within-3m",
-      title: "Urgent",
-      value: stats.expiringSoonCount,
-      detail: "Renewals due in the next 90 days",
-      show: stats.expiringSoonCount > 0,
-    },
-    {
-      href: "/customer?filter=within-6m",
-      title: "Upcoming",
-      value: stats.upcomingExpiryCount,
-      detail: "Renewals due in 91–180 days",
-      show: stats.upcomingExpiryCount > 0,
-    },
-    {
-      href: "/customer?filter=review",
-      title: "Records to Review",
-      value: stats.needsReviewCount,
-      detail: "Matrix rows flagged for attention",
-      show: stats.needsReviewCount > 0,
-    },
-  ].filter((card) => card.show);
+  const nextEvent = upcomingEvents.find((event) => event.eventDate);
 
-  const overviewCards: Array<{
-    label: string;
-    value: number;
-    tone?: StatTone;
-  }> = [
-    { label: "Candidates", value: stats.workforceCount },
-    { label: "Matrix rows", value: stats.trainingMatrixCount },
+  const statCards: StatCard[] = [
+    {
+      label: "Candidates",
+      value: stats.workforceCount,
+      icon: "users",
+      tone: "ok",
+      hint: "In your access",
+      href: profileShortcut.href,
+    },
+    {
+      label: "Matrix rows",
+      value: stats.trainingMatrixCount,
+      icon: "table",
+      tone: "ok",
+      hint: "Training Matrix",
+      href: "/customer/training-matrix",
+    },
     {
       label: "Expired",
       value: stats.expiredCount,
-      tone: stats.expiredCount > 0 ? "danger" : undefined,
+      icon: "shield",
+      tone: stats.expiredCount > 0 ? "danger" : "ok",
+      hint: stats.expiredCount > 0 ? "Need action" : "All clear",
+      href: "/customer/training-matrix?filter=expired",
     },
     {
-      label: "Urgent (0–90 days)",
+      label: "Urgent 0–90 days",
       value: stats.expiringSoonCount,
-      tone: stats.expiringSoonCount > 0 ? "danger" : undefined,
+      icon: "clock",
+      tone: stats.expiringSoonCount > 0 ? "danger" : "ok",
+      hint: stats.expiringSoonCount > 0 ? "Book renewals" : "None due",
+      href: "/customer/training-matrix?filter=urgent",
     },
     {
-      label: "Upcoming (91–270 days)",
+      label: "Upcoming 91–270",
       value: stats.upcomingExpiryCount,
-      tone: stats.upcomingExpiryCount > 0 ? "warn" : undefined,
+      icon: "calendar",
+      tone: stats.upcomingExpiryCount > 0 ? "warn" : "ok",
+      hint: "Plan ahead",
+      href: "/customer/training-matrix?filter=upcoming",
     },
     {
-      label: "Records to Review",
+      label: "Records to review",
       value: stats.needsReviewCount,
+      icon: "check",
       tone: stats.needsReviewCount > 0 ? "warn" : "ok",
+      hint: stats.needsReviewCount > 0 ? "Awaiting review" : "Up to date",
+      href: "/customer/training-matrix?filter=review",
     },
-    { label: "NVQ programmes", value: stats.nvqCount },
-    { label: "Documents", value: stats.documentsCount },
-    { label: "Upcoming events", value: stats.upcomingEventsCount },
+    {
+      label: "NVQ programmes",
+      value: stats.nvqCount,
+      icon: "message",
+      tone: "ok",
+      hint: "NVQ Progress",
+      href: "/customer/nvq-progress",
+    },
+    {
+      label: "Documents",
+      value: stats.documentsCount,
+      icon: "file",
+      tone: "ok",
+      hint: "Shared with you",
+      href: "/customer/documents",
+    },
+    {
+      label: "Upcoming events",
+      value: stats.upcomingEventsCount,
+      icon: "calendar",
+      tone: "ok",
+      hint: nextEvent
+        ? `Next: ${formatDate(nextEvent.eventDate, "TBC")}`
+        : "None booked",
+      href: "/customer/events",
+    },
+  ];
+
+  const isOwnProfile = profileShortcut.href !== "/customer/candidates";
+  const quickLinks: Array<{
+    href: string;
+    title: string;
+    description: string;
+    icon: DashboardIconName;
+  }> = [
+    {
+      href: "/customer/training-matrix",
+      title: "Training Matrix",
+      description: "Check company compliance",
+      icon: "table",
+    },
+    {
+      href: "/customer/courses",
+      title: "PAVE Training Courses",
+      description: "Browse available courses",
+      icon: "message",
+    },
+    {
+      href: profileShortcut.href,
+      title: profileShortcut.label,
+      description: isOwnProfile
+        ? "Your training and certificates"
+        : `Manage your ${plural(stats.workforceCount, "candidate")}`,
+      icon: "users",
+    },
+    {
+      href: "/customer/training-records",
+      title: "Training Records",
+      description: "Open all training registers",
+      icon: "shield",
+    },
+    {
+      href: "/customer/nvq-progress",
+      title: "NVQ Progress",
+      description: "Track programmes and stages",
+      icon: "check",
+    },
+    {
+      href: "/customer/documents",
+      title: "Documents",
+      description: "Certificates and card scans",
+      icon: "file",
+    },
+    {
+      href: "/customer/events",
+      title: "Events",
+      description: "Upcoming courses and bookings",
+      icon: "calendar",
+    },
+    {
+      href: "/customer/offers",
+      title: "Offers",
+      description: "See customer-only savings",
+      icon: "message",
+    },
+    {
+      href: "/customer/support",
+      title: "Support",
+      description: "Speak to the PAVE team",
+      icon: "help",
+    },
   ];
 
   return (
-    <div className={dashStyles.dashboardPage}>
+    <div className={styles.dashboardPage}>
       <LiveTrainingRefresh />
-      <h1 className={styles.srOnly}>Dashboard</h1>
 
-      {/* Company hero: large logo, name, address, main contact, tel, email,
-       * then remaining company details. Operational sections follow. */}
+      <header className={styles.pageHeader}>
+        <nav className={styles.breadcrumbs} aria-label="Breadcrumb">
+          <Link href="/customer/dashboard">Customer</Link>
+          <DashboardIcon name="chevron" />
+          <span aria-current="page">Dashboard</span>
+        </nav>
+        <p className={styles.eyebrow}>Customer</p>
+        <h1 className={styles.pageTitle}>Dashboard</h1>
+        <p className={styles.pageSubtitle}>
+          Your company training, compliance and upcoming activity at a glance.
+        </p>
+      </header>
+
       {companyProfile ? (
         <CustomerCompanyProfileCard company={companyProfile} />
       ) : null}
 
-      <CustomerUpcomingEvents events={upcomingEvents} />
-
-      {warningCards.length > 0 ? (
-        <section className={styles.panel} aria-label="Expiring training">
-          <div className={dashStyles.sectionHeader}>
-            <h2>Expiring training</h2>
-          </div>
-          <div className={styles.warningList}>
-            {warningCards.map((card) => (
+      <section aria-labelledby="matrix-summary">
+        <div className={styles.sectionHeader}>
+          <h2 id="matrix-summary">Training Matrix summary</h2>
+          <Link href="/customer/training-matrix" className={styles.viewAllLink}>
+            Open matrix <DashboardIcon name="arrow" />
+          </Link>
+        </div>
+        <div className={styles.summaryGrid}>
+          <div className={styles.statsGrid}>
+            {statCards.map((card) => (
               <Link
-                key={card.href}
+                key={card.label}
                 href={card.href}
-                className={styles.warningCard}
+                className={`${styles.statCard} ${TONE_CLASS[card.tone]}`}
               >
-                <strong>
-                  {card.title} · {card.value}
-                </strong>
-                <span>{card.detail}</span>
+                <span className={styles.statTop}>
+                  <span className={styles.statIcon}>
+                    <DashboardIcon name={card.icon} />
+                  </span>
+                  {card.hint ? (
+                    <span className={styles.statHint}>{card.hint}</span>
+                  ) : null}
+                </span>
+                <strong className={styles.statValue}>{card.value}</strong>
+                <span className={styles.statLabel}>{card.label}</span>
               </Link>
             ))}
           </div>
-        </section>
-      ) : null}
-
-      <section className={styles.panel} aria-label="Recent documents">
-        <div className={dashStyles.sectionHeader}>
-          <h2>Documents</h2>
-          <Link href="/customer/documents" className={dashStyles.viewAllLink}>
-            View all <span aria-hidden="true">→</span>
-          </Link>
-        </div>
-        {recentDocuments.length === 0 ? (
-          <p className={dashStyles.documentsEmpty}>
-            No documents have been shared with your company yet.
-          </p>
-        ) : (
-          <div className={dashStyles.documentsList}>
-            {recentDocuments.map((doc) => (
-              <a
-                key={doc.id}
-                href={doc.viewPath ?? "/customer/documents"}
-                className={dashStyles.documentRow}
-                target={doc.viewPath ? "_blank" : undefined}
-                rel={doc.viewPath ? "noreferrer" : undefined}
-              >
-                <span className={dashStyles.documentName}>{doc.name}</span>
-                <span className={dashStyles.documentMeta}>
-                  {doc.documentType ?? "Document"} ·{" "}
-                  {formatDate(doc.uploadedDate, "Date unknown")}
-                </span>
-              </a>
-            ))}
-          </div>
-        )}
-      </section>
-
-      <section className={styles.statsSection} aria-label="Training Matrix summary">
-        <div className={dashStyles.sectionHeader}>
-          <h2>Training Matrix summary</h2>
-          <Link href="/customer/training-matrix" className={dashStyles.viewAllLink}>
-            Open matrix <span aria-hidden="true">→</span>
-          </Link>
-        </div>
-        <div className={styles.statsGrid}>
-          {overviewCards.map((card) => (
-            <article
-              key={card.label}
-              className={`${styles.statCard} ${toneClass(card.tone)}`}
-            >
-              <p className={styles.statLabel}>{card.label}</p>
-              <p className={styles.statValue}>{card.value}</p>
-            </article>
-          ))}
+          <ComplianceCard stats={stats} />
         </div>
       </section>
+
+      <div className={styles.splitRow}>
+        <CustomerUpcomingEvents events={upcomingEvents} />
+        <RecentDocuments documents={recentDocuments} />
+      </div>
 
       <CustomerOfferSlider offers={offers} />
 
-      <section
-        className={styles.cardGridSection}
-        aria-label="Customer portal sections"
-      >
-        <div className={dashStyles.sectionHeader}>
-          <h2>Quick links</h2>
+      <section aria-labelledby="quick-links">
+        <div className={styles.sectionHeader}>
+          <h2 id="quick-links">Quick links</h2>
         </div>
-        <div className={styles.cardGrid}>
-          {sections.map((section) => (
-            <Link
-              key={section.href}
-              href={section.href}
-              className={styles.navCard}
-            >
-              <h2>{section.title}</h2>
-              <p>{section.description}</p>
-              <span className={styles.navCardCta}>Open →</span>
+        <div className={styles.quickGrid}>
+          {quickLinks.map((link) => (
+            <Link key={link.title} href={link.href} className={styles.quickCard}>
+              <span className={styles.quickIcon}>
+                <DashboardIcon name={link.icon} />
+              </span>
+              <span className={styles.quickTitle}>{link.title}</span>
+              <span className={styles.quickDescription}>{link.description}</span>
+              <span className={styles.quickCta}>
+                Open <DashboardIcon name="arrow" />
+              </span>
             </Link>
           ))}
         </div>

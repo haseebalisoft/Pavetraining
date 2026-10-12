@@ -1,9 +1,11 @@
 /**
- * Patch Company-list-template.xlsx:
- * - Set one sample row Company Size to Enterprise (so all 4 choices appear)
- * - Add Excel data-validation dropdown on Company Size (column C)
+ * Patch Company-list-template.xlsx so its choice columns are Excel dropdowns
+ * with the same options as the Add Company form:
+ * - Company Size: Small, Medium, Large, Enterprise
+ * - Status: Active, Inactive
+ * Also makes sure the sample rows show all four sizes.
  *
- *   node scripts/patch-company-size-template.mjs
+ *   node scripts/patch-company-template-dropdowns.mjs
  */
 import { createRequire } from "node:module";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -19,6 +21,21 @@ const TEMPLATE = resolve(
 );
 
 const COMPANY_SIZES = ["Small", "Medium", "Large", "Enterprise"];
+const COMPANY_STATUSES = ["Active", "Inactive"];
+
+/** Header text → dropdown options (must match the Add Company form). */
+const DROPDOWNS = [
+  {
+    header: "Company Size",
+    options: COMPANY_SIZES,
+    error: "Choose Small, Medium, Large, or Enterprise.",
+  },
+  {
+    header: "Status",
+    options: COMPANY_STATUSES,
+    error: "Choose Active or Inactive.",
+  },
+];
 
 function parseZip(buf) {
   const entries = [];
@@ -127,9 +144,10 @@ function buildZip(entries) {
   const sheetName = wb.SheetNames[0];
   const ws = wb.Sheets[sheetName];
   const rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
-  const largeIdx = rows.findIndex((r) => r["Company Size"] === "Large");
-  if (largeIdx >= 0) {
-    rows[largeIdx]["Company Size"] = "Enterprise";
+  const hasEnterprise = rows.some((r) => r["Company Size"] === "Enterprise");
+  const largeRows = rows.filter((r) => r["Company Size"] === "Large");
+  if (!hasEnterprise && largeRows.length > 1) {
+    largeRows[0]["Company Size"] = "Enterprise";
   }
   const present = new Set(rows.map((r) => r["Company Size"]));
   for (const size of COMPANY_SIZES) {
@@ -144,21 +162,35 @@ function buildZip(entries) {
   XLSX.writeFile(wb, TEMPLATE);
 }
 
-// 2) Add data validation on Company Size column (C2:C1000).
+// 2) Add list validations (dropdowns) for every choice column.
 {
+  const wb = XLSX.readFile(TEMPLATE);
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const headerRow = XLSX.utils.sheet_to_json(ws, { header: 1 })[0] ?? [];
+  const items = DROPDOWNS.map((dropdown) => {
+    const index = headerRow.findIndex(
+      (cell) => String(cell).trim() === dropdown.header,
+    );
+    if (index < 0) throw new Error(`Header "${dropdown.header}" not found`);
+    const col = XLSX.utils.encode_col(index);
+    const list = dropdown.options.join(",");
+    return `<dataValidation type="list" allowBlank="1" showDropDown="0" showErrorMessage="1" errorTitle="${dropdown.header}" error="${dropdown.error}" sqref="${col}2:${col}1000"><formula1>"${list}"</formula1></dataValidation>`;
+  });
+
   const buf = readFileSync(TEMPLATE);
   const entries = parseZip(buf);
   const sheetEntry = entries.find((e) => e.name === "xl/worksheets/sheet1.xml");
   if (!sheetEntry) throw new Error("sheet1.xml not found");
   let xml = sheetEntry.content.toString("utf8");
   xml = xml.replace(/<dataValidations[\s\S]*?<\/dataValidations>/g, "");
-  const list = COMPANY_SIZES.map((s) => s.replace(/"/g, "")).join(",");
-  const validation = `<dataValidations count="1"><dataValidation type="list" allowBlank="1" showDropDown="0" showErrorMessage="1" errorTitle="Company Size" error="Choose Small, Medium, Large, or Enterprise." sqref="C2:C1000"><formula1>"${list}"</formula1></dataValidation></dataValidations>`;
-  if (xml.includes("</worksheet>")) {
-    xml = xml.replace("</worksheet>", `${validation}</worksheet>`);
-  } else {
-    throw new Error("Could not find </worksheet>");
-  }
+  const validation = `<dataValidations count="${items.length}">${items.join("")}</dataValidations>`;
+  // OOXML element order: dataValidations sits after sheetData / mergeCells /
+  // conditionalFormatting and BEFORE ignoredErrors, pageMargins, etc. Placed
+  // at the end of the sheet, Excel "repairs" the file and drops the dropdowns.
+  const anchor = xml.match(/<\/mergeCells>|<\/sheetData>/g)?.pop();
+  if (!anchor) throw new Error("Could not find </sheetData>");
+  const at = xml.lastIndexOf(anchor) + anchor.length;
+  xml = `${xml.slice(0, at)}${validation}${xml.slice(at)}`;
   sheetEntry.content = Buffer.from(xml, "utf8");
   writeFileSync(TEMPLATE, buildZip(entries));
 }
@@ -176,8 +208,15 @@ function buildZip(entries) {
     .find((e) => e.name === "xl/worksheets/sheet1.xml")
     .content.toString("utf8");
   console.log("sizes in template:", sizes.join(", "));
+  const order = ["</sheetData>", "<dataValidations", "<ignoredErrors"]
+    .map((tag) => xml.indexOf(tag))
+    .filter((index) => index >= 0);
   console.log(
-    "dataValidation present:",
-    xml.includes("dataValidations") && xml.includes("Enterprise"),
+    "dropdowns:",
+    DROPDOWNS.map((d) => `${d.header}=${xml.includes(`errorTitle="${d.header}"`)}`).join(", "),
+  );
+  console.log(
+    "element order valid:",
+    order.every((value, i) => i === 0 || value > order[i - 1]),
   );
 }

@@ -12,7 +12,11 @@ import {
   getEusrCategoryOptions,
 } from "@/lib/training/eusrOptions";
 import { getInHouseCourseOptions } from "@/lib/training/inHouseCourseOptions";
-import { getNporsCategoryOptions } from "@/lib/training/nporsCategoryOptions";
+import {
+  formatNporsCategoryLabel,
+  getNporsCategoryOptions,
+  splitNporsCategories,
+} from "@/lib/training/nporsCategoryOptions";
 import {
   getStreetworksCategoryOptions,
   getStreetworksCourseOptions,
@@ -337,7 +341,18 @@ function columnsFor(kind: RegisterKind): AdminColumn<AdminTrainingRecord>[] {
     base.push({
       key: "category",
       header: "Category",
-      render: (row) => row.nporsCategory ?? "—",
+      // "N001 – Ind FLT": the N number always shows with its category name.
+      render: (row) => {
+        const labels = splitNporsCategories(row.nporsCategory)
+          .map(formatNporsCategoryLabel)
+          .filter(Boolean);
+        if (labels.length === 0) return row.nporsCategory ?? "—";
+        return labels.map((label) => (
+          <span key={label} style={{ display: "block" }}>
+            {label}
+          </span>
+        ));
+      },
     });
     base.push({
       key: "novice",

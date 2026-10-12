@@ -522,8 +522,8 @@ export function AdminMatrixClient({
         getCompanyName={(row) => row.companyName}
         drawerWide
         wideTable
-        stickyLeadColumns
-        tableClassName={`${styles.matrixTable} ${styles.matrixStickyCompany}`}
+        stickyLeadColumns={2}
+        tableClassName={styles.matrixTable}
         listUrl="/api/admin/training-matrix"
         updateUrl={(id) => `/api/admin/training-matrix/${id}`}
         deleteUrl={(id) => `/api/admin/training-matrix/${id}`}
@@ -571,6 +571,13 @@ export function AdminMatrixClient({
             >
               {syncing ? "Refreshing…" : "Refresh from registers"}
             </button>
+            <p className={styles.helpText} style={{ flexBasis: "100%" }}>
+              <strong>Refresh from registers</strong> copies the latest
+              Pass/Fail dates from NPORS, EUSR, Streetworks and In-House into
+              this matrix. Saving a register record already does this
+              automatically — only press it if a date here looks out of date.
+              Cells marked Manual are never overwritten.
+            </p>
             {syncResult ? (
               <button
                 type="button"

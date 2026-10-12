@@ -1,0 +1,64 @@
+/*
+ * Pinned lead columns for wide tables — see useStickyLeadColumns.
+ * Offsets come from measured header widths (--sticky-left-N), so a pinned
+ * column can never slide over the column before it.
+ *
+ * Tables may override the fills with --sticky-lead-bg / --sticky-lead-head-bg.
+ */
+
+.stickyLead[data-sticky-count="1"] tr > :nth-child(-n + 1),
+.stickyLead[data-sticky-count="2"] tr > :nth-child(-n + 2),
+.stickyLead[data-sticky-count="3"] tr > :nth-child(-n + 3),
+.stickyLead[data-sticky-count="4"] tr > :nth-child(-n + 4) {
+  position: sticky;
+  z-index: 1;
+  background: var(--sticky-lead-bg, #fff);
+}
+
+/* Header corner cells stick to the top and the left, above everything. */
+.stickyLead[data-sticky-count="1"] thead tr > :nth-child(-n + 1),
+.stickyLead[data-sticky-count="2"] thead tr > :nth-child(-n + 2),
+.stickyLead[data-sticky-count="3"] thead tr > :nth-child(-n + 3),
+.stickyLead[data-sticky-count="4"] thead tr > :nth-child(-n + 4) {
+  top: 0;
+  z-index: 4;
+  background: var(--sticky-lead-head-bg, #f3f4f2);
+}
+
+.stickyLead tr > :nth-child(1) {
+  left: var(--sticky-left-1, 0);
+}
+
+.stickyLead tr > :nth-child(2) {
+  left: var(--sticky-left-2, 0);
+}
+
+.stickyLead tr > :nth-child(3) {
+  left: var(--sticky-left-3, 0);
+}
+
+.stickyLead tr > :nth-child(4) {
+  left: var(--sticky-left-4, 0);
+}
+
+/* Divider on the last pinned column so scrolled cells read as "underneath". */
+.stickyLead[data-sticky-count="1"] tr > :nth-child(1),
+.stickyLead[data-sticky-count="2"] tr > :nth-child(2),
+.stickyLead[data-sticky-count="3"] tr > :nth-child(3),
+.stickyLead[data-sticky-count="4"] tr > :nth-child(4) {
+  border-right: 1px solid var(--pave-border, rgba(0, 0, 0, 0.12));
+  box-shadow: 6px 0 8px -6px rgba(42, 42, 42, 0.18);
+}
+
+/* Phones: pinned columns would fill the screen — let everything scroll. */
+@media (max-width: 640px) {
+  .stickyLead[data-sticky-count] tr > :nth-child(-n + 4) {
+    position: static;
+    box-shadow: none;
+  }
+
+  .stickyLead[data-sticky-count] thead tr > :nth-child(-n + 4) {
+    position: sticky;
+    left: auto;
+  }
+}

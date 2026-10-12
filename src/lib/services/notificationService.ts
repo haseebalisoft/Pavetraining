@@ -428,6 +428,7 @@ export async function sendPortalInviteNotification(input: {
   itemId?: string | null;
   actorEmail?: string | null;
   detail?: string | null;
+  reason?: "created" | "updated";
 }): Promise<NotificationSendResult> {
   // Client-approved rule: portal invitations must always carry Company + Role
   // context so recipients know exactly which company they are joining and in
@@ -455,6 +456,7 @@ export async function sendPortalInviteNotification(input: {
     companyName,
     roleLabel,
     includeCompanyLogo: brand.includeCompanyLogo,
+    reason: input.reason,
   });
   const detail = input.detail?.trim() || "Permissions list invite";
   return sendNotification({

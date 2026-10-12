@@ -109,6 +109,8 @@ export type BulkPreviewRow = {
   resolvedCompanyName?: string | null;
   /** Matched existing entity id when duplicate detected. */
   matchedEntityId?: string | null;
+  /** SharePoint item id the commit created/updated (company imports). */
+  savedEntityId?: string | null;
   matchedEntityName?: string | null;
   duplicateMatch?: "workforceNumber" | "nameDobCompany" | "nameCompany" | null;
   /** Company-match report (workforce import): which Company List item the row resolved to. */

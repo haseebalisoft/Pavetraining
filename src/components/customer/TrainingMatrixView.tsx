@@ -8,6 +8,10 @@ import { Breadcrumbs } from "@/components/ui/Breadcrumbs";
 import { ExpiryDateBadge } from "@/components/ui/ExpiryDateBadge";
 import { SlideOverPanel } from "@/components/ui/SlideOverPanel";
 import { StatusBadge } from "@/components/ui/StatusBadge";
+import {
+  stickyLeadTableProps,
+  useStickyLeadColumns,
+} from "@/components/ui/useStickyLeadColumns";
 import { LiveTrainingRefresh } from "@/components/training/LiveTrainingRefresh";
 import {
   EXPIRY_STATUS_LEGEND,
@@ -241,6 +245,9 @@ export function TrainingMatrixView({
 }: Props) {
   const router = useRouter();
   const pathname = usePathname();
+  // Candidate + Company stay visible while scrolling across the cert columns.
+  const stickyLeadRef = useStickyLeadColumns(2);
+  const stickyLead = stickyLeadTableProps(2);
   const searchParams = useSearchParams();
   const [, startTransition] = useTransition();
 
@@ -667,7 +674,11 @@ export function TrainingMatrixView({
       ) : (
         <>
           <div className={`${styles.tableWrap} ${styles.matrixDesktop}`}>
-            <table className={styles.dataTable}>
+            <table
+              ref={stickyLeadRef}
+              data-sticky-count={stickyLead["data-sticky-count"]}
+              className={`${styles.dataTable} ${styles.matrixStickyTable} ${stickyLead.className}`}
+            >
               <thead>
                 <tr>
                   <th scope="col">Candidate</th>

@@ -46,6 +46,8 @@ const MOBILE_ALL_LINKS: TopLink[] = [
 interface CustomerTopNavProps {
   email: string;
   companyName: string;
+  /** App-served company logo URL (Company list), when one is set. */
+  companyLogo?: string | null;
   roleLabel: string;
   accessLabel: string;
   canDownload: boolean;
@@ -79,6 +81,45 @@ function avatarInitials(email: string): string {
   }
   const first = Array.from(localPart).find((ch) => /[a-z0-9]/i.test(ch));
   return (first ?? "A").toUpperCase();
+}
+
+function companyInitials(name: string): string {
+  return (
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => Array.from(part).find((ch) => /[a-z0-9]/i.test(ch)) ?? "")
+      .join("")
+      .toUpperCase() || "C"
+  );
+}
+
+/** Company logo when the Company list has one, otherwise company initials. */
+function CompanyAvatar({
+  companyName,
+  companyLogo,
+}: {
+  companyName: string;
+  companyLogo: string | null;
+}) {
+  const [failed, setFailed] = useState(false);
+  if (companyLogo && !failed) {
+    return (
+      <span
+        className={`${styles.topNavProfileAvatar} ${styles.topNavProfileAvatarLogo}`}
+        aria-hidden="true"
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={companyLogo} alt="" onError={() => setFailed(true)} />
+      </span>
+    );
+  }
+  return (
+    <span className={styles.topNavProfileAvatar} aria-hidden="true">
+      {companyInitials(companyName)}
+    </span>
+  );
 }
 
 function ChevronIcon() {
@@ -146,6 +187,7 @@ function AccountIcon({
 export function CustomerTopNav({
   email,
   companyName,
+  companyLogo = null,
   roleLabel,
   accessLabel,
   canDownload,
@@ -243,8 +285,13 @@ export function CustomerTopNav({
       <div className={styles.topNavBar}>
         <div className={styles.topNavBrand}>
           <Link href="/customer/dashboard" className={styles.topNavBrandLink}>
-            <BrandLogo variant="mark" priority />
-            <span className={styles.topNavBrandText}>PAVE Training</span>
+            <span className={styles.topNavBrandMark}>
+              <BrandLogo variant="mark" priority />
+            </span>
+            <span className={styles.topNavBrandText}>
+              PAVE
+              <small>Training</small>
+            </span>
           </Link>
         </div>
 
@@ -344,9 +391,7 @@ export function CustomerTopNav({
             title={`${email} · ${companyName}`}
             onClick={openAccountPanel}
           >
-            <span className={styles.topNavProfileAvatar} aria-hidden="true">
-              {initials}
-            </span>
+            <CompanyAvatar companyName={companyName} companyLogo={companyLogo} />
             <span className={styles.topNavProfileCompany}>{companyName}</span>
             <ChevronIcon />
             <span className={styles.srOnly}>Open account details</span>
@@ -427,9 +472,7 @@ export function CustomerTopNav({
               openAccountPanel(event);
             }}
           >
-            <span className={styles.topNavProfileAvatar} aria-hidden="true">
-              {initials}
-            </span>
+            <CompanyAvatar companyName={companyName} companyLogo={companyLogo} />
             <span>
               <strong>{companyName}</strong>
               <em>{email}</em>

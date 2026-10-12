@@ -520,6 +520,7 @@ export async function previewMatrixImport(
         companyItemId: candidate?.companyId ?? null,
         companyNumber:
           validated.fields.companyNumber ?? candidate?.companyNumber ?? null,
+        storedCompanyName: candidate?.companyName ?? null,
         matrixLinkStatus: candidate ? "Linked" : "Needs Review",
       });
     }

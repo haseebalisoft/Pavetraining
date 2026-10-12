@@ -27,7 +27,7 @@ export async function POST(request: Request) {
     "POST /api/admin/permissions",
     async (context, req) => {
       const body = (await req.json()) as Record<string, unknown>;
-      const record = await createAdminPermission(body);
+      const { record, accessEmail } = await createAdminPermission(body);
       if (body.departmentsAllowed !== undefined) {
         await logPermissionDepartmentScopeUpdate({
           userEmail: context.loggedInEmail,
@@ -39,7 +39,7 @@ export async function POST(request: Request) {
           request: req,
         });
       }
-      return { record };
+      return { record, accessEmail };
     },
     { errorMessage: "Failed to create permission" },
     request,

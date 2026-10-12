@@ -200,3 +200,29 @@ export function splitNporsCategory(raw: string | null | undefined): {
 
   return { nNumber: null, categoryName: text };
 }
+
+/**
+ * Every category in a stored NPORS value — a record can hold several
+ * ("N001; N010"). Each entry is split like `splitNporsCategory`.
+ */
+export function splitNporsCategories(raw: string | null | undefined): Array<{
+  nNumber: string | null;
+  categoryName: string | null;
+}> {
+  return String(raw ?? "")
+    .split(/[;,|]+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => splitNporsCategory(part));
+}
+
+/** "N001 – Ind FLT" — N number with its category name, for display. */
+export function formatNporsCategoryLabel(category: {
+  nNumber: string | null;
+  categoryName: string | null;
+}): string {
+  const code = category.nNumber?.trim() || "";
+  const name = category.categoryName?.trim() || "";
+  if (code && name) return `${code} – ${name}`;
+  return code || name;
+}

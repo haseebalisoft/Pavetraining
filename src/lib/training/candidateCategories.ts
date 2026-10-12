@@ -12,6 +12,10 @@ import {
 } from "@/lib/training/matrixEditorFields";
 import { parseEusrCategories } from "@/lib/training/eusrOptions";
 import { getExpiryStatus, type ExpiryStatus } from "@/lib/training/expiryFilters";
+import {
+  formatNporsCategoryLabel,
+  splitNporsCategories,
+} from "@/lib/training/nporsCategoryOptions";
 import type {
   CustomerEusrRecord,
   CustomerInHouseRecord,
@@ -178,24 +182,31 @@ export function buildCandidateCategoryRows(input: {
 
   for (const row of input.nporsRecords ?? []) {
     if (!hasAnyDate(row.trainingDate, row.expiry)) continue;
-    const next = toRow(
-      `npors:${row.id}`,
-      row.nporsCategory,
-      "NPORS",
-      "NPORS",
-      row.trainingDate,
-      row.expiry,
-      row.outcome,
-    );
-    rows.push(next);
-    addCovered(covered, next.category);
-    const column = CLIENT_MATRIX_CATEGORY_COLUMNS.find(
-      (entry) =>
-        entry.header.toLowerCase() === next.category.toLowerCase() ||
-        entry.code.toLowerCase() === next.category.toLowerCase() ||
-        next.category.toLowerCase().includes(entry.code.toLowerCase()),
-    );
-    if (column) addCovered(covered, column.header, column.code);
+    // One record can hold several categories ("N001; N010") — list each one
+    // as "N001 – Ind FLT" so the N number always carries its category name.
+    const categories = splitNporsCategories(row.nporsCategory);
+    const entries = categories.length > 0 ? categories : [null];
+    for (const entry of entries) {
+      const label = entry ? formatNporsCategoryLabel(entry) : null;
+      const next = toRow(
+        `npors:${row.id}:${entry?.nNumber ?? label ?? "npors"}`,
+        label,
+        "NPORS",
+        "NPORS",
+        row.trainingDate,
+        row.expiry,
+        row.outcome,
+      );
+      rows.push(next);
+      addCovered(covered, next.category, entry?.nNumber);
+      const code = entry?.nNumber?.toLowerCase();
+      const column = CLIENT_MATRIX_CATEGORY_COLUMNS.find(
+        (column) =>
+          column.header.toLowerCase() === next.category.toLowerCase() ||
+          (code !== undefined && column.code.toLowerCase() === code),
+      );
+      if (column) addCovered(covered, column.header, column.code);
+    }
   }
 
   for (const row of input.eusrRecords ?? []) {

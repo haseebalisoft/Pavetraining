@@ -57,20 +57,43 @@
 }
 
 .topNavBrandText {
-  font-family: var(--pave-font-heading);
-  font-size: 1.05rem;
-  font-weight: 700;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--pave-font-body);
+  font-size: 1.2rem;
+  font-weight: 800;
   line-height: 1;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
   white-space: nowrap;
 }
 
-.topNavBrandLink img {
+.topNavBrandText small {
+  margin-top: 0.2rem;
+  color: var(--pave-charcoal-muted);
+  font-size: 0.56rem;
+  font-weight: 600;
+  letter-spacing: 0.32em;
+}
+
+/* The PAVE logo PNG has wide transparent padding — crop it to the mark. */
+.topNavBrandMark {
   display: block;
-  width: 2.5rem;
-  height: 2.5rem;
+  flex-shrink: 0;
+  width: 2.6rem;
+  height: 2.6rem;
+  overflow: hidden;
+  border-radius: 0.55rem;
+  background: #fff;
+}
+
+.topNavBrandLink .topNavBrandMark img {
+  display: block;
+  width: 2.6rem;
+  height: 2.6rem;
   object-fit: contain;
+  transform: scale(2.2);
+  transform-origin: 50% 47%;
 }
 
 .topNavLinksDesktop {
@@ -234,15 +257,27 @@
   box-shadow: 0 0 0 3px var(--pave-lime-tint);
 }
 
+.topNavProfileAvatarLogo {
+  overflow: hidden;
+  border-color: var(--pave-border);
+  background: #fff;
+  box-shadow: none;
+}
+
+.topNavProfileAvatarLogo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
 .topNavProfileCompany {
   min-width: 0;
   max-width: 11rem;
   overflow: hidden;
-  padding: 0.2rem 0.48rem;
-  border-radius: 999px;
-  background: var(--pave-lime-tint);
+  padding: 0.2rem 0.2rem;
   color: var(--pave-charcoal);
-  font-size: 0.72rem;
+  font-size: 0.8rem;
   font-weight: 750;
   line-height: 1.2;
   text-overflow: ellipsis;
@@ -2639,4 +2674,99 @@
   .matrixMobileList {
     display: grid;
   }
+}
+
+/* Customer Training Matrix: pinned Candidate + Company fills. */
+.matrixStickyTable {
+  --sticky-lead-head-bg: #f0f0f0;
+  --sticky-lead-bg: var(--pave-surface, #fff);
+}
+
+/* NPORS "N001 – Ind FLT" labels, one per line when a record has several. */
+.categoryLabelStack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+/* All Training Categories: title + colour-coded expiry per card. */
+.categoryCardGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.categoryCard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.6rem;
+  background: var(--pave-surface);
+  border: 1px solid var(--pave-border);
+}
+
+.categoryCardMeta {
+  margin: 0;
+  font-size: var(--pave-font-size-caption);
+  line-height: var(--pave-line-height-caption);
+  color: var(--cust-muted);
+}
+
+/* ── Customer portal footer ── */
+
+.portalFooter {
+  width: 100%;
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 0 1.15rem 1.75rem;
+}
+
+.portalFooterInner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1.5rem;
+  padding-top: 1.4rem;
+  border-top: 1px solid var(--pave-border);
+  color: var(--pave-charcoal-muted);
+  font-size: 0.75rem;
+}
+
+.portalFooterBrand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.portalFooterBrand .topNavBrandMark {
+  width: 1.9rem;
+  height: 1.9rem;
+}
+
+.portalFooterBrand .topNavBrandMark img {
+  display: block;
+  width: 1.9rem;
+  height: 1.9rem;
+  object-fit: contain;
+  transform: scale(2.2);
+  transform-origin: 50% 47%;
+}
+
+.portalFooterLinks {
+  display: flex;
+  gap: 1.1rem;
+}
+
+.portalFooterLinks a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.portalFooterLinks a:hover {
+  color: var(--pave-charcoal);
+  text-decoration: underline;
 }

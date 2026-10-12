@@ -32,6 +32,75 @@ import {
 
 import styles from "@/components/admin/admin.module.css";
 
+/** "Alder & Finch Ltd.PNG" → "alderfinchltd" — loose key for logo matching. */
+function logoMatchKey(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\.(png|jpe?g|gif|webp|bmp|svg)$/, "")
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+/**
+ * After a Company import, upload each attached logo file to its company.
+ * A file matches a row by the name in its Company Logo cell, or — when that
+ * cell is blank — by the company name (e.g. "Alder & Finch Ltd.png").
+ */
+async function uploadAttachedCompanyLogos(
+  rows: BulkCommitResult["rows"],
+  files: File[],
+): Promise<{
+  uploaded: number;
+  failed: string[];
+  unmatched: string[];
+  notAttached: string[];
+}> {
+  const byKey = new Map(files.map((file) => [logoMatchKey(file.name), file]));
+  const used = new Set<File>();
+  const failed: string[] = [];
+  const notAttached: string[] = [];
+  let uploaded = 0;
+
+  for (const row of rows) {
+    const companyId = row.savedEntityId ?? row.matchedEntityId;
+    if (!companyId || row.status === "Error") continue;
+    const cell = row.fields.companyLogo?.trim() ?? "";
+    const isUrl = /^[a-z][a-z0-9+.-]*:\/\//i.test(cell);
+    const file =
+      (cell && !isUrl ? byKey.get(logoMatchKey(cell)) : undefined) ??
+      (row.fields.companyName
+        ? byKey.get(logoMatchKey(row.fields.companyName))
+        : undefined);
+    if (!file) {
+      if (cell && !isUrl && /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(cell)) {
+        notAttached.push(cell);
+      }
+      continue;
+    }
+    if (used.has(file)) continue;
+    used.add(file);
+    try {
+      const form = new FormData();
+      form.set("file", file);
+      const response = await fetch(`/api/admin/companies/${companyId}/logo`, {
+        method: "POST",
+        body: form,
+      });
+      if (!response.ok) throw new Error(await readPublicApiError(response));
+      uploaded += 1;
+    } catch (error) {
+      failed.push(
+        `${file.name}: ${error instanceof Error ? error.message : "upload failed"}`,
+      );
+    }
+  }
+
+  const unmatched = files
+    .filter((file) => !used.has(file))
+    .map((file) => file.name);
+  return { uploaded, failed, unmatched, notAttached };
+}
+
 const IMPORT_OPTIONS: Array<{
   value: BulkImportType;
   label: string;
@@ -397,6 +466,8 @@ export function AdminBulkUploadClient() {
   const { pushToast } = useAdminToast();
   const [importType, setImportType] = useState<BulkImportType>("workforce");
   const [file, setFile] = useState<File | null>(null);
+  /** Company imports: logo images matched to rows by file name. */
+  const [logoFiles, setLogoFiles] = useState<File[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [suppressNotifications, setSuppressNotifications] = useState(true);
   const [duplicateMode, setDuplicateMode] =
@@ -729,6 +800,28 @@ export function AdminBulkUploadClient() {
 
       const result: BulkCommitResult = data;
       setCommitResult(result);
+      if (result.importType === "company") {
+        const logos = await uploadAttachedCompanyLogos(result.rows, logoFiles);
+        const parts = [`${logos.uploaded} company logo(s) uploaded`];
+        if (logos.unmatched.length) {
+          parts.push(
+            `no matching company for: ${logos.unmatched.slice(0, 5).join(", ")}${logos.unmatched.length > 5 ? "…" : ""}`,
+          );
+        }
+        if (logos.notAttached.length) {
+          parts.push(
+            `named in the sheet but not attached: ${logos.notAttached.slice(0, 5).join(", ")}${logos.notAttached.length > 5 ? "…" : ""}`,
+          );
+        }
+        if (logos.failed.length) {
+          parts.push(`failed: ${logos.failed.slice(0, 3).join("; ")}`);
+        }
+        const problems =
+          logos.failed.length + logos.unmatched.length + logos.notAttached.length;
+        if (logos.uploaded > 0 || problems > 0) {
+          pushToast(`${parts.join(" — ")}.`, problems > 0 ? "error" : "success");
+        }
+      }
       const firstError = result.rows.find(
         (row) => row.status === "Error" && row.messages.length,
       );
@@ -792,6 +885,7 @@ export function AdminBulkUploadClient() {
     }
   }, [
     duplicateMode,
+    logoFiles,
     preview,
     pushToast,
     suppressNotifications,
@@ -1031,6 +1125,30 @@ export function AdminBulkUploadClient() {
                 <p className={styles.bulkHint}>No file selected yet.</p>
               )}
             </div>
+
+            {importType === "company" ? (
+              <div className={styles.bulkLogoPicker}>
+                <label className={styles.secondaryButton}>
+                  Company logo files (optional)
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml,image/bmp"
+                    multiple
+                    className={styles.bulkFileInput}
+                    onChange={(event) =>
+                      setLogoFiles(Array.from(event.target.files ?? []))
+                    }
+                  />
+                </label>
+                <p className={styles.bulkHint}>
+                  {logoFiles.length > 0
+                    ? `${logoFiles.length} logo file(s) selected: ${logoFiles
+                        .map((logo) => logo.name)
+                        .join(", ")}`
+                    : "Two ways to add logos: put an image web link (https://…) in the Company Logo column, or type the logo's file name there (e.g. alder-finch.png) and pick those image files here. A file named after the company (e.g. Alder & Finch Supplies Ltd.png) also matches when the cell is blank. Logos upload right after the import."}
+                </p>
+              </div>
+            ) : null}
 
             <label className={styles.bulkCheckRow}>
               <input

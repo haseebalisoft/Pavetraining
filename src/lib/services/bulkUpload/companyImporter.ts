@@ -208,13 +208,25 @@ async function withCompanyLogoResult(
   fields: Record<string, string | null>,
   base: BulkPreviewRow,
 ): Promise<BulkPreviewRow> {
+  const saved = { ...base, savedEntityId: companyId };
+  const plan = planCompanyLogoImport(fields.companyLogo);
+  if (plan.kind === "file") {
+    // The browser uploads the attached file to this company after import.
+    return {
+      ...saved,
+      messages: [
+        ...base.messages,
+        `Company Logo "${plan.fileName}" — uploaded from the attached logo files.`,
+      ],
+    };
+  }
   const logoWarning = await applyCompanyLogoFromImportCell(
     companyId,
     fields.companyLogo,
   );
   if (!logoWarning) {
     return {
-      ...base,
+      ...saved,
       messages: [
         ...base.messages,
         "Company Logo uploaded to SharePoint CompanyLogo.",
@@ -222,7 +234,7 @@ async function withCompanyLogoResult(
     };
   }
   return {
-    ...base,
+    ...saved,
     messages: [...base.messages, logoWarning],
   };
 }

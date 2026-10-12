@@ -11,6 +11,7 @@ import {
 
 import type { CustomerOfferRecord } from "@/types/models";
 
+import { DashboardIcon } from "./DashboardIcons";
 import styles from "./customerDashboard.module.css";
 
 const AUTOPLAY_MS = 7_000;
@@ -31,7 +32,7 @@ const STATIC_SLIDES: CustomerOfferRecord[] = [
     status: "Active",
     image: "/images/customer-hero-paver.png",
     ctaLabel: "Open training matrix",
-    ctaLink: "/customer",
+    ctaLink: "/customer/training-matrix",
   },
   {
     id: "static-accreditations",
@@ -75,12 +76,8 @@ function usePrefersReducedMotion(): boolean {
   return reduced;
 }
 
-function backgroundStyle(image: string | null): CSSProperties {
-  const overlay =
-    "linear-gradient(100deg, rgba(51, 51, 51, 0.92) 4%, rgba(51, 51, 51, 0.72) 48%, rgba(51, 51, 51, 0.42) 100%)";
-  return {
-    backgroundImage: image ? `${overlay}, url(${JSON.stringify(image)})` : overlay,
-  };
+function imageStyle(image: string | null): CSSProperties | undefined {
+  return image ? { backgroundImage: `url(${JSON.stringify(image)})` } : undefined;
 }
 
 export function CustomerOfferSlider({
@@ -122,7 +119,6 @@ export function CustomerOfferSlider({
   return (
     <section
       className={styles.offerSlider}
-      style={backgroundStyle(slide.image)}
       aria-label="Offers and announcements"
       aria-roledescription="carousel"
       tabIndex={0}
@@ -132,6 +128,15 @@ export function CustomerOfferSlider({
       onFocusCapture={() => setPaused(true)}
       onBlurCapture={() => setPaused(false)}
     >
+      {slide.image ? (
+        <div
+          key={`img-${slide.id}`}
+          className={styles.offerImage}
+          style={imageStyle(slide.image)}
+          aria-hidden="true"
+        />
+      ) : null}
+
       <div key={slide.id} className={styles.offerContent} aria-live="polite">
         <span className={styles.offerTag}>
           {slide.category?.trim() || "Limited time"}
@@ -145,46 +150,46 @@ export function CustomerOfferSlider({
           href={slide.ctaLink?.trim() || "/customer/offers"}
         >
           {slide.ctaLabel?.trim() || "View offer"}
-          <span aria-hidden="true"> →</span>
+          <DashboardIcon name="arrow" />
         </Link>
-      </div>
 
-      {slides.length > 1 ? (
-        <>
-          <button
-            type="button"
-            className={`${styles.offerArrow} ${styles.offerArrowPrevious}`}
-            aria-label="Previous slide"
-            onClick={() => goTo(safeActiveIndex - 1)}
-          >
-            <span aria-hidden="true">‹</span>
-          </button>
-          <button
-            type="button"
-            className={`${styles.offerArrow} ${styles.offerArrowNext}`}
-            aria-label="Next slide"
-            onClick={() => goTo(safeActiveIndex + 1)}
-          >
-            <span aria-hidden="true">›</span>
-          </button>
-          <div className={styles.offerDots} aria-label="Choose slide">
-            {slides.map((item, index) => (
-              <button
-                key={item.id}
-                type="button"
-                className={
-                  index === safeActiveIndex
-                    ? styles.offerDotActive
-                    : styles.offerDot
-                }
-                aria-label={`Show slide ${index + 1}: ${item.title}`}
-                aria-current={index === safeActiveIndex ? "true" : undefined}
-                onClick={() => goTo(index)}
-              />
-            ))}
+        {slides.length > 1 ? (
+          <div className={styles.offerControls}>
+            <button
+              type="button"
+              className={styles.offerArrow}
+              aria-label="Previous slide"
+              onClick={() => goTo(safeActiveIndex - 1)}
+            >
+              <DashboardIcon name="arrowLeft" />
+            </button>
+            <div className={styles.offerDots} aria-label="Choose slide">
+              {slides.map((item, index) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={
+                    index === safeActiveIndex
+                      ? styles.offerDotActive
+                      : styles.offerDot
+                  }
+                  aria-label={`Show slide ${index + 1}: ${item.title}`}
+                  aria-current={index === safeActiveIndex ? "true" : undefined}
+                  onClick={() => goTo(index)}
+                />
+              ))}
+            </div>
+            <button
+              type="button"
+              className={styles.offerArrow}
+              aria-label="Next slide"
+              onClick={() => goTo(safeActiveIndex + 1)}
+            >
+              <DashboardIcon name="arrow" />
+            </button>
           </div>
-        </>
-      ) : null}
+        ) : null}
+      </div>
     </section>
   );
 }

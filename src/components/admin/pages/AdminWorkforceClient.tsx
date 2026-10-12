@@ -240,35 +240,40 @@ function buildColumns(
       header: "NPORS Number",
       render: (row) => text(row.nporsNumbers),
     },
+    // Card number with its colour-coded expiry underneath — one column per
+    // card instead of separate Number / Expiry columns.
     {
       key: "cscsNumber",
-      header: "CSCS Number",
-      render: (row) => text(row.cscsNumber),
-    },
-    {
-      key: "cscsExpiry",
-      header: "Cscs Expiry",
-      render: (row) => <ExpiryDateBadge date={row.cscsExpiry} fillCell />,
+      header: "CSCS",
+      render: (row) => (
+        <ExpiryDateBadge
+          heading={text(row.cscsNumber)}
+          date={row.cscsExpiry}
+          fillCell
+        />
+      ),
     },
     {
       key: "swqrNumber",
-      header: "SWQR Number",
-      render: (row) => text(row.swqrNumber),
-    },
-    {
-      key: "swqrExpiry",
-      header: "Swqr Expiry",
-      render: (row) => <ExpiryDateBadge date={row.swqrExpiry} fillCell />,
+      header: "SWQR",
+      render: (row) => (
+        <ExpiryDateBadge
+          heading={text(row.swqrNumber)}
+          date={row.swqrExpiry}
+          fillCell
+        />
+      ),
     },
     {
       key: "eusrNumber",
-      header: "EUSR Number",
-      render: (row) => text(row.eusrNumber),
-    },
-    {
-      key: "eusrExpiry",
-      header: "Eusr Expiry",
-      render: (row) => <ExpiryDateBadge date={row.eusrExpiry} fillCell />,
+      header: "EUSR",
+      render: (row) => (
+        <ExpiryDateBadge
+          heading={text(row.eusrNumber)}
+          date={row.eusrExpiry}
+          fillCell
+        />
+      ),
     },
     {
       key: "inHouseCertificationNumber",
@@ -367,11 +372,16 @@ const fields: AdminFieldConfig[] = [
   },
   {
     name: "status",
-    label: "Status",
+    // Today Status is a record-keeping label only — nothing is hidden or
+    // filtered by it. The option text says what each value means.
+    label: "Status (record only — does not hide the candidate)",
     type: "select",
     options: [
-      { value: "Active", label: "Active" },
-      { value: "Inactive", label: "Inactive" },
+      { value: "Active", label: "Active — currently working for this company" },
+      {
+        value: "Inactive",
+        label: "Inactive — left / no longer working (kept for history)",
+      },
     ],
   },
   { name: "notes", label: "Notes", type: "textarea" },

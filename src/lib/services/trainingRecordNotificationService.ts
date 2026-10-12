@@ -7,7 +7,10 @@ import {
   loadEmailBrandAttachments,
   trainingRecordChangeEmailTemplate,
 } from "@/lib/services/notificationTemplateService";
-import { splitNporsCategory } from "@/lib/training/nporsCategoryOptions";
+import {
+  formatNporsCategoryLabel,
+  splitNporsCategories,
+} from "@/lib/training/nporsCategoryOptions";
 import {
   asString,
   extractLookupId,
@@ -226,18 +229,21 @@ function buildEmail(input: {
   const outcome = input.record.trainingOutcome?.trim();
   const greeting = input.tmName ? `Hi ${input.tmName},` : "Hi,";
 
-  const nporsSplit =
+  // NPORS: every category on the record as "N001 – Ind FLT", so the N
+  // number never appears without its category name.
+  const nporsLabels =
     input.register === "nporsRegister"
-      ? splitNporsCategory(input.record.nporsCategory)
-      : null;
-  const categoryName =
-    nporsSplit?.categoryName ||
-    (input.register === "nporsRegister" ? input.category : input.category);
+      ? splitNporsCategories(input.record.nporsCategory)
+          .map(formatNporsCategoryLabel)
+          .filter(Boolean)
+      : [];
+  const categoryName = input.category;
   const nNumber =
-    nporsSplit?.nNumber ||
-    (input.register === "nporsRegister"
-      ? input.record.nporsNumber?.trim() || null
-      : null);
+    nporsLabels.length > 0
+      ? nporsLabels.join(", ")
+      : input.register === "nporsRegister"
+        ? input.record.nporsNumber?.trim() || null
+        : null;
 
   return trainingRecordChangeEmailTemplate({
     greeting,

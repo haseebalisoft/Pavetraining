@@ -1,8 +1,11 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
+import { BrandLogo } from "@/components/brand/BrandLogo";
 import { CustomerTopNav } from "@/components/customer/CustomerTopNav";
 import { auth, signOut } from "@/auth";
+import { getCompanyById } from "@/lib/services/companyService";
 import { accessScopeBadgeLabel } from "@/lib/services/customerAccessService";
 import { getCustomerContext } from "@/lib/services/customerContextService";
 import { getAssignedManagersForCustomer } from "@/lib/services/workforceService";
@@ -47,18 +50,23 @@ export default async function CustomerLayout({
     redirect("/access-denied");
   }
 
-  const assigned = await getAssignedManagersForCustomer({
-    companyName: context.companyName,
-    email: context.loggedInEmail,
-    displayName: context.candidateScopeName,
-    customerRole: context.customerRole,
-  });
+  const [assigned, company] = await Promise.all([
+    getAssignedManagersForCustomer({
+      companyName: context.companyName,
+      email: context.loggedInEmail,
+      displayName: context.candidateScopeName,
+      customerRole: context.customerRole,
+    }),
+    // Same cached read the dashboard uses — only for the nav logo.
+    getCompanyById(context.companyId).catch(() => null),
+  ]);
 
   return (
     <div className={styles.shell}>
       <CustomerTopNav
         email={context.loggedInEmail}
         companyName={context.companyName}
+        companyLogo={company?.companyLogo ?? null}
         roleLabel={context.roleLabel}
         accessLabel={accessScopeBadgeLabel(context)}
         canDownload={context.canDownload}
@@ -68,6 +76,19 @@ export default async function CustomerLayout({
         signOutAction={signOutAction}
       />
       <main className={styles.main}>{children}</main>
+      <footer className={styles.portalFooter}>
+        <div className={styles.portalFooterInner}>
+          <span className={styles.portalFooterBrand}>
+            <span className={styles.topNavBrandMark}>
+              <BrandLogo variant="mark" />
+            </span>
+            © {new Date().getFullYear()} PAVE Training. All rights reserved.
+          </span>
+          <nav className={styles.portalFooterLinks} aria-label="Footer">
+            <Link href="/customer/support">Support</Link>
+          </nav>
+        </div>
+      </footer>
     </div>
   );
 }

@@ -43,3 +43,17 @@
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+
+/* Heading (card number / category title) above the status + date. */
+.stacked {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+}
+
+.heading {
+  font-weight: 700;
+  line-height: 1.25;
+  color: inherit;
+  overflow-wrap: anywhere;
+}

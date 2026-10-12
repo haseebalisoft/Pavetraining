@@ -17,6 +17,10 @@ import { QuickAddPermissionPersonModal } from "@/components/admin/QuickAddPermis
 import type { AdminPermissionRecord } from "@/lib/services/adminCrudService";
 import { Breadcrumbs } from "@/components/ui/Breadcrumbs";
 import { LoadingState } from "@/components/ui/States";
+import {
+  stickyLeadTableProps,
+  useStickyLeadColumns,
+} from "@/components/ui/useStickyLeadColumns";
 import { readPublicApiError } from "@/lib/errors/publicMessages";
 import { addCalendarYearsIso, defaultPassExpiryIso } from "@/lib/utils/formatDate";
 import { isValidEmail } from "@/lib/validation/email";
@@ -250,8 +254,12 @@ interface AdminCrudPageProps<T extends { id: string }> {
   breadcrumbs?: Array<{ label: string; href?: string }>;
   /** Horizontal scroll for many columns (Company List / Excel-width tables). */
   wideTable?: boolean;
-  /** Freeze first two data columns while scrolling horizontally. */
-  stickyLeadColumns?: boolean;
+  /**
+   * Freeze the first N data columns (plus the row-select column, when shown)
+   * while scrolling horizontally. `true` means 2. Offsets are measured from
+   * the rendered columns, so pinned columns never overlap.
+   */
+  stickyLeadColumns?: boolean | number;
   /**
    * Pin a single identity column (e.g. Company Name / Candidate Name) to the
    * left edge while scrolling horizontally. Pass the matching `column.key`.
@@ -598,6 +606,14 @@ export function AdminCrudPage<T extends { id: string }>({
   optimisticRowLabel,
 }: AdminCrudPageProps<T>) {
   const { pushToast } = useAdminToast();
+  const stickyDataColumns =
+    stickyLeadColumns === true ? 2 : stickyLeadColumns || 0;
+  const stickyLeadCount =
+    stickyDataColumns > 0
+      ? stickyDataColumns + (enableBulkDelete || deleteUrl ? 1 : 0)
+      : 0;
+  const stickyLeadRef = useStickyLeadColumns(stickyLeadCount);
+  const stickyLead = stickyLeadTableProps(stickyLeadCount);
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -1451,6 +1467,8 @@ export function AdminCrudPage<T extends { id: string }>({
       const payload = (await response.json().catch(() => null)) as {
         warning?: string;
         choiceWarnings?: string[];
+        /** Permissions saves: whether the portal access email went out. */
+        accessEmail?: { sent: boolean; message: string } | null;
         matrixSeedWarning?: string;
         matrixSync?: {
           summary?: {
@@ -1483,6 +1501,12 @@ export function AdminCrudPage<T extends { id: string }>({
         (isCreate ? "Record created." : "Record updated.") + syncNote,
         "success",
       );
+      if (payload?.accessEmail?.message) {
+        pushToast(
+          payload.accessEmail.message,
+          payload.accessEmail.sent ? "success" : "error",
+        );
+      }
       setDrawerOpen(false);
       // Release the one-shot ?action=add guard so subsequent
       // "+ Add …" URL-driven opens still work in the same session.
@@ -1818,10 +1842,12 @@ export function AdminCrudPage<T extends { id: string }>({
           }`}
         >
           <table
+            ref={stickyLeadRef}
+            data-sticky-count={stickyLead["data-sticky-count"]}
             className={[
               styles.dataTable,
               wideTable ? styles.companiesWideTable : "",
-              stickyLeadColumns ? styles.stickyLeadColumns : "",
+              stickyLead.className,
               tableClassName || "",
             ]
               .filter(Boolean)
@@ -2876,11 +2902,23 @@ export function AdminCrudPage<T extends { id: string }>({
                       );
                     })()
                   ) : null}
-                  {quickAddEnabled && quickAddCompanyId && quickAddCompanyName ? (
+                  {quickAddEnabled ? (
                     <button
                       type="button"
                       className={styles.quickAddInlineButton}
+                      title={
+                        quickAddCompanyId && quickAddCompanyName
+                          ? undefined
+                          : "Pick the candidate's company first"
+                      }
                       onClick={() => {
+                        if (!quickAddCompanyId || !quickAddCompanyName) {
+                          pushToast(
+                            "Pick the candidate's company first, then add the new person.",
+                            "error",
+                          );
+                          return;
+                        }
                         setQuickAdd({
                           fieldName: field.name,
                           role:
@@ -3014,10 +3052,14 @@ export function AdminCrudPage<T extends { id: string }>({
               };
               // Email helps Workforce save resolve the Permissions row when
               // the display name collides or refresh is still in flight.
+              // The id lets the save find this person even before they show
+              // up in SharePoint list queries (which lag behind a create).
               if (quickAdd.fieldName === "trainingManager") {
                 next.trainingManagerEmail = record.userEmail;
+                next.trainingManagerPermissionId = record.id;
               } else if (quickAdd.fieldName === "supervisor") {
                 next.supervisorEmail = record.userEmail;
+                next.supervisorPermissionId = record.id;
               }
               return next;
             });

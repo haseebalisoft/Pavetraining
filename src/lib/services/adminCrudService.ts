@@ -485,28 +485,49 @@ function permissionPersonKey(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-export async function loadPermissionPeople(): Promise<PermissionPersonRef[]> {
+function toPermissionPersonRef(item: {
+  id: string;
+  fields: Record<string, unknown>;
+}): PermissionPersonRef | null {
   const fields = getSharePointFields("permissions");
+  const userEmail = asString(item.fields[fields.userEmail]);
+  const roleType = normalizePermissionRoleType(item.fields[fields.roleType]);
+  if (!userEmail || !roleType) return null;
+  const companyId =
+    asString(item.fields[fields.companyLookupId]) ??
+    extractLookupId(item.fields, fields.company) ??
+    null;
+  return {
+    id: item.id,
+    name: asNullableString(item.fields[fields.name]),
+    userEmail: userEmail.toLowerCase(),
+    roleType,
+    companyId,
+    status: asNullableString(item.fields[fields.status]) ?? "Inactive",
+  };
+}
+
+export async function loadPermissionPeople(): Promise<PermissionPersonRef[]> {
   const items = await getListItemsByKey("permissions", { top: 5000 });
-  const rows: PermissionPersonRef[] = [];
-  for (const item of items) {
-    const userEmail = asString(item.fields[fields.userEmail]);
-    const roleType = normalizePermissionRoleType(item.fields[fields.roleType]);
-    if (!userEmail || !roleType) continue;
-    const companyId =
-      asString(item.fields[fields.companyLookupId]) ??
-      extractLookupId(item.fields, fields.company) ??
-      null;
-    rows.push({
-      id: item.id,
-      name: asNullableString(item.fields[fields.name]),
-      userEmail: userEmail.toLowerCase(),
-      roleType,
-      companyId,
-      status: asNullableString(item.fields[fields.status]) ?? "Inactive",
-    });
+  return items
+    .map(toPermissionPersonRef)
+    .filter((row): row is PermissionPersonRef => row !== null);
+}
+
+/**
+ * One Permissions row by item id. Used right after "+ Add new" in the
+ * Workforce form: a list query can lag a few seconds behind a create, but a
+ * by-id read sees the new row straight away.
+ */
+async function loadPermissionPersonById(
+  id: string,
+): Promise<PermissionPersonRef | null> {
+  try {
+    const item = await getListItemByKey("permissions", id);
+    return item ? toPermissionPersonRef(item) : null;
+  } catch {
+    return null;
   }
-  return rows;
 }
 
 function permissionNameByIdMap(
@@ -663,6 +684,7 @@ async function applyWorkforcePersonLookups(
     roleType: RoleType,
     lookupIdField: string,
     email: string | null | undefined,
+    permissionId: string | null | undefined,
   ): Promise<string | null> => {
     const text = value?.trim();
     if (!text) {
@@ -696,6 +718,21 @@ async function applyWorkforcePersonLookups(
         );
       }) ??
       null;
+    if (!hit && permissionId?.trim()) {
+      // Person just created via "+ Add new" — not in the list query yet.
+      const direct = await loadPermissionPersonById(permissionId.trim());
+      if (
+        direct &&
+        direct.roleType === roleType &&
+        (direct.status || "").toLowerCase() === "active" &&
+        (permissionPersonKey(direct.name ?? "") === key ||
+          direct.userEmail === key ||
+          (trimmedEmail !== null && direct.userEmail === trimmedEmail))
+      ) {
+        hit = direct;
+        people = [...people.filter((row) => row.id !== direct.id), direct];
+      }
+    }
     if (!hit) {
       hit = findPermissionPerson(people, text);
       if (hit && hit.roleType !== roleType) {
@@ -742,6 +779,7 @@ async function applyWorkforcePersonLookups(
       `${workforceFields.trainingManager}LookupId`,
       options?.trainingManagerEmail ??
         optionalText(input.trainingManagerEmail),
+      optionalText(input.trainingManagerPermissionId),
     );
   }
   if (input.supervisor !== undefined) {
@@ -750,6 +788,7 @@ async function applyWorkforcePersonLookups(
       "Customer",
       `${workforceFields.supervisor}LookupId`,
       options?.supervisorEmail ?? optionalText(input.supervisorEmail),
+      optionalText(input.supervisorPermissionId),
     );
   }
 
@@ -5469,8 +5508,16 @@ async function withResolvedPermissionCompany(
   return record;
 }
 
+/** What happened to the access email after a Permissions save. */
+export type PermissionAccessEmailResult = {
+  sent: boolean;
+  /** Short line for the admin toast, e.g. "Access email sent to x@y.com". */
+  message: string;
+};
+
 /**
- * Portal invite for Permissions create/update. Best-effort — never throws.
+ * Portal access email for Permissions create/update. Best-effort — never
+ * throws, but always says what happened so the admin isn't left guessing.
  * Requires Company + Role (Admin uses "PAVE Training" when no company).
  */
 async function notifyPermissionPortalInvite(
@@ -5479,7 +5526,7 @@ async function notifyPermissionPortalInvite(
     reason: "created" | "updated";
     fallbackCompanyName?: string | null;
   },
-): Promise<void> {
+): Promise<PermissionAccessEmailResult> {
   try {
     const resolved = await withResolvedPermissionCompany(
       record,
@@ -5488,17 +5535,22 @@ async function notifyPermissionPortalInvite(
     const companyName = resolved.companyName?.trim() || null;
     const roleLabel = resolved.roleLabel?.trim() || null;
     if (!companyName || !roleLabel) {
+      const missing = !companyName ? "Company" : "Role";
       console.warn(
-        `[permissions] portal invite skipped (${options.reason}) for ${resolved.userEmail}: missing ${
-          !companyName ? "Company" : "Role"
-        }.`,
+        `[permissions] portal invite skipped (${options.reason}) for ${resolved.userEmail}: missing ${missing}.`,
       );
-      return;
+      return {
+        sent: false,
+        message: `Access email not sent — the row has no ${missing}.`,
+      };
     }
 
     // Skip placeholder bulk-created emails — not real mailboxes.
     if (resolved.userEmail.toLowerCase().endsWith("@pave.local")) {
-      return;
+      return {
+        sent: false,
+        message: "Access email not sent — placeholder @pave.local address.",
+      };
     }
 
     const { sendPortalInviteNotification } = await import(
@@ -5510,23 +5562,33 @@ async function notifyPermissionPortalInvite(
       companyName,
       roleLabel,
       itemId: resolved.id,
+      reason: options.reason,
       detail:
         options.reason === "created"
           ? "Permissions list invite (created)"
-          : "Permissions list invite (updated)",
+          : "Permissions list access updated",
     });
-    if (result.status !== "sent" && result.status !== "queued") {
-      console.warn(
-        `[permissions] portal invite ${result.status} (${options.reason}) to ${resolved.userEmail}: ${
-          result.errorMessage ?? "unknown"
-        }`,
-      );
+    if (result.status === "sent" || result.status === "queued") {
+      return {
+        sent: true,
+        message: `Access email sent to ${resolved.userEmail}.`,
+      };
     }
-  } catch (error) {
     console.warn(
-      `[permissions] portal invite failed (${options.reason}):`,
-      error instanceof Error ? error.message : error,
+      `[permissions] portal invite ${result.status} (${options.reason}) to ${resolved.userEmail}: ${
+        result.errorMessage ?? "unknown"
+      }`,
     );
+    return {
+      sent: false,
+      message: `Access email not sent to ${resolved.userEmail} — ${
+        result.errorMessage ?? result.status
+      }.`,
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.warn(`[permissions] portal invite failed (${options.reason}):`, detail);
+    return { sent: false, message: `Access email failed — ${detail}.` };
   }
 }
 
@@ -5669,12 +5731,12 @@ export async function createAdminPermission(input: Record<string, unknown>) {
   // Resolve Company LookupId → display name (Graph often omits LookupValue).
   mapped = await withResolvedPermissionCompany(mapped, companyName);
 
-  await notifyPermissionPortalInvite(mapped, {
+  const accessEmail = await notifyPermissionPortalInvite(mapped, {
     reason: "created",
     fallbackCompanyName: companyName,
   });
 
-  return mapped;
+  return { record: mapped, accessEmail };
 }
 
 export async function updateAdminPermission(
@@ -5927,16 +5989,27 @@ export async function updateAdminPermission(
     (previous.companyName ?? "").trim().toLowerCase() !==
       (mapped.companyName ?? "").trim().toLowerCase() ||
     (previous.accessScope ?? "") !== (mapped.accessScope ?? "") ||
+    previous.canView !== mapped.canView ||
+    previous.canDownload !== mapped.canDownload ||
+    previous.canEdit !== mapped.canEdit ||
+    [...previous.departmentScopes].sort().join("|") !==
+      [...mapped.departmentScopes].sort().join("|") ||
     (!wasActive && isActive);
 
+  let accessEmail: PermissionAccessEmailResult | null = null;
   if (isActive && accessChanged) {
-    await notifyPermissionPortalInvite(mapped, {
+    accessEmail = await notifyPermissionPortalInvite(mapped, {
       reason: "updated",
       fallbackCompanyName: optionalText(input.companyName),
     });
+  } else if (!isActive) {
+    accessEmail = {
+      sent: false,
+      message: "No access email — this person is Inactive.",
+    };
   }
 
-  return { record: mapped, choiceWarnings };
+  return { record: mapped, choiceWarnings, accessEmail };
 }
 
 export async function deleteAdminPermission(

@@ -22,7 +22,10 @@ import {
 } from "@/lib/training/candidateCategories";
 import { expandEusrRecordsForDisplay } from "@/lib/training/eusrOptions";
 import { getExpiryStatus } from "@/lib/training/expiryFilters";
-import { splitNporsCategory } from "@/lib/training/nporsCategoryOptions";
+import {
+  formatNporsCategoryLabel,
+  splitNporsCategories,
+} from "@/lib/training/nporsCategoryOptions";
 import { formatDate } from "@/lib/utils/formatDate";
 import type {
   CustomerDocumentRecord,
@@ -113,18 +116,33 @@ function Item({
   );
 }
 
-function ExpiryItem({
+/**
+ * Card number with its colour-coded expiry underneath, so the number and the
+ * date it expires sit together in one card. Omit `number` for an expiry-only
+ * card (e.g. In-House).
+ */
+function CardExpiryItem({
   label,
+  number,
   date,
 }: {
   label: string;
+  number?: string | null;
   date: string | null | undefined;
 }) {
   return (
     <div className={styles.profileCard}>
       <p className={styles.metaLabel}>{label}</p>
       <div className={styles.metaValue}>
-        <ExpiryDateBadge date={date} />
+        <ExpiryDateBadge
+          heading={
+            number === undefined
+              ? undefined
+              : number?.trim() || <span className={styles.muted}>No number</span>
+          }
+          date={date}
+          fillCell
+        />
       </div>
     </div>
   );
@@ -143,19 +161,21 @@ function safeReturnHref(
 
 const nporsColumns: TrainingRecordColumn<CustomerNporsRecord>[] = [
   {
-    key: "categoryName",
-    header: "Category name",
+    key: "category",
+    header: "Category",
     render: (row) => {
-      const split = splitNporsCategory(row.nporsCategory);
-      return formatTextCell(split.categoryName || row.nporsCategory);
-    },
-  },
-  {
-    key: "nNumber",
-    header: "N number",
-    render: (row) => {
-      const split = splitNporsCategory(row.nporsCategory);
-      return formatTextCell(split.nNumber || row.nporsNumber);
+      // "N001 – Ind FLT": the N number always shows with its category name.
+      const labels = splitNporsCategories(row.nporsCategory)
+        .map(formatNporsCategoryLabel)
+        .filter(Boolean);
+      if (labels.length === 0) return formatTextCell(row.nporsCategory);
+      return (
+        <span className={styles.categoryLabelStack}>
+          {labels.map((label) => (
+            <span key={label}>{label}</span>
+          ))}
+        </span>
+      );
     },
   },
   {
@@ -333,43 +353,32 @@ function CandidateCategoriesSection({ rows }: { rows: CandidateCategoryRow[] }) 
       <p className={styles.profileSectionMeta}>
         Every category with a training or expiry date — including expired —
         from NPORS, EUSR, Streetworks / NRSWA, In-House, NVQ and the Training
-        Matrix. Categories with both dates blank are hidden.
+        Matrix, colour coded by expiry. Categories with both dates blank are
+        hidden.
       </p>
       {rows.length === 0 ? (
         <p className={styles.muted}>No training categories recorded for this candidate.</p>
       ) : (
-        <div className={styles.tableWrap}>
-          <table className={styles.dataTable}>
-            <thead>
-              <tr>
-                <th scope="col">Category</th>
-                <th scope="col">Source</th>
-                <th scope="col">Training Date</th>
-                <th scope="col">Expiry Date</th>
-                <th scope="col">Outcome</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.id}>
-                  <td>{row.category}</td>
-                  <td>{row.source}</td>
-                  <td>
-                    {row.trainingDate ? (
-                      formatDate(row.trainingDate)
-                    ) : (
-                      <span className={styles.muted}>—</span>
-                    )}
-                  </td>
-                  <td>
-                    <ExpiryDateBadge date={row.expiryDate} />
-                  </td>
-                  <td>{renderCategoryOutcome(row.outcomeLabel)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ul className={styles.categoryCardGrid}>
+          {rows.map((row) => (
+            <li key={row.id} className={styles.categoryCard}>
+              <ExpiryDateBadge
+                heading={row.category}
+                date={row.expiryDate}
+                fillCell
+              />
+              <p className={styles.categoryCardMeta}>
+                {row.source}
+                {row.trainingDate
+                  ? ` · Trained ${formatDate(row.trainingDate)}`
+                  : ""}
+              </p>
+              {row.outcomeLabel ? (
+                <div>{renderCategoryOutcome(row.outcomeLabel)}</div>
+              ) : null}
+            </li>
+          ))}
+        </ul>
       )}
     </section>
   );
@@ -705,36 +714,36 @@ export function CandidateProfileView({
               : null
           }
         />
-        <Item label="NPORS number" value={candidate.nporsNumbers} />
-        <Item label="CSCS number" value={candidate.cscsNumber} />
-        <Item label="SWQR number" value={candidate.swqrNumber} />
-        <Item label="EUSR number" value={candidate.eusrNumber} />
       </section>
 
       <section
         className={styles.profileGrid}
-        aria-label="Training expiry summary"
+        aria-label="Card numbers and expiry dates"
         style={{ marginTop: "1.25rem" }}
       >
-        <ExpiryItem
-          label="In-House / Asbestos Awareness expiry"
-          date={matrixRow?.inHouseExpiry ?? null}
-        />
-        <ExpiryItem
-          label="CSCS expiry"
+        <CardExpiryItem
+          label="CSCS"
+          number={candidate.cscsNumber}
           date={matrixRow?.cscsExpiry ?? candidate.cscsExpiry}
         />
-        <ExpiryItem
-          label="Streetworks (SWQR) expiry"
+        <CardExpiryItem
+          label="Streetworks (SWQR)"
+          number={candidate.swqrNumber}
           date={matrixRow?.swqrExpiry ?? candidate.swqrExpiry}
         />
-        <ExpiryItem
-          label="EUSR expiry"
+        <CardExpiryItem
+          label="EUSR"
+          number={candidate.eusrNumber}
           date={matrixRow?.eusrExpiry ?? candidate.eusrExpiry}
         />
-        <ExpiryItem
-          label="NPORS expiry"
+        <CardExpiryItem
+          label="NPORS (next expiry)"
+          number={candidate.nporsNumbers}
           date={matrixRow?.nporsExpiry ?? null}
+        />
+        <CardExpiryItem
+          label="In-House / Asbestos Awareness"
+          date={matrixRow?.inHouseExpiry ?? null}
         />
       </section>
 

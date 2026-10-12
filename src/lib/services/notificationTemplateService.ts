@@ -39,23 +39,43 @@ ${companyBlock}<img src="cid:${PAVE_EMAIL_LOGO_CID}" alt="PAVE Training" width="
 </p>`;
 }
 
-/** Reads public/brand/pave-logo.png for inline email embedding. */
-export async function loadPaveLogoAttachment(): Promise<InlineEmailAttachment | null> {
+/**
+ * PAVE logo bytes for inline email embedding. Serverless deploys don't always
+ * ship `public/` on the function's disk, so when the file can't be read the
+ * logo is fetched from the live portal instead — otherwise emails went out
+ * with no logo at all.
+ */
+async function readPaveLogoBytes(): Promise<Buffer | null> {
   try {
-    const logoPath = path.join(process.cwd(), "public", "brand", "pave-logo.png");
-    const bytes = await readFile(logoPath);
-    return {
-      filename: "pave-logo.png",
-      contentType: "image/png",
-      content: bytes.toString("base64"),
-      encoding: "base64",
-      contentId: PAVE_EMAIL_LOGO_CID,
-      isInline: true,
-    };
+    return await readFile(
+      path.join(process.cwd(), "public", "brand", "pave-logo.png"),
+    );
+  } catch {
+    // Fall through to the public URL.
+  }
+  const url = `${customerPortalBaseUrl()}/brand/pave-logo.png`;
+  try {
+    const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    return bytes.length > 0 ? bytes : null;
   } catch (error) {
-    console.warn("[notifications] Could not load PAVE logo for email:", error);
+    console.warn(`[notifications] Could not load PAVE logo from ${url}:`, error);
     return null;
   }
+}
+
+export async function loadPaveLogoAttachment(): Promise<InlineEmailAttachment | null> {
+  const bytes = await readPaveLogoBytes();
+  if (!bytes) return null;
+  return {
+    filename: "pave-logo.png",
+    contentType: "image/png",
+    content: bytes.toString("base64"),
+    encoding: "base64",
+    contentId: PAVE_EMAIL_LOGO_CID,
+    isInline: true,
+  };
 }
 
 /**
@@ -265,19 +285,27 @@ export function portalInviteEmailTemplate(input: {
   companyName?: string | null;
   roleLabel?: string | null;
   includeCompanyLogo?: boolean;
+  /** "updated" = existing access changed (role, company, rights, departments). */
+  reason?: "created" | "updated";
 }): { subject: string; text: string; html: string } {
   const loginUrl = portalLoginUrl();
+  const updated = input.reason === "updated";
   const who = input.displayName?.trim() || "there";
   // Fallback labels only appear if a call site slipped past the send-time
   // guard — we still render the field so the recipient can see the drift.
   const company = input.companyName?.trim() || "— not set —";
   const role = input.roleLabel?.trim() || "— not set —";
 
-  const subject = "You're invited to the PAVE Training Portal";
+  const subject = updated
+    ? "Your PAVE Training Portal access has been updated"
+    : "You're invited to the PAVE Training Portal";
+  const intro = updated
+    ? "Your access to the PAVE Training Portal has been updated."
+    : "You have been invited to the PAVE Training Portal.";
   const text = [
     `Hi ${who},`,
     "",
-    "You have been invited to the PAVE Training Portal.",
+    intro,
     "",
     "Company:",
     company,
@@ -291,7 +319,7 @@ export function portalInviteEmailTemplate(input: {
   ].join("\n");
 
   const html = `${emailLogoHtml({ includeCompanyLogo: input.includeCompanyLogo })}<p>Hi ${escapeHtml(who)},</p>
-<p>You have been invited to the <strong>PAVE Training Portal</strong>.</p>
+<p>${escapeHtml(intro)}</p>
 <p><strong>Company:</strong><br/>${escapeHtml(company)}</p>
 <p><strong>Role:</strong><br/>${escapeHtml(role)}</p>
 ${portalCtaHtml(loginUrl, "Sign in to the portal")}
@@ -374,15 +402,18 @@ export function trainingRecordChangeEmailTemplate(input: {
   company: string;
   outcome?: string | null;
   actor: string;
-  /** NPORS: category title (without N-code). */
+  /** Category title; hidden when `nNumber` already carries it. */
   categoryName?: string | null;
-  /** NPORS: N001-style code (or card number fallback). */
+  /** NPORS: "N001 – Ind FLT" labels (or card number fallback). */
   nNumber?: string | null;
   includeCompanyLogo?: boolean;
 }): { subject: string; text: string; html: string } {
   const portalUrl = portalMatrixUrl();
-  const categoryName = input.categoryName?.trim() || input.category;
   const nNumber = input.nNumber?.trim() || null;
+  // "N001 – Ind FLT" already names the category — don't repeat it.
+  const nNumberHasName = Boolean(nNumber && /^N\d+[A-Z]?\s*–\s*\S/i.test(nNumber));
+  const categoryName = input.categoryName?.trim() || input.category;
+  const showCategoryRow = !nNumberHasName;
   const subjectParts = [
     `Training ${input.actionLabel}: ${input.candidate}`,
     input.registerLabel,
@@ -393,7 +424,7 @@ export function trainingRecordChangeEmailTemplate(input: {
   const detailLines = [
     `Candidate name: ${input.candidate}`,
     nNumber ? `N number: ${nNumber}` : null,
-    `Category name: ${categoryName}`,
+    showCategoryRow ? `Category name: ${categoryName}` : null,
     `Training date: ${input.trainingDate}`,
     `Expiry date: ${input.expiry}`,
     `Company: ${input.company}`,
@@ -417,7 +448,9 @@ export function trainingRecordChangeEmailTemplate(input: {
     nNumber
       ? `<tr><td style="padding:2px 12px 2px 0"><strong>N number</strong></td><td style="padding:2px 0">${escapeHtml(nNumber)}</td></tr>`
       : "",
-    `<tr><td style="padding:2px 12px 2px 0"><strong>Category name</strong></td><td style="padding:2px 0">${escapeHtml(categoryName)}</td></tr>`,
+    showCategoryRow
+      ? `<tr><td style="padding:2px 12px 2px 0"><strong>Category name</strong></td><td style="padding:2px 0">${escapeHtml(categoryName)}</td></tr>`
+      : "",
     `<tr><td style="padding:2px 12px 2px 0"><strong>Training date</strong></td><td style="padding:2px 0">${escapeHtml(input.trainingDate)}</td></tr>`,
     `<tr><td style="padding:2px 12px 2px 0"><strong>Expiry date</strong></td><td style="padding:2px 0">${escapeHtml(input.expiry)}</td></tr>`,
     `<tr><td style="padding:2px 12px 2px 0"><strong>Company</strong></td><td style="padding:2px 0">${escapeHtml(input.company)}</td></tr>`,

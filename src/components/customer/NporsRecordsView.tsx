@@ -7,7 +7,10 @@ import {
   TrainingRecordsTable,
   type TrainingRecordColumn,
 } from "@/components/customer/TrainingRecordsTable";
-import { splitNporsCategory } from "@/lib/training/nporsCategoryOptions";
+import {
+  formatNporsCategoryLabel,
+  splitNporsCategories,
+} from "@/lib/training/nporsCategoryOptions";
 import { formatDate } from "@/lib/utils/formatDate";
 import type { CustomerNporsRecord } from "@/types/models";
 
@@ -18,19 +21,19 @@ const columns: TrainingRecordColumn<CustomerNporsRecord>[] = [
     render: (row) => formatTextCell(row.candidateName),
   },
   {
-    key: "categoryName",
-    header: "Category name",
+    key: "category",
+    header: "Category",
     render: (row) => {
-      const split = splitNporsCategory(row.nporsCategory);
-      return formatTextCell(split.categoryName || row.nporsCategory);
-    },
-  },
-  {
-    key: "nNumber",
-    header: "N number",
-    render: (row) => {
-      const split = splitNporsCategory(row.nporsCategory);
-      return formatTextCell(split.nNumber || row.nporsNumber);
+      // "N001 – Ind FLT": the N number always shows with its category name.
+      const labels = splitNporsCategories(row.nporsCategory)
+        .map(formatNporsCategoryLabel)
+        .filter(Boolean);
+      if (labels.length === 0) return formatTextCell(row.nporsCategory);
+      return labels.map((label) => (
+        <span key={label} style={{ display: "block" }}>
+          {label}
+        </span>
+      ));
     },
   },
   {

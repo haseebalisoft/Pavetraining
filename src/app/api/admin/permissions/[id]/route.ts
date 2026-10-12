@@ -16,7 +16,8 @@ export async function PATCH(
     "PATCH /api/admin/permissions/[id]",
     async (ctx, req) => {
       const body = (await req.json()) as Record<string, unknown>;
-      const { record, choiceWarnings } = await updateAdminPermission(id, body);
+      const { record, choiceWarnings, accessEmail } =
+        await updateAdminPermission(id, body);
       if (body.departmentsAllowed !== undefined) {
         await logPermissionDepartmentScopeUpdate({
           userEmail: ctx.loggedInEmail,
@@ -28,7 +29,7 @@ export async function PATCH(
           request: req,
         });
       }
-      return { record, choiceWarnings };
+      return { record, choiceWarnings, accessEmail };
     },
     { errorMessage: "Failed to update permission" },
     request,
