@@ -1,6 +1,6 @@
 /**
  * Wipe operational SharePoint list items. Keeps:
- *   - Permissions row for wayne.curry@pavetraining.co.uk (hardcoded admin)
+ *   - Permissions rows for wayne.curry@ and haseeb@pavetraining.co.uk
  *   - NPORS Categories + Training Course Categories (form catalogs)
  *
  * Usage:
@@ -14,7 +14,10 @@ import { TokenCredentialAuthenticationProvider } from "@microsoft/microsoft-grap
 
 const DRY_RUN = process.argv.includes("--dry-run");
 const CONCURRENCY = 6;
-const KEEP_PERMISSION_EMAILS = new Set(["wayne.curry@pavetraining.co.uk"]);
+const KEEP_PERMISSION_EMAILS = new Set([
+  "wayne.curry@pavetraining.co.uk",
+  "haseeb@pavetraining.co.uk",
+]);
 
 function requireEnv(name) {
   const value = process.env[name]?.trim();
@@ -272,7 +275,7 @@ async function main() {
 
   await unlinkKeptPermissionsCompany(client, permissionsId);
   results.push(
-    await wipeList(client, "Permissions (except Wayne Curry)", permissionsId, {
+    await wipeList(client, "Permissions (except Wayne + Haseeb)", permissionsId, {
       keep: keepPermission,
     }),
   );
@@ -284,7 +287,7 @@ async function main() {
   console.log("\n--- retry pass ---");
   for (const [label, listId, opts] of [
     ...order,
-    ["Permissions (except Wayne Curry)", permissionsId, { keep: keepPermission }],
+    ["Permissions (except Wayne + Haseeb)", permissionsId, { keep: keepPermission }],
     ["Companies", envId("SHAREPOINT_COMPANY_LIST_ID")],
   ]) {
     const again = await wipeList(client, `${label} (retry)`, listId, opts || {});
