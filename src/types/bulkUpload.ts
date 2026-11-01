@@ -80,6 +80,40 @@ export const BULK_LINK_OUTCOME_LABELS: Record<BulkLinkOutcome, string> = {
 };
 
 /**
+ * Why a Training Matrix row could not be linked to exactly one Workforce
+ * record. Shown on Needs Review / Orphan rows in the upload preview, the
+ * upload results, and Admin Matrix, so an admin knows what to fix.
+ */
+export type MatrixReviewReasonCode =
+  | "candidateNotFound"
+  | "dobMissing"
+  | "dobMismatch"
+  | "companyMismatch"
+  | "multipleMatches"
+  | "multipleMatrixRows"
+  | "linkedRecordMissing"
+  | "duplicateMatrixRow";
+
+export const MATRIX_REVIEW_REASON_LABELS: Record<MatrixReviewReasonCode, string> = {
+  candidateNotFound: "Candidate not found",
+  dobMissing: "DOB missing",
+  dobMismatch: "DOB mismatch",
+  companyMismatch: "Company mismatch",
+  multipleMatches: "Multiple matches",
+  multipleMatrixRows: "Multiple matrix rows",
+  linkedRecordMissing: "Linked record deleted",
+  duplicateMatrixRow: "Duplicate matrix row",
+};
+
+export type MatrixReviewReason = {
+  code: MatrixReviewReasonCode;
+  /** Short label, e.g. "DOB mismatch". */
+  label: string;
+  /** Full explanation naming the records compared and what to do next. */
+  detail: string;
+};
+
+/**
  * Document-folder outcome for a bulk-imported Workforce row. The app is the
  * sole folder-creation owner (no Power Automate step in this flow), so every
  * row resolves synchronously to one of these — there is no "Pending" state.
@@ -98,6 +132,8 @@ export type BulkPreviewRow = {
   messages: string[];
   /** Workforce ↔ Training Matrix link result for this row. */
   linkOutcome?: BulkLinkOutcome | null;
+  /** Why a Training Matrix row was left Needs Review (matrix imports only). */
+  reviewReason?: MatrixReviewReason | null;
   /** Matrix row this candidate linked to (`example:<id>`), once known. */
   matrixRowId?: string | null;
   /** Document-folder result for this candidate (Workforce bulk import only). */
@@ -107,10 +143,27 @@ export type BulkPreviewRow = {
   source?: Record<string, string | null>;
   /** Resolved SharePoint company display name when known. */
   resolvedCompanyName?: string | null;
+  /** True when the commit stopped (time budget) before reaching this row. */
+  notProcessed?: boolean;
+  /**
+   * Matrix row saved, but its category backup records were not written
+   * before the time budget ran out (re-upload finishes them).
+   */
+  backupPending?: boolean;
   /** Matched existing entity id when duplicate detected. */
   matchedEntityId?: string | null;
   /** SharePoint item id the commit created/updated (company imports). */
   savedEntityId?: string | null;
+  /**
+   * Company imports: logo file name from the Company Logo column that the
+   * browser must upload from the attached files once the row exists.
+   */
+  pendingLogoFile?: string | null;
+  /**
+   * Workforce imports: photo file name from the Candidate Photo column that
+   * the browser must upload from the attached files once the candidate exists.
+   */
+  pendingPhotoFile?: string | null;
   matchedEntityName?: string | null;
   duplicateMatch?: "workforceNumber" | "nameDobCompany" | "nameCompany" | null;
   /** Company-match report (workforce import): which Company List item the row resolved to. */
@@ -127,8 +180,15 @@ export type BulkImportSummary = {
   warningRows: number;
   duplicateRows: number;
   errorRows: number;
+  /** Deliberately skipped (empty row, duplicate in Skip mode, …). */
   skippedRows: number;
   importedRows: number;
+  /**
+   * Never reached because the import stopped at the server time limit. Kept
+   * apart from skippedRows: "64 empty rows skipped" was reported when 47 of
+   * them were really unprocessed.
+   */
+  notProcessedRows?: number;
 };
 
 export type BulkPreviewResult = {
@@ -151,6 +211,12 @@ export type BulkCommitResult = {
   rows: BulkPreviewRow[];
   summary: BulkImportSummary;
   message?: string | null;
+  /**
+   * Set when the commit hit its server time budget and returned before
+   * processing every row. Those rows come back as Skipped with
+   * `notProcessed: true`.
+   */
+  stoppedEarly?: { reason: string; notProcessedRows: number } | null;
 };
 
 export type BulkCommitRowInput = {

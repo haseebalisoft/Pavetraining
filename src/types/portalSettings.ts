@@ -1,3 +1,5 @@
+import type { NotificationCategory } from "@/types/notifications";
+
 export type ReminderFrequency = "Weekly" | "Monthly";
 
 export type CalendarSyncDirection = "SharePointToOutlook" | "TwoWay";
@@ -9,6 +11,11 @@ export interface PortalSettings {
   enableExpiryReminders: boolean;
   enableAdminAlerts: boolean;
   suppressNotificationsDuringBulkUpload: boolean;
+  /**
+   * Per-type on/off switches (Settings → Notification types). A type that is
+   * off is never sent; each skipped send is written to the notification log.
+   */
+  notificationTypes: Record<NotificationCategory, boolean>;
 
   // 2. Expiry reminder settings
   urgentWindowDays: number;

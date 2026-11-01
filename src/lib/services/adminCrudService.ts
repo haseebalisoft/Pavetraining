@@ -58,15 +58,30 @@ import {
   stripExampleMatrixId,
   syncWorkforceToTrainingMatrix,
   upsertTrainingMatrixExampleRow,
+  type TrainingMatrixExampleRow,
 } from "@/lib/services/bulkUpload/trainingMatrixExampleService";
 import {
+  candidateNameKey,
   deriveMatrixLinkStatus,
   findMatrixRowByWorkforce,
+  isoDateKey,
   type MatrixLinkStatus,
   type WorkforceMatrixProfile,
 } from "@/lib/services/bulkUpload/workforceMatrixSync";
 
 import { stripSharePointHtml } from "@/lib/text/stripSharePointHtml";
+import { explainMatrixLinkStatus } from "@/lib/services/bulkUpload/matrixReviewReason";
+import {
+  mergeMatrixCells,
+  planMatrixRelink,
+} from "@/lib/services/bulkUpload/matrixRelink";
+import type { MatrixRelinkResult } from "@/types/matrixSync";
+import { endAfterStartError } from "@/lib/utils/quarterHour";
+import {
+  eventVisibilityFields,
+  isEventCustomerVisible,
+} from "@/lib/training/eventVisibility";
+import type { MatrixReviewReason } from "@/types/bulkUpload";
 import type { Company, CustomerRoleType, RoleType } from "@/types/models";
 import type {
   AdminDocumentRecord,
@@ -1443,7 +1458,10 @@ export async function createAdminWorkforce(input: Record<string, unknown>) {
   let matrixSeedWarning: string | undefined;
   if (!skipMatrix) {
     try {
-      await syncWorkforceToTrainingMatrix(toMatrixProfile(mapped));
+      await syncWorkforceToTrainingMatrix(
+        toMatrixProfile(mapped),
+        await workforcePeerCounts(mapped),
+      );
     } catch (error) {
       console.error(
         "[workforce] matrix sync failed (candidate still created):",
@@ -1461,6 +1479,30 @@ export async function createAdminWorkforce(input: Record<string, unknown>) {
     // Bulk importers reuse this to avoid reloading Permissions after every row.
     permissionPeople: personLookups.people,
     departmentRecords: departmentLookups.departmentRecords,
+  };
+}
+
+/**
+ * Same-name / same-Name+DOB Workforce counts for the Matrix matching guards
+ * (findMatrixRowByWorkforce). Without them a single save assumed "nobody
+ * else has this name", which re-enabled the name-only step and switched off
+ * the "two people share Name + DOB" tie — the bulk importers always passed
+ * them; the manual create/update paths did not.
+ */
+async function workforcePeerCounts(
+  candidate: Pick<AdminWorkforceRecord, "id" | "candidateName" | "dateOfBirth">,
+): Promise<{ workforceNamePeers: number; workforceNameDobPeers: number }> {
+  const name = candidateNameKey(candidate.candidateName);
+  const dob = isoDateKey(candidate.dateOfBirth);
+  // The just-saved record may not be in a cached list yet: count others + self.
+  const others = (await listAdminWorkforce()).filter(
+    (row) => row.id !== candidate.id && candidateNameKey(row.candidateName) === name,
+  );
+  return {
+    workforceNamePeers: others.length + 1,
+    workforceNameDobPeers: dob
+      ? others.filter((row) => isoDateKey(row.dateOfBirth) === dob).length + 1
+      : 1,
   };
 }
 
@@ -1626,7 +1668,10 @@ export async function updateAdminWorkforce(
   // so a matrix hiccup never fails the workforce update.
   if (!isBulkUpdate) {
     try {
-      await syncWorkforceToTrainingMatrix(toMatrixProfile(mapped));
+      await syncWorkforceToTrainingMatrix(
+        toMatrixProfile(mapped),
+        await workforcePeerCounts(mapped),
+      );
     } catch (error) {
       console.error("[workforce] matrix sync on update failed:", error);
     }
@@ -1879,6 +1924,11 @@ export interface AdminMatrixRecord {
   workforceNumber?: string | null;
   /** Link health: Linked (default view), or Orphan / Needs Review (hidden by default). */
   matrixLinkStatus?: MatrixLinkStatus;
+  /**
+   * Why the row is Needs Review / Orphan (DOB mismatch, candidate not found,
+   * …). Admin-only (`includeUnlinked`): it quotes other candidates' DOBs.
+   */
+  matrixLinkReason?: MatrixReviewReason | null;
   /** Per-category training dates keyed by template header. */
   categoryTrainingDates?: Record<string, string | null>;
 }
@@ -2204,12 +2254,17 @@ export async function listAdminMatrix(
   const workforceById = new Map<string, AdminWorkforceRecord>();
   const workforceByName = new Map<string, AdminWorkforceRecord>();
   const workforceNameCounts = new Map<string, number>();
+  const workforceListByName = new Map<string, AdminWorkforceRecord[]>();
   for (const row of workforceForCompany) {
     workforceById.set(row.id, row);
     const key = row.candidateName.trim().toLowerCase();
     if (!key) continue;
     workforceNameCounts.set(key, (workforceNameCounts.get(key) ?? 0) + 1);
     if (!workforceByName.has(key)) workforceByName.set(key, row);
+    workforceListByName.set(key, [
+      ...(workforceListByName.get(key) ?? []),
+      row,
+    ]);
   }
 
   // Link each row to Workforce by WorkforceItemId first, then name, and tag it
@@ -2222,10 +2277,13 @@ export async function listAdminMatrix(
   // now kept.
   const linkedWorkforceIds = new Set<string>();
   const claimedWorkforceIds = new Set<string>();
+  /** Workforce id → the matrix row id-linked to it (for duplicate reasons). */
+  const claimedBy = new Map<string, string>();
   for (const example of exampleRows) {
     const linkedId = String(example.workforceItemId ?? "").trim();
     if (linkedId && workforceById.has(linkedId)) {
       claimedWorkforceIds.add(linkedId);
+      if (!claimedBy.has(linkedId)) claimedBy.set(linkedId, example.id);
     }
   }
 
@@ -2245,7 +2303,15 @@ export async function listAdminMatrix(
         !linkedById &&
         nameHit != null &&
         claimedWorkforceIds.has(nameHit.id);
-      const wf = linkedById ?? (leftoverDuplicate ? null : nameHit);
+      // Without a stored id, a same-name person is only "this person" when
+      // the DOB agrees too (Name + DOB) — never on the name alone.
+      const nameDobConfirmed =
+        nameHit != null &&
+        isoDateKey(example.dateOfBirth) !== "" &&
+        isoDateKey(example.dateOfBirth) === isoDateKey(nameHit.dateOfBirth);
+      const wf =
+        linkedById ??
+        (leftoverDuplicate || !nameDobConfirmed ? null : nameHit);
       if (wf) linkedWorkforceIds.add(wf.id);
 
       const matrixLinkStatus = leftoverDuplicate
@@ -2254,15 +2320,13 @@ export async function listAdminMatrix(
             hasWorkforceItemId,
             workforceResolved: Boolean(linkedById),
             nameMatchCount: workforceNameCounts.get(nameKey) ?? 0,
+            nameDobConfirmed,
           });
 
       const columnValues = { ...example.columnValues };
       // Prefer Workforce card expiries when matrix cell is blank.
       if (!columnValues["CSCS Expiry"]?.trim() && wf?.cscsExpiry) {
         columnValues["CSCS Expiry"] = wf.cscsExpiry;
-      }
-      if (!columnValues["EUSR Expiry"]?.trim() && wf?.eusrExpiry) {
-        columnValues["EUSR Expiry"] = wf.eusrExpiry;
       }
       if (!columnValues["NRSWA Expiry"]?.trim() && wf?.swqrExpiry) {
         columnValues["NRSWA Expiry"] = wf.swqrExpiry;
@@ -2274,6 +2338,29 @@ export async function listAdminMatrix(
         example.nextExpiryDate ?? earliestDateFromColumns(columnValues);
 
       const resolvedCompany = resolveMatrixCompany(example, wf);
+
+      // Reasons quote other candidates' DOBs — admin callers only.
+      const matrixLinkReason = options.includeUnlinked
+        ? explainMatrixLinkStatus({
+            status: matrixLinkStatus,
+            candidateName: example.candidateName,
+            dateOfBirth: example.dateOfBirth ?? null,
+            companyName: resolvedCompany.companyName,
+            staleWorkforceItemId:
+              hasWorkforceItemId && !linkedById
+                ? String(example.workforceItemId).trim()
+                : null,
+            sameName: workforceListByName.get(nameKey) ?? [],
+            duplicateOf:
+              leftoverDuplicate && nameHit
+                ? {
+                    person: nameHit,
+                    matrixRowId: claimedBy.get(nameHit.id) ?? null,
+                  }
+                : null,
+            scopedCompany: companyKey ? (companyName?.trim() ?? null) : null,
+          })
+        : null;
 
       const record: AdminMatrixRecord = {
         id: `example:${example.id}`,
@@ -2308,6 +2395,7 @@ export async function listAdminMatrix(
         workforceId: wf?.id ?? null,
         workforceNumber: wf?.workforceNumber ?? example.workforceNumber ?? null,
         matrixLinkStatus,
+        matrixLinkReason,
       };
       return record;
     })
@@ -2336,7 +2424,6 @@ export async function listAdminMatrix(
           Name: wf.candidateName,
           DOB: wf.dateOfBirth,
           "CSCS Expiry": wf.cscsExpiry,
-          "EUSR Expiry": wf.eusrExpiry,
           "NRSWA Expiry": wf.swqrExpiry,
         };
         const nextExpiryDate = earliestDateFromColumns(columnValues);
@@ -2483,6 +2570,269 @@ export async function createAdminMatrix(input: Record<string, unknown>) {
  * matrix row yet) throws — those get linked automatically via the standard
  * workforce → matrix sync.
  */
+/**
+ * Point an existing Matrix Update row at a Workforce record. Only the name,
+ * profile and link columns are written — every expiry / training date on the
+ * row is kept exactly as it is (the writer only touches keys it is given).
+ */
+async function writeMatrixLink(
+  exampleId: string,
+  candidate: AdminWorkforceRecord,
+): Promise<void> {
+  await upsertTrainingMatrixExampleRow({
+    candidateName: candidate.candidateName,
+    existingItemId: exampleId,
+    // Keep SharePoint's Name column in step with the linked candidate.
+    source: { Name: candidate.candidateName },
+    profileFields: {
+      Company: candidate.companyName,
+      "Workforce Number": candidate.workforceNumber,
+    },
+    linkFields: {
+      numbers: {
+        WorkforceItemId: Number(candidate.id),
+        ...(candidate.companyId
+          ? { CompanyItemId: Number(candidate.companyId) }
+          : {}),
+      },
+      text: {
+        WorkforceNumber: candidate.workforceNumber ?? "",
+        ...(candidate.companyNumber
+          ? { CompanyNumber: candidate.companyNumber }
+          : {}),
+        CandidateName: candidate.candidateName,
+        MatrixLinkStatus: "Linked",
+      },
+    },
+  });
+}
+
+/**
+ * Re-run Workforce matching for one Matrix row after an admin corrected a
+ * name or DOB, and apply the result safely (see matrixRelink.ts): link in
+ * place, merge into the candidate's existing linked row (later expiry wins,
+ * Manual cells untouched, duplicate removed), or report exactly why it is
+ * still unmatched. Never creates a row.
+ */
+export async function relinkAdminMatrixRow(
+  exampleId: string,
+  preloaded?: {
+    workforce: AdminWorkforceRecord[];
+    rows: TrainingMatrixExampleRow[];
+  },
+): Promise<MatrixRelinkResult> {
+  const [workforce, rows] = preloaded
+    ? [preloaded.workforce, preloaded.rows]
+    : await Promise.all([listAdminWorkforce(), listTrainingMatrixExampleRows()]);
+  const row = rows.find((candidate) => candidate.id === exampleId);
+  if (!row) throw new NotFoundError("Matrix record not found.");
+
+  const plan = planMatrixRelink(row, workforce, rows);
+  const base = {
+    candidateName: row.candidateName,
+    reason: null,
+    mergedHeaders: [] as string[],
+  };
+  const describe = (candidate: AdminWorkforceRecord) =>
+    `${candidate.candidateName}${candidate.workforceNumber ? ` (Workforce # ${candidate.workforceNumber})` : ""}`;
+
+  if (plan.action === "alreadyLinked") {
+    return {
+      ...base,
+      outcome: "alreadyLinked",
+      matrixRowId: `example:${row.id}`,
+      workforceId: plan.candidate.id,
+      message: `Still linked to ${describe(plan.candidate)} — correcting the name or DOB on the row never moves an existing link.`,
+    };
+  }
+
+  if (plan.action === "unmatched") {
+    return {
+      ...base,
+      outcome: "unmatched",
+      matrixRowId: `example:${row.id}`,
+      workforceId: null,
+      reason: plan.reason,
+      message: `Still Needs Review — ${plan.reason.label}: ${plan.reason.detail} Expiry dates on the row were kept.`,
+    };
+  }
+
+  const candidate = plan.candidate;
+  if (plan.action === "link") {
+    await writeMatrixLink(row.id, candidate);
+    revalidateTrainingSurfaces();
+    return {
+      ...base,
+      outcome: "linked",
+      matrixRowId: `example:${row.id}`,
+      workforceId: candidate.id,
+      candidateName: candidate.candidateName,
+      message: `Linked to ${describe(candidate)}. Expiry dates on the row were kept.`,
+    };
+  }
+
+  // The candidate already owns a linked row: fold this copy into it.
+  const merge = mergeMatrixCells(
+    plan.target,
+    row,
+    CLIENT_MATRIX_DISPLAY_HEADERS,
+  );
+  if (merge.mergedHeaders.length || merge.mergedTrainingDates.length) {
+    await upsertTrainingMatrixExampleRow({
+      candidateName: plan.target.candidateName,
+      existingItemId: plan.target.id,
+      source: merge.cells,
+      manualOverrides: merge.manualOverrides,
+      categoryTrainingDates: merge.categoryTrainingDates,
+    });
+  }
+  // Delete only once the dates are safely on the linked row.
+  await deleteListItemByKey("trainingMatrixExample", row.id);
+  revalidateTrainingSurfaces();
+  const copied = merge.mergedHeaders.length
+    ? `copied ${merge.mergedHeaders.join(", ")}`
+    : "it already had the same or later dates";
+  return {
+    ...base,
+    outcome: "merged",
+    matrixRowId: `example:${plan.target.id}`,
+    workforceId: candidate.id,
+    candidateName: candidate.candidateName,
+    mergedHeaders: merge.mergedHeaders,
+    message: `Matched ${describe(candidate)}, who already had Matrix row #${plan.target.id}. Merged into that row (${copied}; later expiry wins, Manual cells untouched) and removed duplicate row #${row.id}.`,
+  };
+}
+
+/**
+ * After a Workforce name / DOB correction: re-link every unlinked Matrix row
+ * that now matches this candidate (e.g. the Needs Review row from an upload
+ * whose DOB differed). Rows that match someone else are left alone.
+ */
+export async function relinkMatrixRowsForWorkforce(
+  workforceId: string,
+): Promise<MatrixRelinkResult[]> {
+  const results: MatrixRelinkResult[] = [];
+  const workforce = await listAdminWorkforce();
+  const liveIds = new Set(workforce.map((row) => row.id));
+  // Each row is handled at most once: a re-read served from cache (or a
+  // delete SharePoint has not surfaced yet) must never re-merge the same row.
+  const handled = new Set<string>();
+  // Re-read rows after each change: a merge deletes one row and edits another.
+  for (let pass = 0; pass < 20; pass += 1) {
+    const rows = await listTrainingMatrixExampleRows();
+    const next = rows.find((row) => {
+      if (handled.has(row.id)) return false;
+      if (liveIds.has(String(row.workforceItemId ?? "").trim())) return false;
+      const plan = planMatrixRelink(row, workforce, rows);
+      return (
+        (plan.action === "link" || plan.action === "merge") &&
+        plan.candidate.id === workforceId
+      );
+    });
+    if (!next) break;
+    handled.add(next.id);
+    results.push(await relinkAdminMatrixRow(next.id, { workforce, rows }));
+  }
+
+  // Same-name unlinked rows that STILL do not match after the correction
+  // (e.g. the Needs Review row's DOB still differs): report them with the
+  // exact reason so the admin is not left guessing. Plan only — no writes.
+  const candidate = workforce.find((row) => row.id === workforceId);
+  if (candidate) {
+    const rows = await listTrainingMatrixExampleRows();
+    const name = candidateNameKey(candidate.candidateName);
+    for (const row of rows) {
+      if (handled.has(row.id)) continue;
+      if (liveIds.has(String(row.workforceItemId ?? "").trim())) continue;
+      if (candidateNameKey(row.candidateName) !== name) continue;
+      if (planMatrixRelink(row, workforce, rows).action !== "unmatched") continue;
+      results.push(await relinkAdminMatrixRow(row.id, { workforce, rows }));
+    }
+  }
+  return results;
+}
+
+/** True when an edit body carries the identity fields matching runs on. */
+function editsCandidateIdentity(input: Record<string, unknown>): boolean {
+  return ["candidateName", "Name", "dateOfBirth", "DOB"].some(
+    (key) => input[key] !== undefined,
+  );
+}
+
+/** Same person-key matching uses: normalised name + ISO DOB. */
+function identityKey(name: string | null | undefined, dob: string | null | undefined) {
+  return `${candidateNameKey(name)}|${isoDateKey(dob)}`;
+}
+
+/**
+ * Workforce edit. When the save actually changes the candidate's name or
+ * DOB, unlinked Matrix rows that now match them are re-linked (or merged into
+ * their existing row) — best-effort, the Workforce save already succeeded.
+ */
+export async function updateAdminWorkforceAndRelink(
+  id: string,
+  input: Record<string, unknown>,
+): Promise<{
+  record: Awaited<ReturnType<typeof updateAdminWorkforce>>;
+  matrixRelink: MatrixRelinkResult[];
+}> {
+  // The edit form sends every field, so compare before/after rather than
+  // trusting "name was in the body".
+  const before = editsCandidateIdentity(input)
+    ? ((await listAdminWorkforce()).find((row) => row.id === id) ?? null)
+    : null;
+  const record = await updateAdminWorkforce(id, input);
+  if (
+    !before ||
+    identityKey(before.candidateName, before.dateOfBirth) ===
+      identityKey(record.candidateName, record.dateOfBirth)
+  ) {
+    return { record, matrixRelink: [] };
+  }
+  try {
+    return { record, matrixRelink: await relinkMatrixRowsForWorkforce(record.id) };
+  } catch (error) {
+    console.error("[workforce] matrix relink after correction failed:", error);
+    return { record, matrixRelink: [] };
+  }
+}
+
+/**
+ * Matrix row edit from Admin Matrix. A corrected name / DOB re-runs Workforce
+ * matching on the saved row; the returned record is the row that now holds
+ * the candidate's training (after a merge, the surviving linked row).
+ */
+export async function updateAdminMatrixAndRelink(
+  id: string,
+  input: Record<string, unknown>,
+): Promise<{ record: AdminMatrixRecord; relink: MatrixRelinkResult | null }> {
+  const exampleBefore =
+    editsCandidateIdentity(input) && id.startsWith("example:")
+      ? ((await listTrainingMatrixExampleRows()).find(
+          (row) => row.id === stripExampleMatrixId(id),
+        ) ?? null)
+      : null;
+  const record = await updateAdminMatrix(id, input);
+  const exampleId = stripExampleMatrixId(record.id);
+  if (!exampleBefore || !exampleId) return { record, relink: null };
+  const changed =
+    identityKey(exampleBefore.candidateName, exampleBefore.dateOfBirth) !==
+    identityKey(record.candidateName, record.columnValues?.DOB ?? record.dateOfBirth);
+  // Unchanged identity on a row that is not linked by id still re-checks:
+  // the Workforce side may have been corrected since. Linked rows only
+  // re-check when the admin actually changed the name / DOB.
+  if (!changed && String(exampleBefore.workforceItemId ?? "").trim()) {
+    return { record, relink: null };
+  }
+  const relink = await relinkAdminMatrixRow(exampleId);
+  if (relink.outcome !== "linked" && relink.outcome !== "merged") {
+    return { record, relink };
+  }
+  const rows = await listAdminMatrix(null, { includeUnlinked: true });
+  const current = rows.find((row) => row.id === relink.matrixRowId);
+  return { record: current ?? record, relink };
+}
+
 export async function linkAdminMatrixToWorkforce(
   matrixId: string,
   workforceId: string,
@@ -2525,34 +2875,7 @@ export async function linkAdminMatrixToWorkforce(
     );
   }
 
-  await upsertTrainingMatrixExampleRow({
-    candidateName: candidate.candidateName,
-    existingItemId: exampleId,
-    // Provide the display name change so SharePoint's Name column stays in
-    // step with the linked Workforce candidate — but keep every date cell as
-    // it is (writer only touches keys we pass in `source`).
-    source: { Name: candidate.candidateName },
-    profileFields: {
-      Company: candidate.companyName,
-      "Workforce Number": candidate.workforceNumber,
-    },
-    linkFields: {
-      numbers: {
-        WorkforceItemId: Number(candidate.id),
-        ...(candidate.companyId
-          ? { CompanyItemId: Number(candidate.companyId) }
-          : {}),
-      },
-      text: {
-        WorkforceNumber: candidate.workforceNumber ?? "",
-        ...(candidate.companyNumber
-          ? { CompanyNumber: candidate.companyNumber }
-          : {}),
-        CandidateName: candidate.candidateName,
-        MatrixLinkStatus: "Linked",
-      },
-    },
-  });
+  await writeMatrixLink(exampleId, candidate);
 
   const refreshed = await listAdminMatrix(null, { includeUnlinked: true });
   const updated = refreshed.find((row) => row.id === matrixId);
@@ -2691,7 +3014,6 @@ export async function updateAdminMatrix(
       ["ssstsExpiry", "SSSTS Expiry"],
       ["smstsExpiry", "SMSTS Expiry"],
       ["nrswaExpiry", "NRSWA Expiry"],
-      ["eusrExpiry", "EUSR Expiry"],
       ["faceFitExpiry", "Face ift"],
       ["n001Expiry", "N001 - Ind FLT"],
       ["n003Expiry", "N003 - Reach Lift Truck"],
@@ -2779,13 +3101,22 @@ export async function updateAdminMatrix(
       throw new ValidationError("Candidate name is required.");
     }
 
-    const { mergeManualOverrides } = await import(
+    const { changedMatrixHeaders, mergeManualOverrides } = await import(
       "@/lib/training/matrixManualOverrides"
     );
+    // The editor submits EVERY category on each save; only dates that
+    // actually changed become Manual (see changedMatrixHeaders).
     const manualOverrides = mergeManualOverrides(
       existing.manualOverrides ?? [],
-      changedHeaders.filter(
-        (h) => h !== "Name" && h !== "DOB" && CLIENT_MATRIX_DISPLAY_HEADERS.includes(h as never),
+      changedMatrixHeaders(
+        changedHeaders.filter(
+          (h) =>
+            h !== "Name" &&
+            h !== "DOB" &&
+            CLIENT_MATRIX_DISPLAY_HEADERS.includes(h as never),
+        ),
+        existing.columnValues,
+        source,
       ),
     );
 
@@ -4855,9 +5186,8 @@ function mapEvent(item: SharePointListItem): AdminEventRecord | null {
     title,
     company: companyFromLookup,
     companyId,
-    customerVisible:
-      asBoolean(item.fields[eventFields.customerVisible]) ||
-      asBoolean(item.fields.CustomerVisible),
+    // Both visibility columns must agree (see eventVisibility.ts).
+    customerVisible: isEventCustomerVisible(item.fields),
     trainingAddress: stripSharePointHtml(
       asNullableString(item.fields[eventFields.trainingAddress]),
     ),
@@ -5009,6 +5339,15 @@ function rethrowEventWriteError(error: unknown): never {
   throw error;
 }
 
+/** Server-side twin of the form check: an event must end after it starts. */
+function assertEventEndAfterStart(
+  start: string | null | undefined,
+  end: string | null | undefined,
+): void {
+  const error = endAfterStartError(start, end);
+  if (error) throw new ValidationError(error);
+}
+
 export async function createAdminEvent(input: Record<string, unknown>) {
   const title = requireText(input.title, "Event title");
   const { fields: companyFields, companyName, companyId } =
@@ -5018,6 +5357,11 @@ export async function createAdminEvent(input: Record<string, unknown>) {
       "Company is required. Select a company from the list.",
     );
   }
+
+  assertEventEndAfterStart(
+    asDateTimeInput(input.eventDate),
+    asDateTimeInput(input.endDate),
+  );
 
   const doNotSync = optionalBool(input.doNotSync) ?? false;
   const bookingStatus =
@@ -5039,6 +5383,8 @@ export async function createAdminEvent(input: Record<string, unknown>) {
       syncDirection: "SharePointToOutlook",
       lastSyncSource: "SharePoint",
     }),
+    // Write BOTH visibility columns so they can never disagree.
+    ...eventVisibilityFields(optionalBool(input.customerVisible) ?? true),
     ...companyFields,
   });
 
@@ -5114,6 +5460,25 @@ export async function updateAdminEvent(
   if (!existing) throw new NotFoundError("Event not found.");
   const previousMapped = mapEvent(existing);
   const previousStatus = previousMapped?.bookingStatus ?? null;
+  // Validate only when a time actually changes, so editing other details of
+  // an event never forces its stored times to be fixed. An edit may change
+  // only one side: compare against the stored other side.
+  const nextStart =
+    input.eventDate === undefined
+      ? previousMapped?.eventDate
+      : asDateTimeInput(input.eventDate);
+  const nextEnd =
+    input.endDate === undefined
+      ? previousMapped?.endDate
+      : asDateTimeInput(input.endDate);
+  const instant = (value: string | null | undefined) =>
+    value ? new Date(value).getTime() : null;
+  if (
+    instant(nextStart) !== instant(previousMapped?.eventDate) ||
+    instant(nextEnd) !== instant(previousMapped?.endDate)
+  ) {
+    assertEventEndAfterStart(nextStart, nextEnd);
+  }
 
   const doNotSync =
     input.doNotSync === undefined ? undefined : optionalBool(input.doNotSync);
@@ -5154,6 +5519,11 @@ export async function updateAdminEvent(
       doNotSync: toDoNotSyncText(doNotSync),
     }),
   );
+  // Write BOTH visibility columns so they can never disagree.
+  const visibleInput = optionalBool(input.customerVisible);
+  if (visibleInput !== undefined && visibleInput !== null) {
+    Object.assign(payload, eventVisibilityFields(visibleInput));
+  }
 
   const companyTouched =
     input.companyId !== undefined ||

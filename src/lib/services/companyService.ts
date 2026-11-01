@@ -68,6 +68,8 @@ export function mapCompanyFields(
       fields[companyFields.notesPricesAgreed],
     ),
     companyLogo: companyLogoMediaUrl(id, fields[companyFields.companyLogo]),
+    companyLogoFileName:
+      parseThumbnailField(fields[companyFields.companyLogo])?.fileName ?? null,
     status: asNullableString(fields[companyFields.status]) ?? "Unknown",
   };
 }

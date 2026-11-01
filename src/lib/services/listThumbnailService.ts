@@ -201,6 +201,25 @@ function sharedDocumentsRelativePath(serverRelativeUrl: string): string | null {
   return null;
 }
 
+const IMAGE_TYPES: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  bmp: "image/bmp",
+  svg: "image/svg+xml",
+};
+
+/**
+ * Content type from the stored file name. Was hard-coded image/jpeg, so an
+ * SVG logo (which browsers will not sniff) never rendered.
+ */
+function imageContentType(fileName: string | undefined): string {
+  const ext = fileName?.split(".").pop()?.toLowerCase() ?? "";
+  return IMAGE_TYPES[ext] ?? "image/jpeg";
+}
+
 /** Stream image bytes for a thumbnail field via Graph (app-only). */
 export async function fetchThumbnailContent(
   value: unknown,
@@ -217,7 +236,7 @@ export async function fetchThumbnailContent(
         .api(`/drives/${driveId}/items/${meta.id}/content`)
         .responseType(ResponseType.ARRAYBUFFER)
         .get()) as ArrayBuffer;
-      return { bytes, contentType: "image/jpeg" };
+      return { bytes, contentType: imageContentType(meta.fileName) };
     }
 
     if (meta.serverRelativeUrl) {
@@ -233,7 +252,7 @@ export async function fetchThumbnailContent(
           .api(`/drives/${driveId}/root:/${encoded}:/content`)
           .responseType(ResponseType.ARRAYBUFFER)
           .get()) as ArrayBuffer;
-        return { bytes, contentType: "image/jpeg" };
+        return { bytes, contentType: imageContentType(meta.fileName) };
       }
     }
   } catch {

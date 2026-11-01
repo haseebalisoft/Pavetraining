@@ -18,7 +18,7 @@ import {
   getListItemsByKey,
   type SharePointFields,
 } from "@/lib/services/sharePointListService";
-import { getWorkforceIdByCandidateName } from "@/lib/services/workforceService";
+import { getWorkforceByCompanyName } from "@/lib/services/workforceService";
 import { toCustomerOutcome } from "@/lib/training/customerOutcome";
 import { stripSharePointHtml } from "@/lib/text/stripSharePointHtml";
 import type {
@@ -77,41 +77,83 @@ function isCustomerVisibleField(
 }
 
 /**
- * A row's own real Candidate lookup id (`rowLookupId`) is authoritative and
- * always preferred — the name→id map is a same-name-unsafe fallback only for
- * legacy rows where the Lookup value itself is missing.
+ * THIS company's Workforce, indexed both ways. Register rows reference the
+ * candidate by Lookup, and Graph often returns only `CandidateNameLookupId`
+ * (no name text) — the mappers used to drop every such row, so customers saw
+ * "No records found" for NPORS / EUSR / Streetworks / In-House records the
+ * Admin register showed fine. Names are resolved only against this company's
+ * candidates, so a lookup to anyone else never surfaces here.
  */
-function resolveWorkforceId(
-  candidateName: string,
-  workforceIds: Map<string, string>,
-  rowLookupId?: string | null,
-): string | null {
-  if (rowLookupId) return rowLookupId;
-  return workforceIds.get(candidateName.trim().toLowerCase()) ?? null;
+interface CompanyWorkforceIndex {
+  idByName: Map<string, string>;
+  nameById: Map<string, string>;
+}
+
+async function loadCompanyWorkforceIndex(
+  companyName: string,
+): Promise<CompanyWorkforceIndex> {
+  const workforce = await getWorkforceByCompanyName(companyName);
+  const idByName = new Map<string, string>();
+  const nameById = new Map<string, string>();
+  for (const candidate of workforce) {
+    const id = String(candidate.id).trim();
+    const name = candidate.candidateName.trim();
+    if (!id || !name) continue;
+    nameById.set(id, name);
+    const key = name.toLowerCase();
+    if (!idByName.has(key)) idByName.set(key, id);
+  }
+  return { idByName, nameById };
+}
+
+/**
+ * Candidate name + Workforce id for a register row. The row's own Lookup id is
+ * authoritative; the name -> id map is a same-name-unsafe fallback only for
+ * legacy rows with no Lookup id. Null when the candidate is not one of this
+ * company's Workforce (never shown).
+ */
+function resolveCandidate(
+  fields: SharePointFields,
+  internalName: string,
+  index: CompanyWorkforceIndex,
+): { candidateName: string; workforceId: string | null } | null {
+  const lookupId = extractLookupId(fields, internalName);
+  const text = asString(fields[internalName])?.trim() || null;
+  if (lookupId) {
+    const name = index.nameById.get(lookupId);
+    if (!name) return null;
+    return { candidateName: text ?? name, workforceId: lookupId };
+  }
+  if (!text) return null;
+  return {
+    candidateName: text,
+    workforceId: index.idByName.get(text.toLowerCase()) ?? null,
+  };
 }
 
 function mapNpors(
   id: string,
   fields: SharePointFields,
-  workforceIds: Map<string, string>,
+  index: CompanyWorkforceIndex,
 ): CustomerNporsRecord | null {
   if (!isCustomerVisibleField(fields, nporsFields.customerVisible)) {
     return null;
   }
 
-  const candidateName = asString(fields[nporsFields.candidateName]);
-  if (!candidateName) {
+  const candidate = resolveCandidate(
+    fields,
+    nporsFields.candidateName,
+    index,
+  );
+  if (!candidate) {
     return null;
   }
+  const { candidateName, workforceId } = candidate;
 
   return {
     id,
     candidateName,
-    workforceId: resolveWorkforceId(
-      candidateName,
-      workforceIds,
-      extractLookupId(fields, nporsFields.candidateName),
-    ),
+    workforceId,
     nporsNumber: asNullableString(fields[nporsFields.nporsNumber]),
     trainingDate: asNullableString(fields[nporsFields.trainingDate]),
     trainingAddress: stripSharePointHtml(
@@ -129,25 +171,26 @@ function mapNpors(
 function mapEusr(
   id: string,
   fields: SharePointFields,
-  workforceIds: Map<string, string>,
+  index: CompanyWorkforceIndex,
 ): CustomerEusrRecord | null {
   if (!isCustomerVisibleField(fields, eusrFields.customerVisible)) {
     return null;
   }
 
-  const candidateName = asString(fields[eusrFields.candidateName]);
-  if (!candidateName) {
+  const candidate = resolveCandidate(
+    fields,
+    eusrFields.candidateName,
+    index,
+  );
+  if (!candidate) {
     return null;
   }
+  const { candidateName, workforceId } = candidate;
 
   return {
     id,
     candidateName,
-    workforceId: resolveWorkforceId(
-      candidateName,
-      workforceIds,
-      extractLookupId(fields, eusrFields.candidateName),
-    ),
+    workforceId,
     eusrNumber: asNullableString(fields[eusrFields.eusrNumber]),
     eusrCategory: asMultiChoiceText(fields[eusrFields.eusrCategory]),
     cardType: asNullableString(fields[eusrFields.cardType]),
@@ -165,16 +208,21 @@ function mapEusr(
 function mapStreetworks(
   id: string,
   fields: SharePointFields,
-  workforceIds: Map<string, string>,
+  index: CompanyWorkforceIndex,
 ): CustomerStreetworksRecord | null {
   if (!isCustomerVisibleField(fields, streetworksFields.customerVisible)) {
     return null;
   }
 
-  const candidateName = asString(fields[streetworksFields.candidateName]);
-  if (!candidateName) {
+  const candidate = resolveCandidate(
+    fields,
+    streetworksFields.candidateName,
+    index,
+  );
+  if (!candidate) {
     return null;
   }
+  const { candidateName, workforceId } = candidate;
 
   const rawNotes = asNullableString(fields[streetworksFields.outcomeNotes]);
   const endMatch = rawNotes?.match(/\[TrainingEnd:(\d{4}-\d{2}-\d{2})\]/i);
@@ -182,11 +230,7 @@ function mapStreetworks(
   return {
     id,
     candidateName,
-    workforceId: resolveWorkforceId(
-      candidateName,
-      workforceIds,
-      extractLookupId(fields, streetworksFields.candidateName),
-    ),
+    workforceId,
     swqrNumber: asNullableString(fields[streetworksFields.swqrNumber]),
     trainingDate: asNullableString(fields[streetworksFields.trainingDate]),
     trainingDateEnd: endMatch?.[1] ?? null,
@@ -207,16 +251,21 @@ function mapStreetworks(
 function mapInHouse(
   id: string,
   fields: SharePointFields,
-  workforceIds: Map<string, string>,
+  index: CompanyWorkforceIndex,
 ): CustomerInHouseRecord | null {
   if (!isCustomerVisibleField(fields, inHouseFields.customerVisible)) {
     return null;
   }
 
-  const candidateName = asString(fields[inHouseFields.candidateName]);
-  if (!candidateName) {
+  const candidate = resolveCandidate(
+    fields,
+    inHouseFields.candidateName,
+    index,
+  );
+  if (!candidate) {
     return null;
   }
+  const { candidateName, workforceId } = candidate;
 
   // Prefer Certificate Category (live SharePoint choice); fall back to legacy CourseCategory.
   const course =
@@ -226,11 +275,7 @@ function mapInHouse(
   return {
     id,
     candidateName,
-    workforceId: resolveWorkforceId(
-      candidateName,
-      workforceIds,
-      extractLookupId(fields, inHouseFields.candidateName),
-    ),
+    workforceId,
     course,
     certificationNumber:
       asNullableString(fields[inHouseFields.certificationNumber]) ??
@@ -257,16 +302,16 @@ export async function getCustomerNporsRecords(
   context?: CustomerContext,
 ): Promise<CustomerNporsRecord[]> {
   const companyName = await resolveCompanyName(companyId);
-  const [items, workforceIds] = await Promise.all([
+  const [items, workforceIndex] = await Promise.all([
     getListItemsByKey("nporsRegister", {
       filter: companyOnlyFilter("nporsRegister", companyId, companyName),
       top: 5000,
     }),
-    getWorkforceIdByCandidateName(companyName),
+    loadCompanyWorkforceIndex(companyName),
   ]);
 
   let rows = items
-    .map((item) => mapNpors(item.id, item.fields, workforceIds))
+    .map((item) => mapNpors(item.id, item.fields, workforceIndex))
     .filter((row): row is CustomerNporsRecord => row !== null);
 
   if (context && !isCompanyWideScope(context.normalizedAccessScope)) {
@@ -284,16 +329,16 @@ export async function getCustomerEusrRecords(
   context?: CustomerContext,
 ): Promise<CustomerEusrRecord[]> {
   const companyName = await resolveCompanyName(companyId);
-  const [items, workforceIds] = await Promise.all([
+  const [items, workforceIndex] = await Promise.all([
     getListItemsByKey("eusrRegister", {
       filter: companyOnlyFilter("eusrRegister", companyId, companyName),
       top: 5000,
     }),
-    getWorkforceIdByCandidateName(companyName),
+    loadCompanyWorkforceIndex(companyName),
   ]);
 
   let rows = items
-    .map((item) => mapEusr(item.id, item.fields, workforceIds))
+    .map((item) => mapEusr(item.id, item.fields, workforceIndex))
     .filter((row): row is CustomerEusrRecord => row !== null);
 
   if (context && !isCompanyWideScope(context.normalizedAccessScope)) {
@@ -315,16 +360,16 @@ export async function getCustomerStreetworksRecords(
   context?: CustomerContext,
 ): Promise<CustomerStreetworksRecord[]> {
   const companyName = await resolveCompanyName(companyId);
-  const [items, workforceIds] = await Promise.all([
+  const [items, workforceIndex] = await Promise.all([
     getListItemsByKey("nrswaRegister", {
       filter: companyOnlyFilter("nrswaRegister", companyId, companyName),
       top: 5000,
     }),
-    getWorkforceIdByCandidateName(companyName),
+    loadCompanyWorkforceIndex(companyName),
   ]);
 
   let rows = items
-    .map((item) => mapStreetworks(item.id, item.fields, workforceIds))
+    .map((item) => mapStreetworks(item.id, item.fields, workforceIndex))
     .filter((row): row is CustomerStreetworksRecord => row !== null);
 
   if (context && !isCompanyWideScope(context.normalizedAccessScope)) {
@@ -342,7 +387,7 @@ export async function getCustomerInHouseRecords(
   context?: CustomerContext,
 ): Promise<CustomerInHouseRecord[]> {
   const companyName = await resolveCompanyName(companyId);
-  const [items, workforceIds] = await Promise.all([
+  const [items, workforceIndex] = await Promise.all([
     getListItemsByKey("inHouseCertificates", {
       filter: companyOnlyFilter(
         "inHouseCertificates",
@@ -351,11 +396,11 @@ export async function getCustomerInHouseRecords(
       ),
       top: 5000,
     }),
-    getWorkforceIdByCandidateName(companyName),
+    loadCompanyWorkforceIndex(companyName),
   ]);
 
   let rows = items
-    .map((item) => mapInHouse(item.id, item.fields, workforceIds))
+    .map((item) => mapInHouse(item.id, item.fields, workforceIndex))
     .filter((row): row is CustomerInHouseRecord => row !== null);
 
   if (context && !isCompanyWideScope(context.normalizedAccessScope)) {

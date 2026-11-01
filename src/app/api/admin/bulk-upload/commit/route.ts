@@ -1,4 +1,5 @@
 import { withSharePointAdminApi, ValidationError } from "@/lib/api/adminApi";
+import { createJobDeadline } from "@/lib/jobs/jobOutcome";
 import { logBulkUpload } from "@/lib/services/auditLogService";
 import { commitBulkUpload } from "@/lib/services/bulkUpload/bulkUploadService";
 import { normalizeSourceRow } from "@/lib/services/bulkUpload/parseSpreadsheet";
@@ -9,6 +10,9 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 export async function POST(request: Request) {
+  // Same budget as /commit-progress: stop 40s before maxDuration so the
+  // response is always sent instead of the platform killing the request.
+  const deadline = createJobDeadline((300 - 40) * 1000);
   return withSharePointAdminApi(
     "POST /api/admin/bulk-upload/commit",
     async (context, req) => {
@@ -80,6 +84,8 @@ export async function POST(request: Request) {
           autoCreateMissingCompanies,
           autoCreateMissingDepartments,
           rows,
+          deadline,
+          actorEmail: context.loggedInEmail,
         });
 
         await logBulkUpload({

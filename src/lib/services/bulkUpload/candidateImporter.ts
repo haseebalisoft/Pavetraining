@@ -43,6 +43,11 @@ import type {
   BulkPreviewRow,
 } from "@/types/bulkUpload";
 import type { Company } from "@/types/models";
+import { getSharePointFields } from "@/lib/schema/sharepointSchema";
+import {
+  planImportImage,
+  storeImportImageFromUrl,
+} from "@/lib/services/bulkUpload/importImage";
 
 const NAME_ALIASES = [
   "Candidate Name",
@@ -112,6 +117,10 @@ export function summarizeBulkRows(rows: BulkPreviewRow[]): BulkImportSummary {
   const summary = emptySummary();
   summary.totalRows = rows.length;
   for (const row of rows) {
+    if (row.notProcessed) {
+      summary.notProcessedRows = (summary.notProcessedRows ?? 0) + 1;
+      continue;
+    }
     switch (row.status) {
       case "Ready":
         summary.readyRows += 1;
@@ -189,7 +198,25 @@ function mapCandidateFields(
       "InHouseCertificationNumber",
     ]),
     notes: pickField(raw, ["Notes"]),
+    // Optional. Never written as text — stored as an image after import.
+    candidatePhoto: pickField(raw, ["Candidate Photo", "CandidatePhoto", "Photo"]),
   };
+}
+
+/**
+ * Preview note for the optional Candidate Photo cell. Never changes the row's
+ * status: a missing or bad photo must not stop the candidate importing.
+ */
+function candidatePhotoPreviewNote(cell: string | null | undefined): string | null {
+  const plan = planImportImage(cell);
+  if (plan.kind === "missing") return null;
+  if (plan.kind === "file") {
+    return `Candidate Photo "${plan.fileName}" — attach this file under Candidate photo files before importing.`;
+  }
+  if (plan.kind === "url") {
+    return "Candidate Photo will be downloaded from the image URL.";
+  }
+  return `Candidate Photo ${plan.reason} — the candidate imports without a photo.`;
 }
 
 function workforceWritePayload(
@@ -547,6 +574,8 @@ class ValidationErrorLike extends Error {}
 
 /** Bound parallel Graph POSTs for workforce, permissions, and folders. */
 const BULK_CREATE_CONCURRENCY = 12;
+/** Photo URL downloads are larger and slower than list writes. */
+const PHOTO_DOWNLOAD_CONCURRENCY = 4;
 
 async function mapPool<T, R>(
   items: T[],
@@ -610,8 +639,12 @@ export async function previewCandidateImport(
       allocatedWorkforceNumbers,
       { autoCreateMissing, autoCreateMissingDepartments },
     );
+    const photoNote = candidatePhotoPreviewNote(fields.candidatePhoto);
     return {
       ...validated,
+      messages: photoNote
+        ? [...validated.messages, photoNote]
+        : validated.messages,
       source: raw,
     };
   });
@@ -1385,6 +1418,74 @@ export async function commitCandidateImport(input: {
         },
       );
       phase3d.end({ processed: foldersDone, targets: importedTargets.length });
+    }
+
+    // Phase 3e: optional candidate photos, stored exactly like the Admin
+    // "Upload photo" button (PortalMedia/workforce-<id> + Photo column) on
+    // the candidate this row created or updated. Every row records its saved
+    // id + Workforce Number so the browser can upload attached photo files to
+    // the right profile. A missing, bad or failed photo is a message on the
+    // row — it never fails the candidate.
+    if (importedTargets.length) {
+      const phase3e = log.phase("phase3e:photos");
+      const photoField = getSharePointFields("workforce").photo;
+      let photosStored = 0;
+      await mapPool(importedTargets, PHOTO_DOWNLOAD_CONCURRENCY, async ({ index, wf }) => {
+        const current = results[index];
+        if (!current) return;
+        const base: BulkPreviewRow = {
+          ...current,
+          savedEntityId: wf.id,
+          fields: {
+            ...current.fields,
+            workforceNumber: wf.workforceNumber ?? current.fields.workforceNumber ?? null,
+          },
+        };
+        const plan = planImportImage(current.fields.candidatePhoto);
+        if (plan.kind === "missing") {
+          results[index] = base;
+          return;
+        }
+        if (plan.kind === "invalid") {
+          results[index] = {
+            ...base,
+            messages: [
+              ...base.messages,
+              `Candidate Photo ${plan.reason} — candidate imported without a photo.`,
+            ],
+          };
+          return;
+        }
+        if (plan.kind === "file") {
+          results[index] = {
+            ...base,
+            pendingPhotoFile: plan.fileName,
+            messages: [
+              ...base.messages,
+              `Candidate Photo "${plan.fileName}" — waiting for the attached photo file.`,
+            ],
+          };
+          return;
+        }
+        const failure = await storeImportImageFromUrl({
+          listKey: "workforce",
+          itemId: wf.id,
+          fieldInternalName: photoField,
+          url: plan.url,
+          fileName: plan.fileName,
+        });
+        if (!failure) photosStored += 1;
+        results[index] = {
+          ...base,
+          messages: [
+            ...base.messages,
+            failure
+              ? `Candidate Photo download FAILED (${failure}) — candidate imported without a photo.`
+              : "Candidate Photo uploaded from the image URL.",
+          ],
+        };
+      });
+      phase3e.end({ stored: photosStored, targets: importedTargets.length });
     }
   });
 

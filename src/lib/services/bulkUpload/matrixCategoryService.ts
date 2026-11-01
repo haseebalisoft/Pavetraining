@@ -29,7 +29,34 @@ export type MatrixCategoryLookupCaches = {
   categoryByCode: Map<string, string>;
   /** Existing category-record keys → item id (mutated as rows are written). */
   existingByKey?: Map<string, string>;
+  /** Same keys → stored expiry (ISO date), so unchanged records are not re-written. */
+  existingExpiryByKey?: Map<string, string>;
 };
+
+/**
+ * Category-record writes in flight per matrix row. Each spreadsheet row
+ * carries up to ~150 N-code dates; one-at-a-time writes made a 50-row upload
+ * take ~90 minutes. Kept modest so SharePoint throttling (429, retried by the
+ * Graph SDK) stays rare.
+ */
+const CATEGORY_WRITE_CONCURRENCY = 6;
+
+/** Run `work` over `items` with at most `limit` in flight. */
+async function forEachLimited<T>(
+  items: T[],
+  limit: number,
+  work: (item: T) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const item = items[next];
+      next += 1;
+      await work(item!);
+    }
+  });
+  await Promise.all(runners);
+}
 
 function nameKey(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
@@ -70,8 +97,10 @@ async function loadLookupCaches(): Promise<MatrixCategoryLookupCaches> {
         top: 5000,
         skipCache: true,
       }).catch(() => []),
+      // A full matrix upload creates ~150 records per candidate; a 5000 cap
+      // hid existing records past it, so re-uploads created duplicates.
       getListItemsByKey("trainingMatrixCategoryRecords", {
-        top: 5000,
+        top: 100_000,
         skipCache: true,
       }).catch(() => []),
     ]);
@@ -106,16 +135,28 @@ async function loadLookupCaches(): Promise<MatrixCategoryLookupCaches> {
   }
 
   const existingByKey = new Map<string, string>();
+  const existingExpiryByKey = new Map<string, string>();
   for (const item of existingRecords) {
     const cand = extractLookupId(item.fields, fields.candidateName);
     const comp = extractLookupId(item.fields, fields.companyName);
     const cat = extractLookupId(item.fields, fields.categoryCode);
     if (cand && comp && cat) {
-      existingByKey.set(`${cand}|${comp}|${cat}`, item.id);
+      const key = `${cand}|${comp}|${cat}`;
+      existingByKey.set(key, item.id);
+      const expiry = normalizeDateValue(
+        asNullableString(item.fields[fields.expiryDate]),
+      );
+      if (expiry) existingExpiryByKey.set(key, expiry);
     }
   }
 
-  return { workforceByName, companyByName, categoryByCode, existingByKey };
+  return {
+    workforceByName,
+    companyByName,
+    categoryByCode,
+    existingByKey,
+    existingExpiryByKey,
+  };
 }
 
 async function ensureCategoryCode(
@@ -145,19 +186,37 @@ async function ensureCategoryCode(
 export async function upsertMatrixCategoryRecords(input: {
   candidateName: string;
   companyName: string;
+  /**
+   * Workforce / Company item ids the caller already matched (Name + DOB).
+   * Always pass them when known: the name lookup below picks the FIRST
+   * same-named person, so two people called e.g. "Aiden Mercer" at one
+   * company had their dates written onto the same records.
+   */
+  candidateId?: string | null;
+  companyId?: string | null;
   categories: MatrixCategoryWrite[];
   caches?: MatrixCategoryLookupCaches;
-}): Promise<{ written: number; failed: number; errors: string[] }> {
+}): Promise<{
+  written: number;
+  unchanged: number;
+  failed: number;
+  errors: string[];
+}> {
   const caches = input.caches ?? (await loadLookupCaches());
   const byKey =
     caches.existingByKey ??
     ((caches.existingByKey = new Map<string, string>()), caches.existingByKey);
 
-  const candidateId = caches.workforceByName.get(nameKey(input.candidateName));
-  const companyId = caches.companyByName.get(nameKey(input.companyName));
+  const candidateId =
+    input.candidateId?.trim() ||
+    caches.workforceByName.get(nameKey(input.candidateName));
+  const companyId =
+    input.companyId?.trim() ||
+    caches.companyByName.get(nameKey(input.companyName));
   if (!candidateId) {
     return {
       written: 0,
+      unchanged: 0,
       failed: input.categories.length,
       errors: [
         `Candidate "${input.candidateName}" was not found in Workforce for category writes.`,
@@ -167,6 +226,7 @@ export async function upsertMatrixCategoryRecords(input: {
   if (!companyId) {
     return {
       written: 0,
+      unchanged: 0,
       failed: input.categories.length,
       errors: [
         `Company "${input.companyName}" was not found for category writes.`,
@@ -174,13 +234,21 @@ export async function upsertMatrixCategoryRecords(input: {
     };
   }
 
+  const expiryByKey =
+    caches.existingExpiryByKey ??
+    ((caches.existingExpiryByKey = new Map<string, string>()),
+    caches.existingExpiryByKey);
   const keyOf = (candId: string, compId: string, catId: string) =>
     `${candId}|${compId}|${catId}`;
 
   let written = 0;
   let failed = 0;
+  let unchanged = 0;
   const errors: string[] = [];
 
+  // Resolve category codes first, serially: a missing code is CREATED in the
+  // NPORS Categories list, and two parallel writers must not create it twice.
+  const work: Array<{ key: string; payload: SharePointFields; expiry: string }> = [];
   for (const category of input.categories) {
     const expiry = normalizeDateValue(category.expiryDate);
     if (!expiry) continue;
@@ -202,45 +270,63 @@ export async function upsertMatrixCategoryRecords(input: {
       continue;
     }
 
-    const title = `${input.candidateName} · ${category.code}`.slice(0, 240);
-    const payload: SharePointFields = {
-      [fields.title]: title,
-      [`${fields.candidateName}LookupId`]: Number(candidateId),
-      [`${fields.companyName}LookupId`]: Number(companyId),
-      [`${fields.categoryCode}LookupId`]: Number(categoryId),
-      [fields.categoryName]: category.name,
-      [fields.expiryDate]: expiry,
-      [fields.status]: "Active",
-      [fields.customerVisible]: true,
-    };
+    const key = keyOf(candidateId, companyId, categoryId);
+    // Same date already stored: nothing to write. Re-uploading a sheet (or
+    // resuming one that hit the time limit) now costs reads, not writes.
+    if (byKey.has(key) && expiryByKey.get(key) === expiry) {
+      unchanged += 1;
+      continue;
+    }
 
-    const existingId = byKey.get(keyOf(candidateId, companyId, categoryId));
+    const title = `${input.candidateName} · ${category.code}`.slice(0, 240);
+    work.push({
+      key,
+      expiry,
+      payload: {
+        [fields.title]: title,
+        [`${fields.candidateName}LookupId`]: Number(candidateId),
+        [`${fields.companyName}LookupId`]: Number(companyId),
+        [`${fields.categoryCode}LookupId`]: Number(categoryId),
+        [fields.categoryName]: category.name,
+        [fields.expiryDate]: expiry,
+        [fields.status]: "Active",
+        [fields.customerVisible]: true,
+      },
+    });
+  }
+
+  await forEachLimited(work, CATEGORY_WRITE_CONCURRENCY, async (item) => {
+    const existingId = byKey.get(item.key);
     try {
       if (existingId) {
+        // skipReload: the caller never reads the item back, and the reload
+        // GET doubled the Graph calls per category.
         await updateListItemFieldsByKey(
           "trainingMatrixCategoryRecords",
           existingId,
-          payload,
+          item.payload,
+          { skipReload: true },
         );
       } else {
         const created = await createListItemByKey(
           "trainingMatrixCategoryRecords",
-          payload,
+          item.payload,
         );
-        byKey.set(keyOf(candidateId, companyId, categoryId), created.id);
+        byKey.set(item.key, created.id);
       }
+      expiryByKey.set(item.key, item.expiry);
       written += 1;
     } catch (error) {
       failed += 1;
       errors.push(
-        `${category.code}: ${
+        `${String(item.payload[fields.title] ?? item.key)}: ${
           error instanceof Error ? error.message : "write failed"
         }`,
       );
     }
-  }
+  });
 
-  return { written, failed, errors };
+  return { written, unchanged, failed, errors };
 }
 
 /** Warm lookup caches once for a bulk matrix import. */

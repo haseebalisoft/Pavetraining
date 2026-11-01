@@ -1,6 +1,6 @@
 import "server-only";
 
-import { getGraphClient } from "@/lib/graph/graphClient";
+import { getGraphClient, isGraphTimeoutError } from "@/lib/graph/graphClient";
 import { getNotificationSettings, getPortalSettingsCached } from "@/lib/services/notificationConfig";
 import { writeNotificationLog } from "@/lib/services/notificationLogService";
 import {
@@ -13,6 +13,10 @@ import {
   testEmailTemplate,
 } from "@/lib/services/notificationTemplateService";
 import { resolveAdminAlertRecipients } from "@/lib/services/notificationRecipientService";
+import {
+  NOTIFICATION_CATEGORIES,
+  type NotificationCategory,
+} from "@/types/notifications";
 import type {
   NotificationDeliveryStatus,
   NotificationSendResult,
@@ -43,6 +47,18 @@ export interface SendNotificationInput {
   }>;
   /** Optional From display name (mailbox address still uses NOTIFICATION_FROM_EMAIL). */
   fromName?: string | null;
+  /**
+   * Settings → Notification types switch this send obeys. Defaults from
+   * `type` where that is unambiguous (booking, portal invite).
+   */
+  category?: NotificationCategory | null;
+}
+
+function categoryFor(input: SendNotificationInput): NotificationCategory | null {
+  if (input.category) return input.category;
+  if (input.type === "booking_confirmed") return "booking_confirmed";
+  if (input.type === "portal_invite") return "portal_invite";
+  return null;
 }
 
 async function sendViaGraph(input: {
@@ -111,9 +127,41 @@ async function sendViaGraph(input: {
     });
     return { ok: true };
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Graph sendMail failed.";
+    // A timed-out sendMail may still have been accepted by Exchange: report
+    // it as failed (never "sent"), but say delivery is unknown.
+    const message = isGraphTimeoutError(error)
+      ? `Microsoft 365 did not confirm the send in time — the email may or may not have been delivered. ${error instanceof Error ? error.message : ""}`.trim()
+      : error instanceof Error
+        ? error.message
+        : "Graph sendMail failed.";
     return { ok: false, error: message };
+  }
+}
+
+/**
+ * Audit-log a delivery outcome. Never throws: the send already happened (or
+ * failed), and a logging hiccup must not turn a delivered email into an error
+ * — or a failure into a silent one (the notification log has the entry).
+ */
+async function auditDelivery(
+  input: SendNotificationInput,
+  to: string,
+  error: string | null,
+): Promise<void> {
+  try {
+    const { logNotification } = await import("@/lib/services/auditLogService");
+    await logNotification({
+      userEmail: input.actorEmail,
+      recipientEmail: to,
+      success: error == null,
+      company: input.companyName,
+      entityId: input.itemId,
+      entityName: input.subject,
+      ...(error ? { errorMessage: error } : {}),
+      metadata: { type: input.type },
+    });
+  } catch (auditError) {
+    console.error("[notification] audit write failed", auditError);
   }
 }
 
@@ -138,6 +186,33 @@ export async function sendNotification(
     input.type === "expiry_3m" ||
     input.type === "expiry_6m" ||
     input.type === "expiry_expired";
+
+  const category = categoryFor(input);
+  if (category && portal.notificationTypes?.[category] === false) {
+    const label =
+      NOTIFICATION_CATEGORIES.find((entry) => entry.key === category)?.label ??
+      category;
+    const reason = `${label} notifications are turned off in Settings.`;
+    await writeNotificationLog({
+      type: input.type,
+      status: "skipped",
+      recipientEmail: to,
+      companyName: input.companyName,
+      subject: input.subject,
+      dedupeKey: input.dedupeKey,
+      itemId: input.itemId,
+      errorMessage: reason,
+      detail: input.detail,
+      actorEmail: input.actorEmail,
+    });
+    return {
+      status: "skipped",
+      recipientEmail: to,
+      subject: input.subject,
+      errorMessage: reason,
+      logged: true,
+    };
+  }
 
   if (isAdminAlert && !portal.enableAdminAlerts) {
     await writeNotificationLog({
@@ -307,17 +382,7 @@ export async function sendNotification(
       detail: input.detail,
       actorEmail: input.actorEmail,
     });
-    const { logNotification } = await import("@/lib/services/auditLogService");
-    await logNotification({
-      userEmail: input.actorEmail,
-      recipientEmail: to,
-      success: false,
-      company: input.companyName,
-      entityId: input.itemId,
-      entityName: input.subject,
-      errorMessage: delivery.error,
-      metadata: { type: input.type },
-    });
+    await auditDelivery(input, to, delivery.error);
     return {
       status: "failed",
       recipientEmail: to,
@@ -338,16 +403,7 @@ export async function sendNotification(
     detail: input.detail,
     actorEmail: input.actorEmail,
   });
-  const { logNotification } = await import("@/lib/services/auditLogService");
-  await logNotification({
-    userEmail: input.actorEmail,
-    recipientEmail: to,
-    success: true,
-    company: input.companyName,
-    entityId: input.itemId,
-    entityName: input.subject,
-    metadata: { type: input.type },
-  });
+  await auditDelivery(input, to, null);
 
   return {
     status: "sent",
@@ -511,6 +567,7 @@ export async function sendCandidateAssignmentNotification(input: {
     actorEmail: input.actorEmail,
     detail: `${input.roleLabel} ${input.action}: ${input.candidateName}`,
     fromName: "PAVE Training",
+    category: "candidate_assignment",
     dedupeKey: `candidate-assignment:${input.to.toLowerCase()}:${input.itemId ?? input.candidateName}:${input.action}:${Date.now()}`,
     attachments: brand.attachments.length ? brand.attachments : undefined,
   });
@@ -543,6 +600,7 @@ export async function sendAccessRemovedNotification(input: {
     actorEmail: input.actorEmail,
     detail: "Portal access removed",
     fromName: "PAVE Training",
+    category: "access_removed",
     dedupeKey: `access-removed:${input.to.toLowerCase()}:${input.itemId ?? "row"}:${Date.now()}`,
     attachments: brand.attachments.length ? brand.attachments : undefined,
   });

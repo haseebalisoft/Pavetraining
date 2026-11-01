@@ -3,6 +3,8 @@ import { logBulkUpload } from "@/lib/services/auditLogService";
 import { previewBulkUpload } from "@/lib/services/bulkUpload/bulkUploadService";
 
 export const dynamic = "force-dynamic";
+/** Preview loads Workforce + the whole Training Matrix list before validating. */
+export const maxDuration = 300;
 
 export async function POST(request: Request) {
   return withSharePointAdminApi(

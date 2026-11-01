@@ -8,7 +8,7 @@ export async function GET(request: Request) {
   return withCustomerApi(
     "GET /api/customer/events",
     async (context) => {
-      const records = await getCustomerEventRecords(context.companyId);
+      const records = await getCustomerEventRecords(context.companyId, context);
       // Security boundary: explicit public allowlist; internalNotes cannot reach customers.
       const publicRecords: CustomerEventRecord[] = records.map((record) => ({
         id: record.id,
@@ -19,6 +19,8 @@ export async function GET(request: Request) {
         location: record.location,
         description: record.description,
         company: record.company,
+        // Visible files only, already limited to users allowed to open them.
+        ...(record.documents ? { documents: record.documents } : {}),
       }));
       return { records: publicRecords };
     },

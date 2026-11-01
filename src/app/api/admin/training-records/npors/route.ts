@@ -4,7 +4,10 @@ import {
   listAdminRegister,
 } from "@/lib/services/adminCrudService";
 import { triggerMatrixSyncAfterRegister } from "@/lib/services/matrixSyncHook";
-import { notifyTrainingRecordChange } from "@/lib/services/trainingRecordNotificationService";
+import {
+  notifyTrainingRecordChange,
+  summarizeTrainingManagerEmail,
+} from "@/lib/services/trainingRecordNotificationService";
 
 export const dynamic = "force-dynamic";
 
@@ -35,13 +38,18 @@ export async function POST(request: Request) {
         context.loggedInEmail,
       );
       // Best-effort — never blocks the save.
-      await notifyTrainingRecordChange({
+      const notification = await notifyTrainingRecordChange({
         register: "nporsRegister",
         action: "added",
         record,
         actorEmail: context.loggedInEmail,
       });
-      return { record, matrixSync, choiceWarnings };
+      return {
+        record,
+        matrixSync, choiceWarnings,
+        // Real delivery outcome ("sent" only when Graph accepted the email).
+        trainingManagerEmail: summarizeTrainingManagerEmail(notification),
+      };
     },
     { errorMessage: "Failed to create NPORS record" },
     request,

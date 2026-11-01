@@ -16,6 +16,13 @@ import { LiveTrainingRefresh } from "@/components/training/LiveTrainingRefresh";
 import { ExpiryDateBadge } from "@/components/ui/ExpiryDateBadge";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { readPublicApiError } from "@/lib/errors/publicMessages";
+import {
+  JOB_OUTCOME_LABELS,
+  describeJobTransportFailure,
+  matrixSyncOutcome,
+  type JobOutcome,
+  type JobTerminalStatus,
+} from "@/lib/jobs/jobOutcome";
 import type { AdminMatrixRecord } from "@/lib/services/adminCrudService";
 import { CLIENT_MATRIX_DISPLAY_HEADERS } from "@/lib/services/bulkUpload/clientTemplateHeaders";
 import type { MatrixSyncResult } from "@/types/matrixSync";
@@ -28,15 +35,15 @@ import {
 import {
   MATRIX_EDITOR_DATE_HEADERS,
   isMatrixExpiryColumnKey,
-  matrixEditorSectionTitle,
-  matrixTrainingDateFieldName,
+  matrixEditorGroup,
+  matrixEditorLabel,
 } from "@/lib/training/matrixEditorFields";
 import { isManualOverrideHeader } from "@/lib/training/matrixManualOverrides";
 import {
   matrixStatusLabel,
   normalizeMatrixStatus,
 } from "@/lib/theme/paveBrand";
-import { toneForExpiryStatus } from "@/lib/ui/status";
+import { toneForExpiryStatus, type StatusTone } from "@/lib/ui/status";
 import { formatDate } from "@/lib/utils/formatDate";
 import type { Company } from "@/types/models";
 
@@ -67,10 +74,18 @@ function matrixCell(
           tone={status === "Orphan" ? "missing" : "warn"}
         />
       ) : null;
+    // Exact reason (DOB mismatch, candidate not found, …) so the admin knows
+    // what to fix before pressing Link to Workforce.
+    const reason = badge ? row.matrixLinkReason : null;
     return (
       <span className={styles.matrixNameWrap}>
         {nameNode}
         {badge}
+        {reason ? (
+          <span className={styles.matrixLinkReason}>
+            <strong>{reason.label}:</strong> {reason.detail}
+          </span>
+        ) : null}
       </span>
     );
   }
@@ -112,7 +127,6 @@ const NAMED_EXPIRY_BY_HEADER: Record<string, keyof AdminMatrixRecord> = {
   "SSSTS Expiry": "ssstsExpiry",
   "SMSTS Expiry": "smstsExpiry",
   "NRSWA Expiry": "nrswaExpiry",
-  "EUSR Expiry": "eusrExpiry",
   "Face ift": "faceFitExpiry",
   "N001 - Ind FLT": "n001Expiry",
   "N003 - Reach Lift Truck": "n003Expiry",
@@ -134,15 +148,11 @@ function expiryFromRow(row: AdminMatrixRecord, header: string): string | null {
   return typeof named === "string" && named.trim() ? named : null;
 }
 
-/** Copy nested columnValues / training dates onto the row so the drawer form can bind them. */
+/** Copy nested columnValues expiries onto the row so the drawer form can bind them. */
 function flattenMatrixEditorRow(row: AdminMatrixRecord): AdminMatrixRecord {
   const extra: Record<string, string | null> = {};
   for (const header of MATRIX_EDITOR_DATE_HEADERS) {
     extra[header] = expiryFromRow(row, header);
-    extra[matrixTrainingDateFieldName(header)] =
-      row.categoryTrainingDates?.[header] ??
-      row.columnValues?.[`${header} Training Date`] ??
-      null;
   }
   return { ...row, ...extra };
 }
@@ -223,52 +233,20 @@ const columns: AdminColumn<AdminMatrixRecord>[] = [
   },
 ];
 
-const fields: AdminFieldConfig[] = [
-  {
-    name: "candidateName",
-    label: "Candidate name",
-    type: "text",
-    required: true,
-    section: "Candidate",
-  },
-  {
-    name: "companyName",
-    label: "Company Name (from Workforce when linked)",
-    type: "text",
-    readOnly: true,
-    section: "Candidate",
-  },
-  {
-    name: "companyNumber",
-    label: "Company Number",
-    type: "text",
-    readOnly: true,
-    section: "Candidate",
-  },
-  {
-    name: "dateOfBirth",
-    label: "DOB",
-    type: "date",
-    section: "Candidate",
-  },
-  ...MATRIX_EDITOR_DATE_HEADERS.flatMap((header) => {
-    const section = matrixEditorSectionTitle(header);
-    return [
-      {
-        name: matrixTrainingDateFieldName(header),
-        label: "Training date",
-        type: "date" as const,
-        section,
-      },
-      {
-        name: header,
-        label: "Expiry date",
-        type: "date" as const,
-        section,
-      },
-    ];
-  }),
-];
+/**
+ * Editor = training categories and their expiry dates only. Candidate name,
+ * DOB, company and per-category training dates are not editable here: they
+ * come from Workforce / the registers, and fields left out of the form are
+ * never sent, so the server keeps their stored values (and Workforce /
+ * Profile sync keeps working). Correct a name or DOB on the Workforce record
+ * — the Matrix row follows it.
+ */
+const fields: AdminFieldConfig[] = MATRIX_EDITOR_DATE_HEADERS.map((header) => ({
+  name: header,
+  label: matrixEditorLabel(header),
+  type: "date" as const,
+  section: matrixEditorGroup(header),
+}));
 
 type LinkFilter = "all" | "linked" | "needs-review" | "orphan";
 
@@ -297,6 +275,15 @@ function matchesFilter(
   }
   return matchesAnyExpiryFilter(rowExpiryDates(row), filter as ExpiryFilter);
 }
+
+/** /api/admin/training-matrix/sync maxDuration (300s) plus slack. */
+const MATRIX_SYNC_CLIENT_TIMEOUT_MS = 320_000;
+
+const SYNC_OUTCOME_TONE: Record<JobOutcome, StatusTone> = {
+  completed: "ok",
+  completed_with_warnings: "warn",
+  failed: "danger",
+};
 
 function SyncResultsPanel({ result }: { result: MatrixSyncResult }) {
   return (
@@ -382,6 +369,10 @@ export function AdminMatrixClient({
   const { pushToast } = useAdminToast();
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<MatrixSyncResult | null>(null);
+  /** Terminal state of the last refresh: Completed / with warnings / Failed. */
+  const [syncOutcome, setSyncOutcome] = useState<JobTerminalStatus | null>(
+    null,
+  );
   // Admin sees ALL rows by default — Linked, Needs Review, and Orphan.
   // Tabs narrow the view.
   const [linkFilter, setLinkFilter] = useState<LinkFilter>("all");
@@ -394,6 +385,16 @@ export function AdminMatrixClient({
     (row) => row.matrixLinkStatus === "Needs Review",
   ).length;
   const unlinkedCount = orphanCount + needsReviewCount;
+  // "2 DOB mismatch, 1 Candidate not found" for the unlinked banner.
+  const reasonCounts = new Map<string, number>();
+  for (const row of initialRows) {
+    if (row.matrixLinkStatus === "Linked" || !row.matrixLinkReason) continue;
+    const label = row.matrixLinkReason.label;
+    reasonCounts.set(label, (reasonCounts.get(label) ?? 0) + 1);
+  }
+  const reasonSummary = [...reasonCounts]
+    .map(([label, count]) => `${count} ${label}`)
+    .join(", ");
   const linkTabs: Array<{
     id: LinkFilter;
     label: string;
@@ -424,37 +425,38 @@ export function AdminMatrixClient({
   const runSync = useCallback(
     async (body: Record<string, unknown>, label: string) => {
       setSyncing(true);
+      setSyncOutcome(null);
       try {
         const response = await fetch("/api/admin/training-matrix/sync", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
+          // Server stops at its time budget and answers before 300s; this
+          // only fires if the connection itself is lost.
+          signal: AbortSignal.timeout(MATRIX_SYNC_CLIENT_TIMEOUT_MS),
         });
         if (!response.ok) {
-          throw new Error(await readPublicApiError(response));
+          // Server-reported reason (already user-safe) — not a transport issue.
+          const reason = await readPublicApiError(response);
+          setSyncOutcome({ outcome: "failed", reason });
+          pushToast(reason, "error");
+          return;
         }
         const payload = (await response.json()) as { result: MatrixSyncResult };
         setSyncResult(payload.result);
-        const { summary } = payload.result;
-        if (summary.errors > 0) {
-          pushToast(
-            `${label}: completed with ${summary.errors} error(s).`,
-            "error",
-          );
-        } else {
-          pushToast(
-            `${label}: updated ${summary.updated}, created ${summary.created}.`,
-            "success",
-          );
-        }
+        const outcome = matrixSyncOutcome(payload.result, label);
+        setSyncOutcome(outcome);
+        pushToast(
+          outcome.reason,
+          outcome.outcome === "completed" ? "success" : "error",
+        );
         if (!body.dryRun) {
           router.refresh();
         }
       } catch (error) {
-        pushToast(
-          error instanceof Error ? error.message : `${label} failed.`,
-          "error",
-        );
+        const reason = describeJobTransportFailure(error, "refresh");
+        setSyncOutcome({ outcome: "failed", reason });
+        pushToast(reason, "error");
       } finally {
         setSyncing(false);
       }
@@ -482,9 +484,11 @@ export function AdminMatrixClient({
             {unlinkedCount} Matrix row
             {unlinkedCount === 1 ? "" : "s"} not linked to Workforce yet
             ({needsReviewCount} need review, {orphanCount} orphan
-            {orphanCount === 1 ? "" : "s"}). Visible to Admin but hidden from
-            Customer until linked. Use <strong>Link to Workforce</strong> on
-            the row to fix them.
+            {orphanCount === 1 ? "" : "s"}).
+            {reasonSummary ? <> Reasons: {reasonSummary}.</> : null} Visible to
+            Admin but hidden from Customer until linked. Each row shows why it
+            could not be linked; use <strong>Link to Workforce</strong> on the
+            row to fix it.
           </span>
         </div>
       ) : null}
@@ -578,11 +582,28 @@ export function AdminMatrixClient({
               automatically — only press it if a date here looks out of date.
               Cells marked Manual are never overwritten.
             </p>
+            {!syncing && syncOutcome ? (
+              <p
+                className={styles.helpText}
+                style={{ flexBasis: "100%" }}
+                role="status"
+                aria-live="polite"
+              >
+                <StatusBadge
+                  label={JOB_OUTCOME_LABELS[syncOutcome.outcome]}
+                  tone={SYNC_OUTCOME_TONE[syncOutcome.outcome]}
+                />{" "}
+                {syncOutcome.reason}
+              </p>
+            ) : null}
             {syncResult ? (
               <button
                 type="button"
                 className={styles.linkButton}
-                onClick={() => setSyncResult(null)}
+                onClick={() => {
+                  setSyncResult(null);
+                  setSyncOutcome(null);
+                }}
               >
                 Hide results
               </button>

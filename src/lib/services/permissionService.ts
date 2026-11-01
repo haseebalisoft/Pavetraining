@@ -288,7 +288,7 @@ function resolveCompanyDisplayName(fields: SharePointFields): string | undefined
   return undefined;
 }
 
-function mapPermissionItem(
+export function mapPermissionItem(
   id: string,
   fields: SharePointFields,
 ): PermissionProfile | null {

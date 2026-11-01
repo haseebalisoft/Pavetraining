@@ -65,3 +65,25 @@ export function isAsbestosAwarenessCategory(
 
 export const ASBESTOS_MATRIX_HEADER = "N031 - Asbestos Awareness";
 export const MANUAL_OVERRIDES_FIELD = MANUAL_FIELD;
+
+/** Day for date-like values ("2027-01-27T00:00:00Z" → "2027-01-27"), else trimmed text. */
+function dayOrText(value: unknown): string {
+  const text = String(value ?? "").trim();
+  return /^\d{4}-\d{2}-\d{2}/.test(text) ? text.slice(0, 10) : text;
+}
+
+/**
+ * Headers an editor save really changed. The Matrix editor submits every
+ * category on each save; only a date that differs from the stored one may
+ * become Manual — otherwise one save froze the whole row against
+ * "Refresh from registers".
+ */
+export function changedMatrixHeaders(
+  submitted: string[],
+  before: Record<string, unknown> | undefined,
+  after: Record<string, unknown>,
+): string[] {
+  return submitted.filter(
+    (header) => dayOrText(before?.[header]) !== dayOrText(after[header]),
+  );
+}

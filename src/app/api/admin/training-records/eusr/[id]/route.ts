@@ -7,7 +7,11 @@ import {
   triggerMatrixSyncAfterRegister,
   triggerMatrixSyncAfterRegisterDelete,
 } from "@/lib/services/matrixSyncHook";
-import { notifyTrainingRecordChange } from "@/lib/services/trainingRecordNotificationService";
+import {
+  notifyTrainingRecordChange,
+  readRegisterOutcome,
+  summarizeTrainingManagerEmail,
+} from "@/lib/services/trainingRecordNotificationService";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +24,8 @@ export async function PATCH(
     "PATCH /api/admin/training-records/eusr/[id]",
     async (adminContext, req) => {
       const body = (await req.json()) as Record<string, unknown>;
+      // Result before this edit: a re-save of the same Pass/Fail is not a new result.
+      const previousOutcome = await readRegisterOutcome("eusrRegister", id);
       const { record, choiceWarnings } = await updateAdminRegister(
         "eusrRegister",
         id,
@@ -30,13 +36,19 @@ export async function PATCH(
         record,
         adminContext.loggedInEmail,
       );
-      await notifyTrainingRecordChange({
+      const notification = await notifyTrainingRecordChange({
         register: "eusrRegister",
         action: "updated",
         record,
         actorEmail: adminContext.loggedInEmail,
+        previousOutcome,
       });
-      return { record, matrixSync, choiceWarnings };
+      return {
+        record,
+        matrixSync, choiceWarnings,
+        // Real delivery outcome ("sent" only when Graph accepted the email).
+        trainingManagerEmail: summarizeTrainingManagerEmail(notification),
+      };
     },
     { errorMessage: "Failed to update EUSR record" },
     request,

@@ -25,7 +25,14 @@ import {
   pickField,
   type ParsedSpreadsheet,
 } from "@/lib/services/bulkUpload/parseSpreadsheet";
+import { stopIfPastDeadline } from "@/lib/services/bulkUpload/commitDeadline";
 import { triggerMatrixSyncAfterRegister } from "@/lib/services/matrixSyncHook";
+import {
+  notifyTrainingRecordChange,
+  readRegisterOutcome,
+  summarizeTrainingManagerEmail,
+} from "@/lib/services/trainingRecordNotificationService";
+import type { JobDeadline } from "@/lib/jobs/jobOutcome";
 import type {
   BulkCommitRowInput,
   BulkDuplicateMode,
@@ -597,6 +604,14 @@ export async function commitRegisterImport(input: {
   importType: BulkImportType;
   rows: BulkCommitRowInput[];
   duplicateMode: BulkDuplicateMode;
+  /** Stop between rows once passed; unreached rows return as Not processed. */
+  deadline?: JobDeadline;
+  /**
+   * Email each saved record's assigned Training Manager, exactly as a single
+   * save does. Off when the admin keeps "Suppress notifications" ticked.
+   */
+  notifyTrainingManagers?: boolean;
+  actorEmail?: string | null;
 }): Promise<BulkPreviewRow[]> {
   if (!isRegisterImportType(input.importType)) {
     throw new Error(`Unsupported register import type: ${input.importType}`);
@@ -609,7 +624,31 @@ export async function commitRegisterImport(input: {
 
   const results: BulkPreviewRow[] = [];
 
-  for (const row of input.rows) {
+  /** Per-row note with the REAL delivery outcome (never "sent" unless sent). */
+  const notify = async (
+    action: "added" | "updated",
+    record: Parameters<typeof notifyTrainingRecordChange>[0]["record"],
+    previousOutcome?: string | null,
+  ): Promise<string[]> => {
+    if (!input.notifyTrainingManagers) return [];
+    const outcome = await notifyTrainingRecordChange({
+      register:
+        importType === "nvq" ? "nvqRegister" : REGISTER_KEY_BY_TYPE[importType],
+      action,
+      record,
+      actorEmail: input.actorEmail ?? null,
+      previousOutcome,
+    });
+    return [summarizeTrainingManagerEmail(outcome).message];
+  };
+
+  for (let index = 0; index < input.rows.length; index += 1) {
+    const notProcessed = stopIfPastDeadline(input.deadline, input.rows, index);
+    if (notProcessed) {
+      results.push(...notProcessed);
+      break;
+    }
+    const row = input.rows[index];
     const fields = { ...row.fields };
     const candidateName = fields.candidateName?.trim() || "";
     const companyName = (fields.company ?? fields.companyName)?.trim() || "";
@@ -698,21 +737,30 @@ export async function commitRegisterImport(input: {
       }
 
       if (existingId && input.duplicateMode === "update") {
+        let notes: string[];
         if (importType === "nvq") {
-          await updateAdminNvq(existingId, payload);
+          const previous = input.notifyTrainingManagers
+            ? await readRegisterOutcome("nvqRegister", existingId)
+            : undefined;
+          const updated = await updateAdminNvq(existingId, payload);
+          notes = await notify("updated", updated, previous);
         } else {
           const key = REGISTER_KEY_BY_TYPE[importType];
+          const previous = input.notifyTrainingManagers
+            ? await readRegisterOutcome(key, existingId)
+            : undefined;
           const { record: updated } = await updateAdminRegister(
             key,
             existingId,
             payload,
           );
           await triggerMatrixSyncAfterRegister(key, updated);
+          notes = await notify("updated", updated, previous);
         }
         results.push({
           rowNumber: row.rowNumber,
           status: "Imported",
-          messages: ["Updated existing row."],
+          messages: ["Updated existing row.", ...notes],
           fields: {
             ...fields,
             candidateName: resolved.candidateName,
@@ -725,20 +773,25 @@ export async function commitRegisterImport(input: {
         continue;
       }
 
+      let notes: string[];
       if (importType === "nvq") {
-        await createAdminNvq(payload);
+        notes = await notify("added", await createAdminNvq(payload));
       } else {
         const key = REGISTER_KEY_BY_TYPE[importType];
         const { record: created } = await createAdminRegister(key, payload);
         await triggerMatrixSyncAfterRegister(key, created);
+        notes = await notify("added", created);
       }
 
       results.push({
         rowNumber: row.rowNumber,
         status: "Imported",
-        messages: existingId
-          ? ["Created additional row (duplicate mode = create)."]
-          : ["Imported."],
+        messages: [
+          existingId
+            ? "Created additional row (duplicate mode = create)."
+            : "Imported.",
+          ...notes,
+        ],
         fields: {
           ...fields,
           candidateName: resolved.candidateName,

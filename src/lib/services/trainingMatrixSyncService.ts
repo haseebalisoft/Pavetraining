@@ -55,6 +55,7 @@ import type {
   MatrixSyncResultItem,
 } from "@/types/matrixSync";
 import type { Company } from "@/types/models";
+import type { JobDeadline } from "@/lib/jobs/jobOutcome";
 
 export type { MatrixSyncResult, MatrixSyncResultItem };
 
@@ -105,6 +106,38 @@ export interface MatrixSyncOptions {
   userEmail?: string | null;
   /** When set, load path may seed registers; sync still uses full candidate set. */
   focusRecords?: NormalizedRegisterRecord[];
+  /**
+   * Multi-candidate syncs (all / company) stop between candidates once this
+   * passes and report the rest via `result.incomplete`, instead of the route
+   * being killed at maxDuration with no response.
+   */
+  deadline?: JobDeadline;
+}
+
+/**
+ * Runs `syncOneCandidate` for each candidate until the deadline passes.
+ * Returns the remaining count so the result can say what was not reached.
+ */
+async function syncCandidatesWithinDeadline(
+  ctx: SyncContext,
+  work: ResolvedCandidate[],
+  deadline: JobDeadline | undefined,
+  items: MatrixSyncResultItem[],
+): Promise<MatrixSyncResult["incomplete"]> {
+  for (let index = 0; index < work.length; index += 1) {
+    if (deadline?.expired()) {
+      const remainingCandidates = work.length - index;
+      console.warn(
+        `[matrix-sync] stopped at time budget processed=${index} remaining=${remainingCandidates}`,
+      );
+      return {
+        reason: "the refresh reached the server time limit.",
+        remainingCandidates,
+      };
+    }
+    items.push(await syncOneCandidate(ctx, work[index]));
+  }
+  return null;
 }
 
 function nameKey(value: string | null | undefined): string {
@@ -515,6 +548,10 @@ async function syncOneCandidate(
 
     if (record.source === "NPORS") {
       if (record.nporsCategories.length === 0) {
+        // Used to be silent — the result just never reached the Matrix.
+        warnings.push(
+          `NPORS #${record.id}: no NPORS category on the record, so nothing was copied to the Training Matrix.`,
+        );
         continue;
       }
       const nporsExpiry =
@@ -648,19 +685,9 @@ async function syncOneCandidate(
     }
   }
 
-  if (workforceEusrExpiry) {
-    if (isManualOverrideHeader("EUSR Expiry", manualOverrides)) {
-      warnings.push("EUSR Expiry: skipped sync (manual override on matrix).");
-    } else {
-      const existing = columnValues["EUSR Expiry"];
-      if (shouldApplyPassExpiry(existing, workforceEusrExpiry, "Pass")) {
-        columnValues["EUSR Expiry"] = workforceEusrExpiry;
-        if (!fieldsUpdated.includes("EUSR Expiry")) {
-          fieldsUpdated.push("EUSR Expiry");
-        }
-      }
-    }
-  }
+  // The overall "EUSR Expiry" Matrix column is retired: EUSR results live in
+  // their per-course columns above, and the latest Pass still updates the
+  // Workforce EUSR card expiry (workforceEusrExpiry, written below).
 
   if (workforceSwqrExpiry) {
     if (isManualOverrideHeader("NRSWA Expiry", manualOverrides)) {
@@ -910,15 +937,23 @@ async function auditSync(
     scope,
     success: result.summary.errors === 0,
     errorMessage:
-      result.summary.errors > 0
-        ? `${result.summary.errors} sync item(s) had errors`
-        : null,
+      [
+        result.summary.errors > 0
+          ? `${result.summary.errors} sync item(s) had errors`
+          : null,
+        result.incomplete
+          ? `stopped at time budget, ${result.incomplete.remainingCandidates} candidate(s) not processed`
+          : null,
+      ]
+        .filter(Boolean)
+        .join("; ") || null,
     metadata: {
       processed: result.summary.processed,
       updated: result.summary.updated,
       created: result.summary.created,
       skipped: result.summary.skipped,
       dryRun: result.dryRun,
+      remainingCandidates: result.incomplete?.remainingCandidates ?? 0,
     },
   });
 }
@@ -977,6 +1012,7 @@ export async function syncCompanyMatrix(
   const ctx = await loadSyncContext(options);
   const company = ctx.companies.find((c) => c.id === companyId);
   const items: MatrixSyncResultItem[] = [];
+  let incomplete: MatrixSyncResult["incomplete"] = null;
 
   if (!company) {
     items.push(
@@ -1008,9 +1044,12 @@ export async function syncCompanyMatrix(
         }),
       );
     } else {
-      for (const workforce of candidates) {
-        items.push(await syncOneCandidate(ctx, { workforce, company }));
-      }
+      incomplete = await syncCandidatesWithinDeadline(
+        ctx,
+        candidates.map((workforce) => ({ workforce, company })),
+        options.deadline,
+        items,
+      );
     }
   }
 
@@ -1019,6 +1058,7 @@ export async function syncCompanyMatrix(
     scope: "company",
     items,
     summary: buildSummary(items),
+    incomplete,
   };
   await auditSync(options.userEmail, `company/${companyId}`, result);
   return result;
@@ -1060,13 +1100,16 @@ export async function syncAllMatrix(
     if (workforce) candidateIds.add(workforce.id);
   }
 
+  // Build the full work list first so a time-budget stop can say exactly how
+  // many candidates were not reached.
+  const work: ResolvedCandidate[] = [];
   for (const candidateId of candidateIds) {
     const resolved = resolveCandidateFromId(ctx, candidateId);
     if (!resolved) {
       // Try resolve from register name if id was a lookup that isn't in workforce list load
       continue;
     }
-    items.push(await syncOneCandidate(ctx, resolved));
+    work.push(resolved);
   }
 
   // Name-only register rows where workforce id wasn't captured
@@ -1083,14 +1126,22 @@ export async function syncAllMatrix(
     });
     if (!workforce || candidateIds.has(workforce.id)) continue;
     candidateIds.add(workforce.id);
-    items.push(await syncOneCandidate(ctx, { workforce, company }));
+    work.push({ workforce, company });
   }
+
+  const incomplete = await syncCandidatesWithinDeadline(
+    ctx,
+    work,
+    options.deadline,
+    items,
+  );
 
   const result: MatrixSyncResult = {
     dryRun: Boolean(options.dryRun),
     scope: "all",
     items,
     summary: buildSummary(items),
+    incomplete,
   };
   await auditSync(options.userEmail, "all", result);
   return result;
@@ -1354,10 +1405,9 @@ async function recomputeCandidateMatrixAfterDelete(
         trainingDatesDirty = true;
       }
     }
-    applyHeaderRecompute("EUSR Expiry", eusrRecords);
-    if (fieldsUpdated.includes("EUSR Expiry")) {
-      workforceEusrExpiry = latestPassExpiry(eusrRecords);
-    }
+    // Per-course columns were recomputed above; refresh the Workforce card
+    // from the remaining Passes (never cleared here — only overwritten).
+    workforceEusrExpiry = latestPassExpiry(eusrRecords) ?? undefined;
   }
 
   if (deletedRegisterKey === "nrswaRegister") {

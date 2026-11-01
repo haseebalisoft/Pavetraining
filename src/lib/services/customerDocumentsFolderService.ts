@@ -343,6 +343,9 @@ export async function resolveDocumentUploadFolder(
 
   if (!hasCandidate) {
     steps.push({ name: "Company Documents" });
+    // Optional sub-folders (e.g. Events/<event id>) — already sanitised in
+    // `segments`, so reuse them rather than re-sanitising here.
+    for (const name of segments.slice(2)) steps.push({ name });
   } else {
     steps.push({ name: "Candidates" });
     steps.push(

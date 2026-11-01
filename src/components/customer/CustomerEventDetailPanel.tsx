@@ -3,10 +3,7 @@
 import { SlideOverPanel } from "@/components/ui/SlideOverPanel";
 import { formatDate, formatTime } from "@/lib/utils/formatDate";
 import { formatEventDuration } from "@/lib/utils/eventDuration";
-import type {
-  CustomerDocumentRecord,
-  CustomerEventRecord,
-} from "@/types/models";
+import type { CustomerEventRecord } from "@/types/models";
 
 import styles from "./customer.module.css";
 
@@ -26,30 +23,30 @@ function locationLabel(row: CustomerEventRecord): string {
   return location || address || "—";
 }
 
+/**
+ * Files an admin attached to this event (Events → Documents). Previously this
+ * guessed by matching words in the event title against document names, which
+ * could list unrelated files (e.g. any certificate containing "NPORS").
+ */
 export function documentsForEvent(
   event: CustomerEventRecord,
-  documents: CustomerDocumentRecord[],
-): CustomerDocumentRecord[] {
-  const title = event.title.trim().toLowerCase();
-  if (!title) return [];
-  const tokens = title.split(/\s+/).filter((token) => token.length > 3);
-  return documents.filter((doc) => {
-    const haystack = `${doc.name} ${doc.documentType ?? ""}`.toLowerCase();
-    if (haystack.includes(title)) return true;
-    return tokens.some((token) => haystack.includes(token));
-  });
+): Array<{ id: string; name: string; viewPath: string; downloadPath: string }> {
+  return (event.documents ?? []).map((doc) => ({
+    id: doc.id,
+    name: doc.name,
+    viewPath: `/api/customer/documents/${encodeURIComponent(doc.id)}/view`,
+    downloadPath: `/api/customer/documents/${encodeURIComponent(doc.id)}/download`,
+  }));
 }
 
 export function CustomerEventDetailPanel({
   event,
-  documents = [],
   onClose,
 }: {
   event: CustomerEventRecord | null;
-  documents?: CustomerDocumentRecord[];
   onClose: () => void;
 }) {
-  const related = event ? documentsForEvent(event, documents) : [];
+  const related = event ? documentsForEvent(event) : [];
 
   return (
     <SlideOverPanel
@@ -102,24 +99,18 @@ export function CustomerEventDetailPanel({
               <ul className={styles.eventDocumentList}>
                 {related.map((doc) => (
                   <li key={doc.id}>
-                    {doc.viewPath ? (
-                      <a
-                        className={styles.link}
-                        href={doc.viewPath}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        {doc.name}
-                      </a>
-                    ) : (
-                      <span>{doc.name}</span>
-                    )}
-                    {doc.documentType?.trim() ? (
-                      <span className={styles.muted}>
-                        {" "}
-                        · {doc.documentType}
-                      </span>
-                    ) : null}
+                    <a
+                      className={styles.link}
+                      href={doc.viewPath}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {doc.name}
+                    </a>
+                    <span className={styles.muted}> · </span>
+                    <a className={styles.link} href={doc.downloadPath}>
+                      Download
+                    </a>
                   </li>
                 ))}
               </ul>

@@ -1,7 +1,10 @@
 import { withAdminApi } from "@/lib/api/adminApi";
 import { createAdminNvq, listAdminNvq } from "@/lib/services/adminCrudService";
 import { triggerMatrixSyncAfterNvq } from "@/lib/services/matrixSyncHook";
-import { notifyTrainingRecordChange } from "@/lib/services/trainingRecordNotificationService";
+import {
+  notifyTrainingRecordChange,
+  summarizeTrainingManagerEmail,
+} from "@/lib/services/trainingRecordNotificationService";
 
 export const dynamic = "force-dynamic";
 
@@ -22,13 +25,18 @@ export async function POST(request: Request) {
       const body = (await req.json()) as Record<string, unknown>;
       const record = await createAdminNvq(body);
       const matrixSync = triggerMatrixSyncAfterNvq(record);
-      await notifyTrainingRecordChange({
+      const notification = await notifyTrainingRecordChange({
         register: "nvqRegister",
         action: "added",
         record,
         actorEmail: context.loggedInEmail,
       });
-      return { record, matrixSync };
+      return {
+        record,
+        matrixSync,
+        // Real delivery outcome ("sent" only when Graph accepted the email).
+        trainingManagerEmail: summarizeTrainingManagerEmail(notification),
+      };
     },
     { errorMessage: "Failed to create NVQ record" },
     request,

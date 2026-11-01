@@ -8,6 +8,8 @@ import {
   type AdminFieldConfig,
 } from "@/components/admin/AdminCrudPage";
 import { AdminDrawer } from "@/components/admin/AdminDrawer";
+import { AdminEventDocuments } from "@/components/admin/AdminEventDocuments";
+import { SlideOverPanel } from "@/components/ui/SlideOverPanel";
 import styles from "@/components/admin/admin.module.css";
 import { useAdminToast } from "@/components/admin/AdminToast";
 import {
@@ -20,6 +22,11 @@ import { StatusBadge } from "@/components/ui/StatusBadge";
 import { readPublicApiError } from "@/lib/errors/publicMessages";
 import type { AdminEventRecord } from "@/lib/services/adminCrudService";
 import { formatDateTime } from "@/lib/utils/formatDate";
+import {
+  endAfterStartError,
+  roundUpToQuarterHour,
+} from "@/lib/utils/quarterHour";
+import { QuarterHourDateTimeInput } from "@/components/admin/QuarterHourDateTimeInput";
 import type { Company } from "@/types/models";
 
 type EventsViewMode = "list" | CalendarView;
@@ -59,8 +66,8 @@ function toDateTimeLocal(value: string | Date | null | undefined): string {
 }
 
 function createForm(date = new Date()): EventFormState {
-  const start = new Date(date);
-  start.setSeconds(0, 0);
+  // New events start on the next quarter hour (09:00 / 09:15 / 09:30 / 09:45).
+  const start = roundUpToQuarterHour(date);
   const end = new Date(start.getTime() + 60 * 60 * 1000);
   return {
     title: "",
@@ -164,7 +171,12 @@ const fields: AdminFieldConfig[] = [
     type: "datetime",
     required: true,
   },
-  { name: "endDate", label: "End Date/Time", type: "datetime" },
+  {
+    name: "endDate",
+    label: "End Date/Time",
+    type: "datetime",
+    mustBeAfter: "eventDate",
+  },
   { name: "location", label: "Location", type: "text" },
   { name: "trainingAddress", label: "Training Address", type: "text" },
   {
@@ -244,6 +256,8 @@ export function AdminEventsClient({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState<AdminEventRecord | null>(null);
+  /** List view: event whose documents panel is open. */
+  const [documentsEvent, setDocumentsEvent] = useState<AdminEventRecord | null>(null);
   const [form, setForm] = useState<EventFormState>(() => createForm());
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -281,7 +295,11 @@ export function AdminEventsClient({
           : `/api/admin/events/${row.id}/sync`;
       setBusyId(row.id);
       try {
-        const response = await fetch(path, { method: "POST" });
+        const response = await fetch(path, {
+          method: "POST",
+          // Never leave "Syncing…" spinning on a stalled connection.
+          signal: AbortSignal.timeout(120_000),
+        });
         if (!response.ok) throw new Error(await readPublicApiError(response));
         const payload = (await response.json()) as {
           result?: { status?: string; error?: string | null; reason?: string | null };
@@ -322,9 +340,8 @@ export function AdminEventsClient({
     if (!form.title.trim()) return setFormError("Title is required.");
     if (!form.companyId) return setFormError("Company is required.");
     if (!form.eventDate) return setFormError("Start date/time is required.");
-    if (form.endDate && new Date(form.endDate) < new Date(form.eventDate)) {
-      return setFormError("End date/time must be after the start.");
-    }
+    const timeError = endAfterStartError(form.eventDate, form.endDate);
+    if (timeError) return setFormError(timeError);
 
     setSaving(true);
     setFormError(null);
@@ -421,6 +438,7 @@ export function AdminEventsClient({
 
   if (view === "list") {
     return (
+      <>
       <AdminCrudPage<AdminEventRecord>
         title="Events"
         description="Manage training events. SharePoint Events is the source of truth and customer-facing copy is kept separate from internal notes."
@@ -459,6 +477,13 @@ export function AdminEventsClient({
             <button
               type="button"
               className={styles.linkButton}
+              onClick={() => setDocumentsEvent(row)}
+            >
+              Documents
+            </button>
+            <button
+              type="button"
+              className={styles.linkButton}
               disabled={busyId === row.id || row.doNotSync}
               onClick={() => void runSync(row, "sync").then(reloadList)}
             >
@@ -480,6 +505,14 @@ export function AdminEventsClient({
           </>
         )}
       />
+      <SlideOverPanel
+        open={documentsEvent !== null}
+        title={documentsEvent ? `Documents — ${documentsEvent.title}` : "Documents"}
+        onClose={() => setDocumentsEvent(null)}
+      >
+        {documentsEvent ? <AdminEventDocuments eventId={documentsEvent.id} /> : null}
+      </SlideOverPanel>
+      </>
     );
   }
 
@@ -553,11 +586,11 @@ export function AdminEventsClient({
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Start date/time</span>
-            <input className={styles.input} type="datetime-local" value={form.eventDate} onChange={(event) => setForm((current) => ({ ...current, eventDate: event.target.value }))} />
+            <QuarterHourDateTimeInput label="Start" value={form.eventDate} onChange={(value) => setForm((current) => ({ ...current, eventDate: value }))} />
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>End date/time</span>
-            <input className={styles.input} type="datetime-local" value={form.endDate} onChange={(event) => setForm((current) => ({ ...current, endDate: event.target.value }))} />
+            <QuarterHourDateTimeInput label="End" value={form.endDate} onChange={(value) => setForm((current) => ({ ...current, endDate: value }))} />
           </label>
           <label className={`${styles.field} ${styles.fieldFull}`}>
             <span className={styles.fieldLabel}>Company</span>
@@ -617,6 +650,15 @@ export function AdminEventsClient({
               ) : null}
             </div>
           ) : null}
+          {editing ? (
+            <div className={styles.fieldFull}>
+              <AdminEventDocuments eventId={editing.id} />
+            </div>
+          ) : (
+            <p className={`${styles.fieldFull} ${styles.helpText}`}>
+              Save the event first, then reopen it to attach documents.
+            </p>
+          )}
         </div>
       </AdminDrawer>
     </div>

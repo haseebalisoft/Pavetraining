@@ -4,7 +4,6 @@ import { EventsView } from "@/components/customer/EventsView";
 import { auth } from "@/auth";
 import { getCustomerContext } from "@/lib/services/customerContextService";
 import {
-  getCustomerDocumentRecords,
   getCustomerEventRecords,
 } from "@/lib/services/customerPortalService";
 import type { CustomerContext } from "@/types/models";
@@ -34,20 +33,13 @@ export default async function CustomerEventsPage({
   const eventRaw = Array.isArray(query.event) ? query.event[0] : query.event;
   const initialEventId = eventRaw?.trim() || null;
 
-  const [records, documents] = await Promise.all([
-    getCustomerEventRecords(context.companyId),
-    getCustomerDocumentRecords(
-      context.companyId,
-      context.canDownload,
-      context,
-    ).catch(() => []),
-  ]);
+  // Each event carries its own attached documents (permission-checked).
+  const records = await getCustomerEventRecords(context.companyId, context);
 
   return (
     <EventsView
       companyName={context.companyName}
       records={records}
-      documents={documents}
       initialEventId={initialEventId}
     />
   );

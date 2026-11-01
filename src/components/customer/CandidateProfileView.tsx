@@ -567,6 +567,7 @@ export function CandidateProfileView({
     inHouseRecords,
     nvqRecords,
     matrixRow,
+    eusrCardExpiry: candidate.eusrExpiry,
   });
   const eusrDisplayRecords = expandEusrRecordsForDisplay(eusrRecords);
 

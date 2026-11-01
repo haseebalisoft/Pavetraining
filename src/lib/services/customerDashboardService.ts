@@ -1,6 +1,7 @@
 import "server-only";
 
 import { listAdminMatrix } from "@/lib/services/adminCrudService";
+import { isoDateKey } from "@/lib/services/bulkUpload/workforceMatrixSync";
 import {
   earliestDateFromColumns,
   listTrainingMatrixExampleRows,
@@ -262,7 +263,9 @@ function buildEnrichedRow(input: {
   const cscsExpiry =
     matrix?.columnValues?.["CSCS Expiry"] ?? candidate?.cscsExpiry ?? null;
   const swqrFromMatrix = matrix?.columnValues?.["NRSWA Expiry"] ?? null;
-  const eusrFromMatrix = matrix?.columnValues?.["EUSR Expiry"] ?? null;
+  // No EUSR register record: show the Workforce EUSR card expiry. (The old
+  // overall Matrix "EUSR Expiry" column is retired; each course has its own.)
+  const eusrFromMatrix = candidate?.eusrExpiry ?? null;
   const eusrCategoryRows = mergeEusrCategoryRows(
     matrix,
     input.eusrCategoryRows ?? [],
@@ -475,10 +478,18 @@ export async function getCustomerMatrixRecords(
         continue;
       }
       const key = nameKey(candidate.candidateName);
+      // Legacy rows (no stored owner id) attach only on a unique name AND a
+      // matching DOB — the Name + DOB rule; a name alone is never enough to
+      // show one person's training on another's row.
+      const legacy =
+        (workforceNameCounts.get(key) ?? 0) === 1
+          ? (legacyByName.get(key) ?? null)
+          : null;
+      const legacyDob = isoDateKey(legacy?.dateOfBirth);
       const matrix =
         matrixById.get(String(candidate.id).trim()) ??
-        ((workforceNameCounts.get(key) ?? 0) === 1
-          ? (legacyByName.get(key) ?? null)
+        (legacy && legacyDob && legacyDob === isoDateKey(candidate.dateOfBirth)
+          ? legacy
           : null);
 
       const matrixCats = nporsCategoriesFromMatrix(matrix);
@@ -579,7 +590,7 @@ export async function getCustomerDashboardContent(
     getAllowedWorkforceForCustomer(context),
     getCustomerMatrixRecords(context.companyName, context),
     getCustomerDocumentRecords(context.companyId, false, context),
-    getCustomerEventRecords(context.companyId),
+    getCustomerEventRecords(context.companyId, context),
     getCustomerOfferRecords(context.companyId),
     getCustomerNvqRecords(context.companyId, context),
   ]);

@@ -780,8 +780,19 @@ export const CLIENT_MATRIX_CATEGORY_COLUMNS: MatrixCategoryColumn[] = [
 ];
 
 /** Exact column order from Training matrix example.xlsx, then per-EUSR-category dates. */
+/**
+ * Matrix columns no longer shown, edited, synced or counted. "EUSR Expiry"
+ * was one overall date; each EUSR course now has its own column
+ * ("EUSR - SHEA Gas", …). The SharePoint column and its stored values are
+ * left untouched, and the upload template still accepts "EUSR Expiry" — it
+ * fills the Workforce EUSR card expiry.
+ */
+export const RETIRED_MATRIX_HEADERS: readonly string[] = ["EUSR Expiry"];
+
 export const CLIENT_MATRIX_DISPLAY_HEADERS: string[] = [
-  ...CLIENT_MATRIX_META_HEADERS,
+  ...CLIENT_MATRIX_META_HEADERS.filter(
+    (header) => !RETIRED_MATRIX_HEADERS.includes(header),
+  ),
   ...EUSR_MATRIX_CATEGORY_COLUMNS.map((column) => column.header),
   ...CLIENT_MATRIX_CATEGORY_COLUMNS.map((column) => column.header),
 ];

@@ -62,7 +62,6 @@ const NAMED_EXPIRY: Record<
 > = {
   "CSCS Expiry": (row) => row.cscsExpiry,
   "NRSWA Expiry": (row) => row.swqrExpiry,
-  "EUSR Expiry": (row) => row.eusrExpiry,
   "N001 - Ind FLT": (row) => row.n001Expiry,
   "N003 - Reach Lift Truck": (row) => row.n003Expiry,
   "N004 - Lorry Mounted Lift Truck": (row) => row.n004Expiry,
@@ -176,6 +175,12 @@ export function buildCandidateCategoryRows(input: {
   inHouseRecords?: CustomerInHouseRecord[];
   nvqRecords?: CustomerNvqRecord[];
   matrixRow?: CustomerMatrixRecord | null;
+  /**
+   * Workforce EUSR card expiry. Shown as "EUSR card" only when the candidate
+   * has no EUSR course date (register or per-course Matrix column), so EUSR
+   * stays visible now that the overall Matrix "EUSR Expiry" is retired.
+   */
+  eusrCardExpiry?: string | null;
 }): CandidateCategoryRow[] {
   const rows: CandidateCategoryRow[] = [];
   const covered = new Set<string>();
@@ -328,6 +333,26 @@ export function buildCandidateCategoryRows(input: {
       rows.push(next);
       addCovered(covered, header, label, next.category);
     }
+  }
+
+  const hasEusrCourse = rows.some(
+    (row) =>
+      row.source === "EUSR" ||
+      (row.source === "Training Matrix" && /^eusr(\s|-|$)/i.test(row.category)) ||
+      row.id.startsWith("matrix:EUSR - "),
+  );
+  if (!hasEusrCourse && input.eusrCardExpiry?.trim()) {
+    rows.push(
+      toRow(
+        "workforce:eusr-card",
+        "EUSR card",
+        "EUSR card",
+        "EUSR",
+        null,
+        input.eusrCardExpiry,
+        null,
+      ),
+    );
   }
 
   return rows.sort((a, b) => {

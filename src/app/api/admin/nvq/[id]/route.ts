@@ -4,7 +4,11 @@ import {
   updateAdminNvq,
 } from "@/lib/services/adminCrudService";
 import { triggerMatrixSyncAfterNvq } from "@/lib/services/matrixSyncHook";
-import { notifyTrainingRecordChange } from "@/lib/services/trainingRecordNotificationService";
+import {
+  notifyTrainingRecordChange,
+  readRegisterOutcome,
+  summarizeTrainingManagerEmail,
+} from "@/lib/services/trainingRecordNotificationService";
 
 export const dynamic = "force-dynamic";
 
@@ -17,15 +21,23 @@ export async function PATCH(
     "PATCH /api/admin/nvq/[id]",
     async (adminContext, req) => {
       const body = (await req.json()) as Record<string, unknown>;
+      // Result before this edit: a re-save of the same Pass/Fail is not a new result.
+      const previousOutcome = await readRegisterOutcome("nvqRegister", id);
       const record = await updateAdminNvq(id, body);
       const matrixSync = triggerMatrixSyncAfterNvq(record);
-      await notifyTrainingRecordChange({
+      const notification = await notifyTrainingRecordChange({
         register: "nvqRegister",
         action: "updated",
         record,
         actorEmail: adminContext.loggedInEmail,
+        previousOutcome,
       });
-      return { record, matrixSync };
+      return {
+        record,
+        matrixSync,
+        // Real delivery outcome ("sent" only when Graph accepted the email).
+        trainingManagerEmail: summarizeTrainingManagerEmail(notification),
+      };
     },
     { errorMessage: "Failed to update NVQ record" },
     request,

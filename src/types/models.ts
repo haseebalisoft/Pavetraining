@@ -45,6 +45,12 @@ export interface Company {
   accountsEmail: string | null;
   notesPricesAgreed: string | null;
   companyLogo: string | null;
+  /**
+   * File name of the stored logo image (e.g. "1785356565112-alder-finch.png").
+   * A SharePoint export puts this in the Company Logo column, so re-importing
+   * the export can recognise the logo the company already has.
+   */
+  companyLogoFileName?: string | null;
   status: string;
 }
 
@@ -576,6 +582,12 @@ export interface CustomerEventRecord {
   location: string | null;
   description: string | null;
   company: string | null;
+  /**
+   * Customer-visible files attached to the event, opened through the
+   * permission-checked /api/customer/documents/{id}/view|download routes.
+   * Only present for users allowed to open company documents.
+   */
+  documents?: Array<{ id: string; name: string }>;
 }
 
 export interface CustomerOfferRecord {

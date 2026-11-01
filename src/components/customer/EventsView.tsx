@@ -11,10 +11,7 @@ import { CustomerEventDetailPanel } from "@/components/customer/CustomerEventDet
 import { CustomerPageHeader } from "@/components/customer/CustomerPageHeader";
 import { formatDate, formatTime } from "@/lib/utils/formatDate";
 import { formatEventDuration } from "@/lib/utils/eventDuration";
-import type {
-  CustomerDocumentRecord,
-  CustomerEventRecord,
-} from "@/types/models";
+import type { CustomerEventRecord } from "@/types/models";
 
 import styles from "./customer.module.css";
 import sectionStyles from "./portalSections.module.css";
@@ -22,7 +19,6 @@ import sectionStyles from "./portalSections.module.css";
 interface Props {
   companyName: string;
   records: CustomerEventRecord[];
-  documents?: CustomerDocumentRecord[];
   initialEventId?: string | null;
 }
 
@@ -38,7 +34,6 @@ function formatTimeRange(row: CustomerEventRecord): string {
 export function EventsView({
   companyName,
   records,
-  documents = [],
   initialEventId = null,
 }: Props) {
   const [search, setSearch] = useState("");
@@ -199,7 +194,6 @@ export function EventsView({
 
       <CustomerEventDetailPanel
         event={selected}
-        documents={documents}
         onClose={() => setSelectedId(null)}
       />
     </div>

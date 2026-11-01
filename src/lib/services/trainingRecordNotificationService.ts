@@ -1,7 +1,11 @@
 import "server-only";
 
 import { getSharePointFields } from "@/lib/schema/sharepointSchema";
-import { hasRecentNotificationDedupe } from "@/lib/services/notificationLogService";
+import {
+  hasRecentNotificationDedupe,
+  writeNotificationLog,
+} from "@/lib/services/notificationLogService";
+import { mapPermissionItem } from "@/lib/services/permissionService";
 import { sendNotification } from "@/lib/services/notificationService";
 import {
   loadEmailBrandAttachments,
@@ -12,13 +16,32 @@ import {
   splitNporsCategories,
 } from "@/lib/training/nporsCategoryOptions";
 import {
-  asString,
   extractLookupId,
   getListItemByKey,
 } from "@/lib/services/sharePointListService";
 import { getWorkforceIdByCandidateName } from "@/lib/services/workforceService";
 import { formatDate } from "@/lib/utils/formatDate";
-import type { NotificationSendResult } from "@/types/notifications";
+import {
+  checkTrainingManagerContact,
+  resolveAction,
+  summarizeTrainingManagerEmail,
+  type ChangeAction,
+  type NotifyTrainingRecordResult,
+  type TrainingRecordNotificationRecord,
+} from "@/lib/services/trainingManagerNotificationRules";
+
+export {
+  checkTrainingManagerContact,
+  resolveAction,
+  summarizeTrainingManagerEmail,
+};
+export type {
+  NotifyTrainingRecordResult,
+  TrainingManagerEmailSummary,
+  TrainingRecordNotificationRecord,
+} from "@/lib/services/trainingManagerNotificationRules";
+import type { PermissionProfile } from "@/types/models";
+import type { NotificationCategory } from "@/types/notifications";
 
 /**
  * Emails the assigned Training Manager whenever a training record is added,
@@ -41,47 +64,15 @@ type Register =
   | "inHouseCertificates"
   | "nvqRegister";
 
-type ChangeAction = "added" | "updated" | "confirmed";
 
-/** Fields the notification pulls from the just-saved record. */
-export interface TrainingRecordNotificationRecord {
-  id: string;
-  candidateName: string;
-  companyName: string | null;
-  /** SharePoint Workforce Lookup id — required to resolve the assigned TM. */
-  candidateLookupId?: string | null;
-  /** Alias used by some register mappers. */
-  workforceId?: string | null;
-  trainingDate?: string | null;
-  /** NVQ uses registration / induction instead of a training date. */
-  dateRegistered?: string | null;
-  inductionDate?: string | null;
-  expiry?: string | null;
-  /** Register-specific category / course fields — first non-empty wins. */
-  nporsCategory?: string | null;
-  /** NPORS card / registration number from the register row. */
-  nporsNumber?: string | null;
-  eusrCategory?: string | null;
-  streetworksCategory?: string | null;
-  certificateCategory?: string | null;
-  courseCategory?: string | null;
-  course?: string | null;
-  /** NVQ record shape. */
-  nvqTitle?: string | null;
-  boltOn?: string | null;
-  /** Optional outcome text used to detect "confirmed" (Pass / Fail). */
-  trainingOutcome?: string | null;
-  /** NVQ status — Completed is treated as confirmed. */
-  status?: string | null;
-}
 
-export interface NotifyTrainingRecordResult {
-  attempted: boolean;
-  skipped: boolean;
-  skipReason?: string;
-  recipient?: string;
-  result?: NotificationSendResult;
-}
+const REGISTER_CATEGORIES: Record<Register, NotificationCategory> = {
+  nporsRegister: "training_npors",
+  eusrRegister: "training_eusr",
+  nrswaRegister: "training_streetworks",
+  inHouseCertificates: "training_in_house",
+  nvqRegister: "training_nvq",
+};
 
 const REGISTER_LABELS: Record<Register, string> = {
   nporsRegister: "NPORS",
@@ -91,20 +82,6 @@ const REGISTER_LABELS: Record<Register, string> = {
   nvqRegister: "NVQ",
 };
 
-function isConfirmedOutcome(outcome: string | null | undefined): boolean {
-  const value = outcome?.trim().toLowerCase();
-  return value === "pass" || value === "fail" || value === "confirmed";
-}
-
-function resolveAction(
-  requested: "added" | "updated",
-  record: TrainingRecordNotificationRecord,
-): ChangeAction {
-  if (requested !== "updated") return requested;
-  if (isConfirmedOutcome(record.trainingOutcome)) return "confirmed";
-  if (record.status?.trim().toLowerCase() === "completed") return "confirmed";
-  return requested;
-}
 
 function resolveTrainingDate(record: TrainingRecordNotificationRecord): string | null {
   return (
@@ -152,50 +129,31 @@ function resolveCategory(
 }
 
 /**
- * Reads the candidate's Workforce row and returns the assigned Training
- * Manager's Permissions row id, or null when there is no TM assignment.
+ * Reads the candidate's Workforce row: the assigned Training Manager's
+ * Permissions row id (null when none) and the candidate's company id.
  */
-async function resolveTrainingManagerLookupId(
+async function resolveAssignment(
   candidateLookupId: string,
-): Promise<string | null> {
+): Promise<{ tmPermissionId: string | null; companyId: string | null } | null> {
   const workforceFields = getSharePointFields("workforce");
   const workforce = await getListItemByKey("workforce", candidateLookupId);
   if (!workforce) return null;
-  const tmLookupId = extractLookupId(
-    workforce.fields,
-    workforceFields.trainingManager,
-  );
-  return tmLookupId || null;
+  return {
+    tmPermissionId:
+      extractLookupId(workforce.fields, workforceFields.trainingManager) ||
+      null,
+    companyId:
+      extractLookupId(workforce.fields, workforceFields.companyName) || null,
+  };
 }
 
-interface TrainingManagerContact {
-  email: string;
-  displayName: string | null;
-}
 
-/**
- * Reads the Permissions row for the assigned TM and returns email + name.
- * Skips inactive TMs so we never email someone whose portal access is off.
- */
-async function loadTrainingManagerContact(
+async function loadTrainingManagerProfile(
   permissionId: string,
-): Promise<TrainingManagerContact | null> {
-  const permissionFields = getSharePointFields("permissions");
+): Promise<PermissionProfile | null> {
   const permission = await getListItemByKey("permissions", permissionId);
   if (!permission) return null;
-
-  const status = asString(permission.fields[permissionFields.status])?.trim();
-  if (status && status.toLowerCase() !== "active") return null;
-
-  const email = asString(permission.fields[permissionFields.userEmail])
-    ?.trim()
-    .toLowerCase();
-  if (!email) return null;
-
-  const displayName =
-    asString(permission.fields[permissionFields.name])?.trim() || null;
-
-  return { email, displayName };
+  return mapPermissionItem(permission.id, permission.fields);
 }
 
 /**
@@ -263,46 +221,66 @@ function buildEmail(input: {
 }
 
 /**
- * Fire-and-forget notification for a single register save. Best-effort:
- * catches any error so the underlying training-record save is never blocked.
+ * Notification for a single register save. Best-effort: never throws, so the
+ * training-record save is never blocked. Every path that does not email the
+ * Training Manager is written to the notification log with its reason.
  */
 export async function notifyTrainingRecordChange(input: {
   register: Register;
   action: "added" | "updated";
   record: TrainingRecordNotificationRecord;
   actorEmail: string | null | undefined;
+  /**
+   * Pass/Fail result before this edit (PATCH only). Lets an unchanged result
+   * go out as "updated" instead of a repeated result email.
+   */
+  previousOutcome?: string | null;
 }): Promise<NotifyTrainingRecordResult> {
+  const registerLabel = REGISTER_LABELS[input.register];
+  const skip = async (skipReason: string): Promise<NotifyTrainingRecordResult> => {
+    await writeNotificationLog({
+      type: "training_record_change",
+      status: "skipped",
+      recipientEmail: null,
+      companyName: input.record.companyName ?? null,
+      subject: `${registerLabel} training ${input.action}: ${input.record.candidateName}`,
+      itemId: input.record.id,
+      errorMessage: skipReason,
+      detail: `${registerLabel} training ${input.action}`,
+      actorEmail: input.actorEmail,
+    });
+    return { attempted: false, skipped: true, skipReason };
+  };
+
   try {
-    const action = resolveAction(input.action, input.record);
+    const action = resolveAction(
+      input.action,
+      input.record,
+      input.previousOutcome,
+    );
     const workforceId = await resolveWorkforceId(input.record);
     if (!workforceId) {
-      return {
-        attempted: false,
-        skipped: true,
-        skipReason:
-          "Candidate is not linked to a Workforce row, so no Training Manager can be resolved.",
-      };
+      return await skip(
+        "Candidate is not linked to a Workforce row, so no Training Manager can be resolved.",
+      );
     }
 
-    const tmPermissionId = await resolveTrainingManagerLookupId(workforceId);
-    if (!tmPermissionId) {
-      return {
-        attempted: false,
-        skipped: true,
-        skipReason:
-          "Candidate has no Training Manager assigned on the Workforce row.",
-      };
+    const assignment = await resolveAssignment(workforceId);
+    if (!assignment) {
+      return await skip(`Workforce row #${workforceId} was not found.`);
+    }
+    if (!assignment.tmPermissionId) {
+      return await skip(
+        "Candidate has no Training Manager assigned on the Workforce row.",
+      );
     }
 
-    const contact = await loadTrainingManagerContact(tmPermissionId);
-    if (!contact) {
-      return {
-        attempted: false,
-        skipped: true,
-        skipReason:
-          "Assigned Training Manager could not be resolved (missing Permissions row, inactive, or no email).",
-      };
-    }
+    const checked = checkTrainingManagerContact(
+      await loadTrainingManagerProfile(assignment.tmPermissionId),
+      assignment.companyId,
+    );
+    if ("skip" in checked) return await skip(checked.skip);
+    const contact = checked.contact;
 
     const category = resolveCategory(input.register, input.record);
     const actor = input.actorEmail?.trim() || "PAVE Training";
@@ -316,7 +294,7 @@ export async function notifyTrainingRecordChange(input: {
         attempted: false,
         skipped: true,
         skipReason:
-          "Recent notification already sent for this record and action within the 10-minute dedupe window.",
+          "The same email for this record was already sent in the last 10 minutes.",
         recipient: contact.email,
       };
     }
@@ -334,8 +312,11 @@ export async function notifyTrainingRecordChange(input: {
       includeCompanyLogo: brand.includeCompanyLogo,
     });
 
+    // sendNotification applies Settings -> Notification types and logs the
+    // outcome (sent / failed / skipped / not configured) itself.
     const result = await sendNotification({
       type: "training_record_change",
+      category: REGISTER_CATEGORIES[input.register],
       to: contact.email,
       subject: template.subject,
       text: template.text,
@@ -344,30 +325,73 @@ export async function notifyTrainingRecordChange(input: {
       itemId: input.record.id,
       dedupeKey,
       actorEmail: input.actorEmail,
-      detail: `${REGISTER_LABELS[input.register]} training ${action}`,
+      detail: `${registerLabel} training ${action}`,
       fromName: "PAVE Training",
       attachments: brand.attachments.length ? brand.attachments : undefined,
     });
 
     return {
       attempted: true,
-      skipped: result.status === "skipped",
+      skipped: result.status !== "sent",
       skipReason:
-        result.status === "skipped" ? (result.errorMessage ?? undefined) : undefined,
+        result.status === "sent" ? undefined : (result.errorMessage ?? undefined),
       recipient: contact.email,
       result,
     };
   } catch (error) {
-    // Never throw — the caller must not fail the save because of a mail error.
+    // Never throw: the caller must not fail the save because of a mail error.
     const message =
       error instanceof Error ? error.message : "Unknown notification error.";
     console.error(
       `[notifyTrainingRecordChange] ${input.register} ${input.action} #${input.record.id}: ${message}`,
     );
+    await writeNotificationLog({
+      type: "training_record_change",
+      status: "failed",
+      companyName: input.record.companyName ?? null,
+      subject: `${registerLabel} training ${input.action}: ${input.record.candidateName}`,
+      itemId: input.record.id,
+      errorMessage: `Notification failed before sending: ${message}`,
+      detail: `${registerLabel} training ${input.action}`,
+      actorEmail: input.actorEmail,
+    });
     return {
       attempted: true,
       skipped: true,
       skipReason: `Notification failed: ${message}`,
+      result: {
+        status: "failed",
+        recipientEmail: "",
+        subject: "",
+        errorMessage: message,
+        logged: true,
+      },
     };
+  }
+}
+
+/**
+ * Pass/Fail result stored on a register row before an edit, so the PATCH
+ * route can tell a NEW result from a re-save. `undefined` when it cannot be
+ * read (the notifier then treats any Pass/Fail as new, as before).
+ */
+export async function readRegisterOutcome(
+  register: Register,
+  id: string,
+): Promise<string | null | undefined> {
+  try {
+    const item = await getListItemByKey(register, id);
+    if (!item) return undefined;
+    const f = getSharePointFields(register) as {
+      trainingOutcome?: string;
+      status?: string;
+    };
+    const read = (key?: string) => {
+      const value = key ? item.fields[key] : null;
+      return typeof value === "string" && value.trim() ? value.trim() : null;
+    };
+    return read(f.trainingOutcome) ?? read(f.status);
+  } catch {
+    return undefined;
   }
 }

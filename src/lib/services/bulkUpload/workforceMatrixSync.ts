@@ -281,8 +281,6 @@ export function buildWorkforceMatrixSource(profile: WorkforceMatrixProfile): {
   if (dob) source.DOB = dob;
   const cscsExpiry = clean(profile.cscsExpiry);
   if (cscsExpiry) source["CSCS Expiry"] = cscsExpiry;
-  const eusrExpiry = clean(profile.eusrExpiry);
-  if (eusrExpiry) source["EUSR Expiry"] = eusrExpiry;
   const swqrExpiry = clean(profile.swqrExpiry);
   if (swqrExpiry) source["NRSWA Expiry"] = swqrExpiry;
 
@@ -453,7 +451,11 @@ export function findMatrixRowByWorkforce<T extends MatrixRowRef>(
   const companyNumber = nameKey(profile.companyNumber);
   if (companyId || companyNumber) {
     const byCompany = nameRows.filter((row) => {
-      if (dobRelation(row) === "conflict") return false;
+      const dob = dobRelation(row);
+      if (dob === "conflict") return false;
+      // Another Workforce person shares this name: a row without a DOB could
+      // be theirs, so only a matching DOB may link (flag, don't guess).
+      if (namePeers > 1 && dob !== "equal") return false;
       const rowCompanyId = idKey(row.companyItemId);
       if (companyId && rowCompanyId && rowCompanyId === companyId) return true;
       const rowCompanyNumber = nameKey(row.companyNumber);
@@ -601,12 +603,21 @@ export function deriveMatrixLinkStatus(input: {
   hasWorkforceItemId: boolean;
   workforceResolved: boolean;
   nameMatchCount: number;
+  /**
+   * For a row with no stored id whose name is unique: does its DOB match that
+   * Workforce record? When given, a missing or different DOB is Needs Review
+   * (the Name + DOB rule) instead of an implicit name-only link. Omitted =
+   * the original name-only behaviour.
+   */
+  nameDobConfirmed?: boolean;
 }): MatrixLinkStatus {
   if (input.hasWorkforceItemId) {
     if (input.workforceResolved) return "Linked";
     return input.nameMatchCount >= 1 ? "Needs Review" : "Orphan";
   }
   if (input.nameMatchCount === 0) return "Orphan";
-  if (input.nameMatchCount === 1) return "Linked";
+  if (input.nameMatchCount === 1) {
+    return input.nameDobConfirmed === false ? "Needs Review" : "Linked";
+  }
   return "Needs Review";
 }

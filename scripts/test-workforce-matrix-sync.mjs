@@ -126,7 +126,9 @@ test("non-blank expiries and DOB are included in source", () => {
   });
   assert.equal(source.DOB, "1990-01-01");
   assert.equal(source["CSCS Expiry"], "2027-03-01");
-  assert.equal(source["EUSR Expiry"], "2028-06-30");
+  // The overall Matrix "EUSR Expiry" column is retired (each EUSR course has
+  // its own column); the EUSR card date stays on the Workforce record only.
+  assert.equal(source["EUSR Expiry"], undefined);
   assert.equal(source["NRSWA Expiry"], "2026-12-31");
 });
 

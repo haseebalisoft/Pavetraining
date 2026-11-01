@@ -3,7 +3,6 @@ import "server-only";
 import {
   listAdminWorkforce,
   toMatrixProfile,
-  updateAdminWorkforce,
   type AdminWorkforceRecord,
 } from "@/lib/services/adminCrudService";
 import {
@@ -27,17 +26,28 @@ import {
   findMatrixRowByWorkforce,
   isoDateKey,
 } from "@/lib/services/bulkUpload/workforceMatrixSync";
-import { nameKey, normalizeCompanyKey } from "@/lib/services/bulkUpload/matching";
+import { normalizeCompanyKey } from "@/lib/services/bulkUpload/matching";
+import {
+  matchWorkforceForMatrixRow,
+  matrixReviewReason,
+} from "@/lib/services/bulkUpload/matrixReviewReason";
 import {
   normalizeDateValue,
   pickField,
   type ParsedSpreadsheet,
 } from "@/lib/services/bulkUpload/parseSpreadsheet";
+import { stopIfPastDeadline } from "@/lib/services/bulkUpload/commitDeadline";
+import {
+  toSharePointFields,
+  updateListItemFieldsByKey,
+} from "@/lib/services/sharePointListService";
+import type { JobDeadline } from "@/lib/jobs/jobOutcome";
 import type {
   BulkCommitRowInput,
   BulkDuplicateMode,
   BulkLinkOutcome,
   BulkPreviewRow,
+  MatrixReviewReason,
 } from "@/types/bulkUpload";
 
 function mapMatrixFields(
@@ -100,109 +110,11 @@ function mapMatrixFields(
   return fields;
 }
 
-type WorkforceMatchType =
-  | "workforceNumber"
-  | "companyNameDob"
-  | "nameDob"
-  | "none";
-
-interface WorkforceMatch {
-  candidate: AdminWorkforceRecord | null;
-  matchType: WorkforceMatchType;
-  /** Several Workforce records tied — never auto-link, leave Needs Review. */
-  ambiguous: boolean;
-}
-
-const NO_WORKFORCE_MATCH: WorkforceMatch = {
-  candidate: null,
-  matchType: "none",
-  ambiguous: false,
-};
-
-/**
- * Resolve the Workforce record a matrix spreadsheet row belongs to.
- *
- * Locked ladder (client rule): Workforce Number → Company + Name + DOB →
- * Name + DOB when unique. Name alone NEVER auto-matches — two candidates can
- * share a name, and attaching one person's training to the other is worse than
- * leaving the row for an admin to resolve.
- */
 function findWorkforceForMatrix(
   workforce: AdminWorkforceRecord[],
   fields: Record<string, string | null>,
-): WorkforceMatch {
-  if (fields.workforceNumber?.trim()) {
-    const numberKey = nameKey(fields.workforceNumber);
-    const byNumber = workforce.filter(
-      (row) => nameKey(row.workforceNumber) === numberKey,
-    );
-    if (byNumber.length === 1) {
-      return {
-        candidate: byNumber[0]!,
-        matchType: "workforceNumber",
-        ambiguous: false,
-      };
-    }
-    if (byNumber.length > 1) {
-      return { candidate: null, matchType: "none", ambiguous: true };
-    }
-  }
-
-  const cName = candidateNameKey(fields.candidateName);
-  if (!cName) return NO_WORKFORCE_MATCH;
-
-  const rowDob = isoDateKey(fields.dateOfBirth);
-  // No DOB means Name is the only key left, and Name alone must not auto-match.
-  if (!rowDob) return NO_WORKFORCE_MATCH;
-
-  const nameDobMatches = workforce.filter(
-    (row) =>
-      candidateNameKey(row.candidateName) === cName &&
-      isoDateKey(row.dateOfBirth) === rowDob,
-  );
-  if (!nameDobMatches.length) return NO_WORKFORCE_MATCH;
-
-  // Company narrows a same-name + same-DOB tie (the client's primary key).
-  const companyHint = fields.company?.trim() ? nameKey(fields.company) : null;
-  const companyNorm = fields.company?.trim()
-    ? normalizeCompanyKey(fields.company)
-    : null;
-  const companyNumberHint = fields.companyNumber?.trim()
-    ? nameKey(fields.companyNumber)
-    : null;
-
-  if (companyHint || companyNumberHint) {
-    const scoped = nameDobMatches.filter(
-      (row) =>
-        (companyNumberHint != null &&
-          nameKey(row.companyNumber) === companyNumberHint) ||
-        (companyHint != null &&
-          (nameKey(row.companyName) === companyHint ||
-            normalizeCompanyKey(row.companyName) === companyNorm)),
-    );
-    if (scoped.length === 1) {
-      return {
-        candidate: scoped[0]!,
-        matchType: "companyNameDob",
-        ambiguous: false,
-      };
-    }
-    if (scoped.length > 1) {
-      return { candidate: null, matchType: "none", ambiguous: true };
-    }
-  }
-
-  if (nameDobMatches.length === 1) {
-    return {
-      candidate: nameDobMatches[0]!,
-      matchType: "nameDob",
-      ambiguous: false,
-    };
-  }
-
-  // Same Name AND same DOB in more than one company with no Company on the
-  // spreadsheet row: Company is required to link safely.
-  return { candidate: null, matchType: "none", ambiguous: true };
+) {
+  return matchWorkforceForMatrixRow(workforce, fields);
 }
 
 function earliestExpiry(fields: Record<string, string | null>): string | null {
@@ -240,7 +152,6 @@ function buildUploadedCells(
     "SSSTS Expiry": fields.ssstsExpiry ?? source["SSSTS Expiry"] ?? null,
     "SMSTS Expiry": fields.smstsExpiry ?? source["SMSTS Expiry"] ?? null,
     "NRSWA Expiry": fields.nrswaExpiry ?? source["NRSWA Expiry"] ?? null,
-    "EUSR Expiry": fields.eusrExpiry ?? source["EUSR Expiry"] ?? null,
     "Face ift": fields.faceFitExpiry ?? source["Face ift"] ?? null,
   };
 }
@@ -279,10 +190,40 @@ function peerCounts(
   };
 }
 
-const UNMATCHED_MESSAGE =
-  "No matching Workforce record — imported as Needs Review. It links automatically once the candidate is added to Workforce with the same Name + DOB.";
-const AMBIGUOUS_WORKFORCE_MESSAGE =
-  "Several Workforce records match this Name + DOB — imported as Needs Review. Add Company to the spreadsheet to link it.";
+/**
+ * The Needs Review row an earlier upload already made for this spreadsheet
+ * person: unlinked, same name, and same DOB — or, when the sheet has no DOB,
+ * no DOB and the same company (name alone is too weak to merge two people).
+ */
+function findUnlinkedRowFor(
+  rows: TrainingMatrixExampleRow[],
+  fields: Record<string, string | null>,
+): TrainingMatrixExampleRow | null {
+  const name = candidateNameKey(fields.candidateName);
+  if (!name) return null;
+  const dob = isoDateKey(fields.dateOfBirth);
+  const company = normalizeCompanyKey(fields.company);
+  const matches = rows.filter((row) => {
+    if (String(row.workforceItemId ?? "").trim()) return false;
+    if (candidateNameKey(row.candidateName) !== name) return false;
+    const rowDob = isoDateKey(row.dateOfBirth);
+    if (dob) return rowDob === dob;
+    return !rowDob && normalizeCompanyKey(row.storedCompanyName) === company;
+  });
+  // Several copies already exist (older uploads): update the oldest rather
+  // than adding yet another.
+  matches.sort((a, b) => Number(a.id) - Number(b.id));
+  return matches[0] ?? null;
+}
+
+/** Message for a row kept as Needs Review: the exact reason, then what happens next. */
+function needsReviewMessage(reason: MatrixReviewReason): string {
+  const next =
+    reason.code === "candidateNotFound"
+      ? "Kept as a Needs Review row — it links automatically once the candidate is added to Workforce with the same Name + DOB."
+      : "Kept as a Needs Review row — fix the data and re-upload, or use Link to Workforce in Admin Matrix.";
+  return `Needs Review — ${reason.label}: ${reason.detail} ${next}`;
+}
 
 /**
  * Validate one matrix spreadsheet row AND predict exactly what the commit will
@@ -334,7 +275,13 @@ function validateMatrixRow(
     const outcome: BulkLinkOutcome = match.ambiguous
       ? "needsReviewMultipleMatches"
       : "needsReviewNoMatch";
-    messages.push(match.ambiguous ? AMBIGUOUS_WORKFORCE_MESSAGE : UNMATCHED_MESSAGE);
+    const reviewReason =
+      match.reason ??
+      matrixReviewReason(
+        "candidateNotFound",
+        `No Workforce record matches "${fields.candidateName ?? ""}".`,
+      );
+    messages.push(needsReviewMessage(reviewReason));
     if (categoryCount > 0) {
       messages.push(
         `${categoryCount} expiry value(s) will be saved on the Needs Review row (category backup records are skipped until it is linked).`,
@@ -353,6 +300,7 @@ function validateMatrixRow(
       matchedEntityName: null,
       duplicateMatch: null,
       linkOutcome: outcome,
+      reviewReason,
       matrixRowId: null,
     };
   }
@@ -387,11 +335,17 @@ function validateMatrixRow(
   );
 
   if (rowMatch.ambiguous) {
+    const rowIds = rowMatch.candidates.map((row) => `#${row.id}`).join(", ");
+    const reviewReason = matrixReviewReason(
+      "multipleMatrixRows",
+      `${rowMatch.candidates.length || "Several"} unlinked Training Matrix rows${rowIds ? ` (${rowIds})` : ""} match ${candidate.candidateName} — skipped to avoid attaching training to the wrong person. Delete the extra rows or use Link to Workforce in Admin Matrix, then re-upload.`,
+    );
     return {
       rowNumber,
       status: "Warning",
+      reviewReason,
       messages: [
-        "Several unlinked Training Matrix rows match this candidate — skipped to avoid attaching training to the wrong person. Resolve them in Admin Matrix.",
+        `Needs Review — ${reviewReason.label}: ${reviewReason.detail}`,
         ...messages,
         ...notes,
       ],
@@ -446,13 +400,25 @@ async function syncWorkforceMetaExpiries(
   candidate: AdminWorkforceRecord,
   fields: Record<string, string | null>,
 ): Promise<string[]> {
-  // Matrix list shows CSCS/EUSR/NRSWA via Workforce lookup columns — keep them in sync.
+  // Matrix list shows CSCS/EUSR/NRSWA via Workforce lookup columns — keep them
+  // in sync. Only the changed expiry fields are PATCHed: this used to call the
+  // full updateAdminWorkforce per row, which re-read Permissions, Departments,
+  // Companies and the whole Training Matrix list and re-wrote the matrix row —
+  // the bulk of a matrix upload's time.
   const patch: Record<string, string> = {};
-  if (fields.cscsExpiry?.trim()) patch.cscsExpiry = fields.cscsExpiry.trim();
-  if (fields.eusrExpiry?.trim()) patch.eusrExpiry = fields.eusrExpiry.trim();
-  if (fields.nrswaExpiry?.trim()) patch.swqrExpiry = fields.nrswaExpiry.trim();
+  const set = (key: "cscsExpiry" | "eusrExpiry" | "swqrExpiry", value?: string | null) => {
+    const next = isoDateKey(value);
+    if (next && next !== isoDateKey(candidate[key])) patch[key] = next;
+  };
+  set("cscsExpiry", fields.cscsExpiry);
+  set("eusrExpiry", fields.eusrExpiry);
+  set("swqrExpiry", fields.nrswaExpiry);
   if (!Object.keys(patch).length) return [];
-  await updateAdminWorkforce(candidate.id, patch);
+  await updateListItemFieldsByKey(
+    "workforce",
+    candidate.id,
+    toSharePointFields("workforce", patch),
+  );
   return [
     `Workforce meta expiries updated (${Object.keys(patch).join(", ")}).`,
   ];
@@ -461,6 +427,7 @@ async function syncWorkforceMetaExpiries(
 async function writeCategoriesForRow(
   fields: Record<string, string | null>,
   raw: Record<string, string | null>,
+  candidate: AdminWorkforceRecord,
   caches?: Awaited<ReturnType<typeof loadMatrixCategoryLookupCaches>>,
 ): Promise<string[]> {
   const categories = extractCategoryWritesFromRow({ ...raw, ...fields });
@@ -468,11 +435,14 @@ async function writeCategoriesForRow(
   const result = await upsertMatrixCategoryRecords({
     candidateName: fields.candidateName ?? "",
     companyName: fields.company ?? "",
+    // The person this row matched by Name + DOB — never a name lookup.
+    candidateId: candidate.id,
+    companyId: candidate.companyId,
     categories,
     caches,
   });
   const messages = [
-    `Category records: ${result.written} written` +
+    `Category records: ${result.written} written, ${result.unchanged} already up to date` +
       (result.failed ? `, ${result.failed} failed` : ""),
   ];
   if (result.errors.length) {
@@ -532,6 +502,8 @@ export async function commitMatrixImport(input: {
   rows: BulkCommitRowInput[];
   duplicateMode: BulkDuplicateMode;
   log?: BulkLogger;
+  /** Stop between rows once passed; unreached rows return as Not processed. */
+  deadline?: JobDeadline;
 }): Promise<BulkPreviewRow[]> {
   // Each row writes a matrix row + its category records + the workforce meta
   // expiries, serially — a 50-row sheet is minutes of Graph traffic. Without
@@ -558,18 +530,35 @@ export async function commitMatrixImport(input: {
     else liveRows.push(row);
   };
   const results: BulkPreviewRow[] = [];
+  const categoryBacklog: Array<{
+    resultIndex: number;
+    fields: Record<string, string | null>;
+    source: Record<string, string | null>;
+    candidate: AdminWorkforceRecord;
+  }> = [];
 
   const rowsPhase = log.phase("rows");
   let done = 0;
   const total = input.rows.length;
   const tick = () => {
     done += 1;
-    if (done % 10 === 0 || done === total) {
-      log.info("progress", { done, total });
-    }
+    // Every row: rows are slow serial writes, so the admin's gauge should
+    // move with each one rather than sit on "…" for the first ten.
+    log.info("progress", { done, total });
   };
 
-  for (const row of input.rows) {
+  for (let index = 0; index < input.rows.length; index += 1) {
+    const notProcessed = stopIfPastDeadline(
+      input.deadline,
+      input.rows,
+      index,
+      log,
+    );
+    if (notProcessed) {
+      results.push(...notProcessed);
+      break;
+    }
+    const row = input.rows[index];
     const source = row.source ?? row.fields;
     const fields = mapMatrixFields(source);
     for (const [key, value] of Object.entries(row.fields)) {
@@ -628,7 +617,10 @@ export async function commitMatrixImport(input: {
           companyName: validated.fields.company,
           companyNumber: validated.fields.companyNumber,
           uploadedCells,
-          existingRow: null,
+          // Re-uploading the same sheet (e.g. a retry after a dropped
+          // connection) must update this person's Needs Review row, not add
+          // another copy every time.
+          existingRow: findUnlinkedRowFor(liveRows, validated.fields),
         });
         replaceLive(unlinked.row);
         results.push({
@@ -662,6 +654,11 @@ export async function commitMatrixImport(input: {
           ...validated,
           status: "Warning",
           linkOutcome: "skippedAmbiguous",
+          reviewReason: matrixReviewReason(
+            "multipleMatrixRows",
+            sync.warnings.join(" ") ||
+              "Several unlinked Training Matrix rows match this candidate — skipped to avoid attaching training to the wrong person.",
+          ),
           messages: [...validated.messages, ...sync.warnings],
         });
         tick();
@@ -675,11 +672,14 @@ export async function commitMatrixImport(input: {
               "Duplicate mode 'create' does not apply to Training Matrix rows — the existing linked row was updated instead.",
             ]
           : [];
-      const catMessages = await writeCategoriesForRow(
-        validated.fields,
+      // Category backup records are written in a second pass (below), after
+      // every row's Matrix dates — what customers actually see — are saved.
+      categoryBacklog.push({
+        resultIndex: results.length,
+        fields: validated.fields,
         source,
-        categoryCaches,
-      );
+        candidate,
+      });
       const wfMessages = await syncWorkforceMetaExpiries(
         candidate,
         validated.fields,
@@ -697,7 +697,6 @@ export async function commitMatrixImport(input: {
             ? `Training Matrix Update: created linked row #${sync.id}.`
             : `Training Matrix Update: updated linked row #${sync.id}.`,
           ...duplicateNote,
-          ...catMessages,
           ...wfMessages,
         ],
       });
@@ -716,6 +715,51 @@ export async function commitMatrixImport(input: {
     tick();
   }
   rowsPhase.end({ rows: total });
+
+  // Pass 2: category backup records (one per filled N-code, ~150 per row on
+  // the client's sheet). Only the legacy matrix editor reads them, so they
+  // never hold up the customer-visible Matrix rows above. Whatever the time
+  // budget doesn't cover is reported and finishes on re-upload (unchanged
+  // records are skipped, so a re-run only writes what is missing).
+  const categoriesPhase = log.phase("categories");
+  let pendingBackups = 0;
+  let backupsDone = 0;
+  for (const pending of categoryBacklog) {
+    backupsDone += 1;
+    log.info("progress", { done: backupsDone, total: categoryBacklog.length });
+    const row = results[pending.resultIndex]!;
+    if (input.deadline?.expired()) {
+      pendingBackups += 1;
+      row.backupPending = true;
+      row.messages = [
+        ...row.messages,
+        "Category backup records not written yet (time limit) — the Matrix dates are saved; re-upload the file to finish the backup.",
+      ];
+      continue;
+    }
+    try {
+      row.messages = [
+        ...row.messages,
+        ...(await writeCategoriesForRow(
+          pending.fields,
+          pending.source,
+          pending.candidate,
+          categoryCaches,
+        )),
+      ];
+    } catch (error) {
+      row.messages = [
+        ...row.messages,
+        `Category backup records failed: ${
+          error instanceof Error ? error.message : "unknown error"
+        } — the Matrix dates are saved.`,
+      ];
+    }
+  }
+  categoriesPhase.end({
+    rows: categoryBacklog.length,
+    pending: pendingBackups,
+  });
 
   return results;
 }

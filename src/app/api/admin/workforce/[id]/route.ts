@@ -1,7 +1,7 @@
 import { withAdminApi } from "@/lib/api/adminApi";
 import {
   deleteAdminWorkforce,
-  updateAdminWorkforce,
+  updateAdminWorkforceAndRelink,
 } from "@/lib/services/adminCrudService";
 import { logWorkforceDepartmentAssign } from "@/lib/services/auditLogService";
 
@@ -16,7 +16,11 @@ export async function PATCH(
     "PATCH /api/admin/workforce/[id]",
     async (ctx, req) => {
       const body = (await req.json()) as Record<string, unknown>;
-      const record = await updateAdminWorkforce(id, body);
+      // A corrected name / DOB re-links unlinked Matrix rows that now match.
+      const { record, matrixRelink } = await updateAdminWorkforceAndRelink(
+        id,
+        body,
+      );
       if (body.department !== undefined || body.departmentText !== undefined) {
         await logWorkforceDepartmentAssign({
           userEmail: ctx.loggedInEmail,
@@ -28,7 +32,7 @@ export async function PATCH(
           request: req,
         });
       }
-      return { record };
+      return { record, matrixRelink };
     },
     { errorMessage: "Failed to update candidate" },
     request,

@@ -1114,6 +1114,40 @@
   accent-color: var(--pave-lime);
 }
 
+.optionSearch {
+  display: grid;
+  gap: 0.45rem;
+  margin-bottom: 0.5rem;
+}
+
+.optionChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.optionChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.35rem 0.15rem 0.6rem;
+  border: 1px solid var(--pave-border);
+  border-radius: 999px;
+  background: var(--pave-surface);
+  color: var(--admin-text);
+  font-size: 0.85rem;
+}
+
+.optionChip button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 0.2rem;
+}
+
 .statsGrid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -2153,6 +2187,16 @@ th.stickyActionsCell {
   align-items: flex-start;
   gap: 0.25rem;
   min-width: 0;
+}
+
+.matrixLinkReason {
+  display: block;
+  max-width: 22rem;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: var(--pave-charcoal);
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .matrixNameLink {
@@ -3915,4 +3959,34 @@ th.stickyActionsCell {
   .commitClockMeta {
     align-items: center;
   }
+}
+
+/* Event start/end: date + 15-minute time dropdown side by side. */
+.quarterHourInput {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(6.5rem, auto);
+  gap: 0.5rem;
+}
+
+/* Event documents (Events editor + list-view Documents panel). */
+.eventDocuments {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.eventDocumentList {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+
+.eventDocumentActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
 }

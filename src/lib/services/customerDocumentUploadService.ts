@@ -61,6 +61,11 @@ export type UploadDocumentInput = {
   notifyCustomer?: boolean;
   /** Bulk/import uploads should set true to suppress emails. */
   suppressNotifications?: boolean;
+  /**
+   * Company-level documents only: folders under Company Documents, e.g.
+   * ["Events", "<event id>"] for an event's attachments.
+   */
+  companySubfolders?: string[];
   fileName: string;
   contentType?: string | null;
   bytes: Uint8Array;
@@ -211,6 +216,7 @@ export async function uploadCustomerDocument(
       candidateName,
       documentType,
       hasCandidate: !isCompanyLevel,
+      companySubfolders: isCompanyLevel ? input.companySubfolders : undefined,
     });
 
     if (!folder.folderId || folder.folderId === "root") {

@@ -24,6 +24,10 @@ import {
 import { readPublicApiError } from "@/lib/errors/publicMessages";
 import { addCalendarYearsIso, defaultPassExpiryIso } from "@/lib/utils/formatDate";
 import { isValidEmail } from "@/lib/validation/email";
+import type { MatrixRelinkResult } from "@/types/matrixSync";
+import { endAfterStartError } from "@/lib/utils/quarterHour";
+import { QuarterHourDateTimeInput } from "@/components/admin/QuarterHourDateTimeInput";
+import { searchOptions } from "@/lib/utils/optionSearch";
 import type { Company } from "@/types/models";
 
 import styles from "./admin.module.css";
@@ -79,6 +83,16 @@ export interface AdminFieldConfig {
   label: string;
   type: AdminFieldType;
   required?: boolean;
+  /**
+   * datetime fields: name of the field this one must come strictly after
+   * (e.g. an event's end after its start). Checked before saving.
+   */
+  mustBeAfter?: string;
+  /**
+   * multiselect: show a search box above the options (matches name or code,
+   * e.g. "paver", "N220" or "220"). Enter ticks the top result.
+   */
+  searchable?: boolean;
   readOnly?: boolean;
   options?: Array<{ value: string; label: string }>;
   /**
@@ -626,6 +640,8 @@ export function AdminCrudPage<T extends { id: string }>({
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState<T | null>(null);
   const [form, setForm] = useState<FormState>({});
+  /** Search text per searchable multiselect field, keyed by field name. */
+  const [optionSearch, setOptionSearch] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [workforceQuery, setWorkforceQuery] = useState("");
   const [saving, setSaving] = useState(false);
@@ -826,6 +842,7 @@ export function AdminCrudPage<T extends { id: string }>({
     setForm(next);
     setFormError(null);
     setWorkforceQuery("");
+    setOptionSearch({});
     void refreshPermissionPeople();
     setDrawerOpen(true);
   }
@@ -1232,11 +1249,21 @@ export function AdminCrudPage<T extends { id: string }>({
     setForm(next);
     setFormError(null);
     setWorkforceQuery("");
+    setOptionSearch({});
     void refreshPermissionPeople();
     setDrawerOpen(true);
   }
 
   function validate(next: FormState): string | null {
+    for (const field of fields) {
+      if (field.mustBeAfter) {
+        const error = endAfterStartError(
+          String(next[field.mustBeAfter] ?? ""),
+          String(next[field.name] ?? ""),
+        );
+        if (error) return error;
+      }
+    }
     for (const field of fields) {
       const value = next[field.name];
       if (
@@ -1470,6 +1497,12 @@ export function AdminCrudPage<T extends { id: string }>({
         /** Permissions saves: whether the portal access email went out. */
         accessEmail?: { sent: boolean; message: string } | null;
         matrixSeedWarning?: string;
+        /** Matrix row edit: what re-matching did after a name / DOB change. */
+        relink?: MatrixRelinkResult | null;
+        /** Workforce edit: Matrix rows re-linked after a name / DOB change. */
+        matrixRelink?: MatrixRelinkResult[];
+        /** Register saves: the real Training Manager email outcome. */
+        trainingManagerEmail?: { status: string; message: string } | null;
         matrixSync?: {
           summary?: {
             updated?: number;
@@ -1501,6 +1534,29 @@ export function AdminCrudPage<T extends { id: string }>({
         (isCreate ? "Record created." : "Record updated.") + syncNote,
         "success",
       );
+      // Name / DOB corrections re-run Workforce matching: say exactly what
+      // happened — linked, merged into the existing row, or still unmatched
+      // (with the reason). "Still linked" is the quiet default, not toasted.
+      for (const relink of [
+        ...(payload?.relink ? [payload.relink] : []),
+        ...(payload?.matrixRelink ?? []),
+      ]) {
+        if (relink.outcome === "alreadyLinked") continue;
+        pushToast(
+          `Training Matrix: ${relink.message}`,
+          relink.outcome === "unmatched" ? "error" : "success",
+        );
+      }
+      if (payload?.trainingManagerEmail?.message) {
+        // "sent" only when Graph accepted the email; failures are logged.
+        pushToast(
+          payload.trainingManagerEmail.message,
+          payload.trainingManagerEmail.status === "sent" ||
+            payload.trainingManagerEmail.status === "skipped"
+            ? "success"
+            : "error",
+        );
+      }
       if (payload?.accessEmail?.message) {
         pushToast(
           payload.accessEmail.message,
@@ -2426,6 +2482,50 @@ export function AdminCrudPage<T extends { id: string }>({
                   }
                 }
               }
+              const isChecked = (option: { value: string; label: string }) =>
+                selectedSet.has(option.value.trim().toLowerCase()) ||
+                selectedSet.has(option.label.trim().toLowerCase());
+              const toggleOption = (value: string) => {
+                setForm((current) => {
+                  const currentParts = String(current[field.name] ?? "")
+                    .split(/[;,|]+/)
+                    .map((part) => part.trim())
+                    .filter(Boolean);
+                  const exists = currentParts.some(
+                    (part) => part.toLowerCase() === value.trim().toLowerCase(),
+                  );
+                  const nextParts = exists
+                    ? currentParts.filter(
+                        (part) =>
+                          part.toLowerCase() !== value.trim().toLowerCase(),
+                      )
+                    : [...currentParts, value];
+                  return {
+                    ...current,
+                    [field.name]: nextParts.join(", "),
+                  };
+                });
+              };
+              const searchText = field.searchable
+                ? (optionSearch[field.name] ?? "")
+                : "";
+              const clearSearch = () =>
+                setOptionSearch((current) => ({ ...current, [field.name]: "" }));
+              const visibleOptions = searchOptions(multiOptions, searchText);
+              // Ticked values stay visible as chips while the list is
+              // filtered — including saved values no longer offered (kept as-is).
+              const selectedChips = field.searchable
+                ? selected.map((value) => {
+                    const key = value.toLowerCase();
+                    const option = multiOptions.find(
+                      (candidate) =>
+                        candidate.value.trim().toLowerCase() === key ||
+                        candidate.label.trim().toLowerCase() === key,
+                    );
+                    // value = the stored text, so × removes exactly that entry.
+                    return { value, label: option?.label ?? value };
+                  })
+                : [];
               const hideDeptCoverage =
                 field.name === "departmentsAllowed" &&
                 !String(form.accessScope ?? "")
@@ -2463,12 +2563,66 @@ export function AdminCrudPage<T extends { id: string }>({
                       Departments.
                     </p>
                   ) : null}
+                  {hideDeptCoverage || !field.searchable ? null : (
+                    <div className={styles.optionSearch}>
+                      <input
+                        type="search"
+                        className={styles.input}
+                        placeholder="Type a name or code, e.g. Paver or N220"
+                        aria-label={`Search ${field.label}`}
+                        value={searchText}
+                        disabled={field.readOnly}
+                        onChange={(event) =>
+                          setOptionSearch((current) => ({
+                            ...current,
+                            [field.name]: event.target.value,
+                          }))
+                        }
+                        onKeyDown={(event) => {
+                          if (event.key === "Escape" && searchText) {
+                            event.preventDefault();
+                            clearSearch();
+                            return;
+                          }
+                          if (event.key !== "Enter") return;
+                          // Enter ticks the best match (never submits the form).
+                          event.preventDefault();
+                          const top = searchText.trim() ? visibleOptions[0] : undefined;
+                          if (top && !isChecked(top)) toggleOption(top.value);
+                          clearSearch();
+                        }}
+                      />
+                      {selectedChips.length ? (
+                        <div className={styles.optionChips} aria-label="Selected">
+                          {selectedChips.map((chip) => (
+                            <span key={chip.value} className={styles.optionChip}>
+                              {chip.label}
+                              {field.readOnly ? null : (
+                                <button
+                                  type="button"
+                                  aria-label={`Remove ${chip.label}`}
+                                  onClick={() => toggleOption(chip.value)}
+                                >
+                                  ×
+                                </button>
+                              )}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                      {searchText.trim() ? (
+                        <p className={styles.helpText} aria-live="polite">
+                          {visibleOptions.length
+                            ? `${visibleOptions.length} match${visibleOptions.length === 1 ? "" : "es"} — press Enter to tick the first.`
+                            : `Nothing matches "${searchText.trim()}".`}
+                        </p>
+                      ) : null}
+                    </div>
+                  )}
                   {hideDeptCoverage ? null : (
                   <div className={styles.multiSelectList}>
-                    {multiOptions.map((option) => {
-                      const checked =
-                        selectedSet.has(option.value.trim().toLowerCase()) ||
-                        selectedSet.has(option.label.trim().toLowerCase());
+                    {visibleOptions.map((option) => {
+                      const checked = isChecked(option);
                       return (
                         <label
                           key={option.value}
@@ -2478,32 +2632,7 @@ export function AdminCrudPage<T extends { id: string }>({
                             type="checkbox"
                             checked={checked}
                             disabled={field.readOnly}
-                            onChange={() => {
-                              setForm((current) => {
-                                const currentParts = String(
-                                  current[field.name] ?? "",
-                                )
-                                  .split(/[;,|]+/)
-                                  .map((part) => part.trim())
-                                  .filter(Boolean);
-                                const exists = currentParts.some(
-                                  (part) =>
-                                    part.toLowerCase() ===
-                                    option.value.trim().toLowerCase(),
-                                );
-                                const nextParts = exists
-                                  ? currentParts.filter(
-                                      (part) =>
-                                        part.toLowerCase() !==
-                                        option.value.trim().toLowerCase(),
-                                    )
-                                  : [...currentParts, option.value];
-                                return {
-                                  ...current,
-                                  [field.name]: nextParts.join(", "),
-                                };
-                              });
-                            }}
+                            onChange={() => toggleOption(option.value)}
                           />
                           <span>{option.label}</span>
                         </label>
@@ -2937,6 +3066,21 @@ export function AdminCrudPage<T extends { id: string }>({
                   ) : null}
                 </label>
               );
+            } else if (field.type === "datetime") {
+              // 15-minute steps (09:00, 09:15, …); same YYYY-MM-DDTHH:mm value.
+              control = (
+                <div className={styles.field}>
+                  <span className={styles.fieldLabel}>{field.label}</span>
+                  <QuarterHourDateTimeInput
+                    label={field.label}
+                    value={String(form[field.name] ?? "")}
+                    disabled={field.readOnly}
+                    onChange={(value) =>
+                      setForm((current) => ({ ...current, [field.name]: value }))
+                    }
+                  />
+                </div>
+              );
             } else {
               control = (
                 <label className={styles.field}>
@@ -2944,11 +3088,7 @@ export function AdminCrudPage<T extends { id: string }>({
                   <input
                     className={styles.input}
                     type={
-                      field.type === "date"
-                        ? "date"
-                        : field.type === "datetime"
-                          ? "datetime-local"
-                          : "text"
+                      field.type === "date" ? "date" : "text"
                     }
                     inputMode={field.type === "email" ? "email" : undefined}
                     autoComplete={

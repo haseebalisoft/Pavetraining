@@ -207,16 +207,31 @@ async function withCompanyLogoResult(
   companyId: string,
   fields: Record<string, string | null>,
   base: BulkPreviewRow,
+  existing?: Company | null,
 ): Promise<BulkPreviewRow> {
   const saved = { ...base, savedEntityId: companyId };
   const plan = planCompanyLogoImport(fields.companyLogo);
+  if (plan.kind === "missing") {
+    return { ...saved, messages: [...base.messages, plan.note] };
+  }
   if (plan.kind === "file") {
-    // The browser uploads the attached file to this company after import.
+    if (isCurrentLogoFile(existing, plan.fileName)) {
+      return {
+        ...saved,
+        messages: [
+          ...base.messages,
+          `Company Logo "${plan.fileName}" is already this company's logo — kept.`,
+        ],
+      };
+    }
+    // Not uploaded yet: the browser uploads the attached file to this
+    // company after the import and replaces this note with the real outcome.
     return {
       ...saved,
+      pendingLogoFile: plan.fileName,
       messages: [
         ...base.messages,
-        `Company Logo "${plan.fileName}" — uploaded from the attached logo files.`,
+        `Company Logo "${plan.fileName}" — waiting for the attached logo file.`,
       ],
     };
   }
@@ -237,6 +252,19 @@ async function withCompanyLogoResult(
     ...saved,
     messages: [...base.messages, logoWarning],
   };
+}
+
+/**
+ * A SharePoint export lists the stored logo's file name in Company Logo
+ * ("1785356565112-alder-finch.png"). Re-importing that export must keep the
+ * logo, not ask the admin to attach a file they never had.
+ */
+function isCurrentLogoFile(
+  company: Company | null | undefined,
+  fileName: string,
+): boolean {
+  const current = company?.companyLogoFileName?.trim().toLowerCase();
+  return Boolean(current && current === fileName.trim().toLowerCase());
 }
 
 /** Existing company whose Company Number equals `number` (case/space-insensitive). */
@@ -261,6 +289,8 @@ function validateCompanyRow(
   allocatedNumbers: string[],
 ): BulkPreviewRow {
   const messages: string[] = [];
+  /** Informational notes — shown with the row but never make it a Warning. */
+  const notes: string[] = [];
   const companyName = fields.companyName?.trim() ?? "";
   const incoming = fields.companyNumber?.trim() ?? "";
   let companyNumber = incoming;
@@ -307,7 +337,7 @@ function validateCompanyRow(
     if (decision.companyNumber) {
       companyNumber = decision.companyNumber;
       if (!incoming) {
-        messages.push(
+        notes.push(
           `Company Number preserved from existing company: ${companyNumber}.`,
         );
       }
@@ -317,7 +347,7 @@ function validateCompanyRow(
         ...seenInFile.numbers,
         ...allocatedNumbers,
       ]);
-      messages.push(
+      notes.push(
         `Existing company has no Company Number — ${companyNumber} will be assigned.`,
       );
     }
@@ -327,7 +357,7 @@ function validateCompanyRow(
       ...seenInFile.numbers,
       ...allocatedNumbers,
     ]);
-    messages.push(`Company Number will be auto-assigned: ${companyNumber}.`);
+    notes.push(`Company Number will be auto-assigned: ${companyNumber}.`);
   }
 
   // Reject the same Company Number appearing twice within one uploaded file.
@@ -360,9 +390,19 @@ function validateCompanyRow(
   const statusInfo = normalizeStatus(fields.status);
   if (statusInfo.warning) messages.push(statusInfo.warning);
 
+  // Logo is optional: blank/placeholder is a note; a bad URL is a warning.
+  // A file name is checked against the attached files on the upload page.
   const logoPlan = planCompanyLogoImport(fields.companyLogo);
-  if (logoPlan.kind === "missing" || logoPlan.kind === "invalid") {
-    messages.push(logoPlan.warning);
+  if (logoPlan.kind === "missing") notes.push(logoPlan.note);
+  else if (logoPlan.kind === "invalid") messages.push(logoPlan.warning);
+  else if (logoPlan.kind === "file") {
+    notes.push(
+      isCurrentLogoFile(matchedRecord, logoPlan.fileName)
+        ? `Company Logo "${logoPlan.fileName}" is already this company's logo — it will be kept.`
+        : `Company Logo "${logoPlan.fileName}" — attach this file under Company logo files before importing.`,
+    );
+  } else {
+    notes.push("Company Logo will be downloaded from the image URL.");
   }
 
   const normalizedFields = {
@@ -385,7 +425,7 @@ function validateCompanyRow(
     return {
       rowNumber,
       status: "Error",
-      messages,
+      messages: [...messages, ...notes],
       fields: normalizedFields,
       matchedEntityId: matchedRecord?.id ?? null,
       matchedEntityName: matchedRecord?.companyName ?? null,
@@ -399,6 +439,7 @@ function validateCompanyRow(
       status: "Duplicate",
       messages: [
         ...messages,
+        ...notes,
         `Matches existing company #${matchedRecord.id} (${matchedRecord.companyName}).`,
       ],
       fields: normalizedFields,
@@ -408,11 +449,12 @@ function validateCompanyRow(
     };
   }
 
+  // Only real problems make a row a Warning; notes describe normal work.
   const hasWarnings = messages.length > 0;
   return {
     rowNumber,
     status: hasWarnings ? "Warning" : "Ready",
-    messages,
+    messages: [...messages, ...notes],
     fields: normalizedFields,
     matchedEntityId: null,
     matchedEntityName: null,
@@ -570,17 +612,22 @@ export async function commitCompanyImport(input: {
         );
         updated += 1;
         results.push(
-          await withCompanyLogoResult(decision.targetId, fields, {
-            rowNumber: row.rowNumber,
-            status: "Imported",
-            messages: [
-              `Updated existing company #${decision.targetId} (${target?.companyName ?? companyName}); Company Number ${finalNumber} preserved.`,
-            ],
+          await withCompanyLogoResult(
+            decision.targetId,
             fields,
-            matchedEntityId: decision.targetId,
-            matchedEntityName: target?.companyName ?? null,
-            duplicateMatch: null,
-          }),
+            {
+              rowNumber: row.rowNumber,
+              status: "Imported",
+              messages: [
+                `Updated existing company #${decision.targetId} (${target?.companyName ?? companyName}); Company Number ${finalNumber} preserved.`,
+              ],
+              fields,
+              matchedEntityId: decision.targetId,
+              matchedEntityName: target?.companyName ?? null,
+              duplicateMatch: null,
+            },
+            target,
+          ),
         );
         log.debug("row updated", {
           row: row.rowNumber,

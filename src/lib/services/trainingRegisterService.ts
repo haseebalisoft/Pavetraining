@@ -13,6 +13,9 @@ import {
 } from "@/lib/services/sharePointListService";
 import type { AdminRegisterKey } from "@/lib/services/adminCrudService";
 import { parseEusrCategories } from "@/lib/training/eusrOptions";
+import { parseNporsCategories } from "@/lib/training/nporsCategoryOptions";
+
+export { parseNporsCategories };
 
 export type RegisterSource =
   | "NPORS"
@@ -45,17 +48,6 @@ export interface NormalizedRegisterRecord {
   customerVisible: boolean;
   modifiedAt: string | null;
 }
-
-const NPORS_CODES = [
-  "N001",
-  "N003",
-  "N004",
-  "N010",
-  "N020",
-  "N021",
-  "N027",
-  "N100",
-] as const;
 
 export function registerKeyToSource(key: AdminRegisterKey): RegisterSource {
   switch (key) {
@@ -112,30 +104,6 @@ function extractLookupId(
   return null;
 }
 
-/** Parses MultiChoice / delimited NPORS category values into matrix codes. */
-export function parseNporsCategories(value: unknown): string[] {
-  const tokens: string[] = [];
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      if (typeof entry === "string") tokens.push(entry);
-    }
-  } else if (typeof value === "string" && value.trim()) {
-    tokens.push(
-      ...value.split(/[;,#|]+/).map((part) => part.trim()).filter(Boolean),
-    );
-  }
-
-  const found = new Set<string>();
-  for (const token of tokens) {
-    const upper = token.toUpperCase();
-    for (const code of NPORS_CODES) {
-      if (upper === code || upper.includes(code)) {
-        found.add(code);
-      }
-    }
-  }
-  return [...found];
-}
 
 /**
  * Graph often returns only CandidateNameLookupId / CompanyNameLookupId.

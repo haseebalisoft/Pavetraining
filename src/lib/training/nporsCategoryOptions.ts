@@ -226,3 +226,33 @@ export function formatNporsCategoryLabel(category: {
   if (code && name) return `${code} – ${name}`;
   return code || name;
 }
+
+/**
+ * Parses MultiChoice / delimited NPORS category values ("N217, N216",
+ * "N001 - Ind FLT", ["N301A - Abrasive Wheels Awareness"]) into codes.
+ * Exact codes only: "N301A" is N301A, never also N301. Every code is returned,
+ * including ones with no Matrix column, so the sync can say so instead of
+ * silently dropping it.
+ */
+export function parseNporsCategories(value: unknown): string[] {
+  const tokens: string[] = [];
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      if (typeof entry === "string") tokens.push(entry);
+    }
+  } else if (typeof value === "string" && value.trim()) {
+    tokens.push(
+      ...value.split(/[;,#|]+/).map((part) => part.trim()).filter(Boolean),
+    );
+  }
+
+  const found = new Set<string>();
+  for (const token of tokens) {
+    for (const match of token
+      .toUpperCase()
+      .matchAll(/(?<![A-Z0-9])N\d{3}[A-Z]?(?![A-Z0-9])/g)) {
+      found.add(match[0]);
+    }
+  }
+  return [...found];
+}

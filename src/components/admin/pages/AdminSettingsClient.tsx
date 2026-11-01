@@ -7,6 +7,7 @@ import { Breadcrumbs } from "@/components/ui/Breadcrumbs";
 import { LoadingState } from "@/components/ui/States";
 import { readPublicApiError } from "@/lib/errors/publicMessages";
 import { formatDateTime } from "@/lib/utils/formatDate";
+import { NOTIFICATION_CATEGORIES } from "@/types/notifications";
 import type {
   CalendarSyncDirection,
   PortalSettings,
@@ -252,6 +253,34 @@ export function AdminSettingsClient() {
             }
             disabled={saving}
           />
+        </SettingsSection>
+
+        <SettingsSection
+          title="Notification types"
+          description="Switch each kind of email on or off. A switched-off email is never sent and is recorded as Skipped in the notification log. Login codes and test emails always send."
+        >
+          {NOTIFICATION_CATEGORIES.map((category) => (
+            <ToggleRow
+              key={category.key}
+              label={category.label}
+              description={category.description}
+              checked={draft.notificationTypes?.[category.key] !== false}
+              onChange={(v) =>
+                setDraft((current) =>
+                  current
+                    ? {
+                        ...current,
+                        notificationTypes: {
+                          ...current.notificationTypes,
+                          [category.key]: v,
+                        },
+                      }
+                    : current,
+                )
+              }
+              disabled={saving}
+            />
+          ))}
         </SettingsSection>
 
         <SettingsSection

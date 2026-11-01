@@ -1,4 +1,7 @@
-import { CLIENT_MATRIX_DISPLAY_HEADERS } from "@/lib/services/bulkUpload/clientTemplateHeaders";
+import {
+  CLIENT_MATRIX_DISPLAY_HEADERS,
+  RETIRED_MATRIX_HEADERS,
+} from "@/lib/services/bulkUpload/clientTemplateHeaders";
 
 /** Form field prefix for per-category training dates on the matrix editor. */
 export const MATRIX_TRAINING_DATE_PREFIX = "training:";
@@ -43,6 +46,9 @@ export function headerFromTrainingDateFieldName(name: string): string | null {
 export function isMatrixExpiryColumnKey(key: string): boolean {
   const header = key.trim();
   if (!header || header === "Name" || header === "DOB") return false;
+  // Stored but retired (overall "EUSR Expiry"): must not drive Next expiry
+  // or the colour filters now that it is hidden.
+  if (RETIRED_MATRIX_HEADERS.includes(header)) return false;
   if (header.startsWith(MATRIX_TRAINING_DATE_PREFIX)) return false;
   if (header.endsWith(" Training Date")) return false;
   if (header.endsWith(MATRIX_STORED_EXPIRY_SUFFIX)) return false;
@@ -91,4 +97,20 @@ export function serializeTrainingDatesJson(
     compact[header] = iso;
   }
   return JSON.stringify(compact);
+}
+
+/** Editor group for a category (the Matrix editor shows expiry dates only). */
+export function matrixEditorGroup(
+  header: string,
+): "Cards & site safety" | "EUSR categories" | "NPORS categories" {
+  if (/^N\d{3}/i.test(header)) return "NPORS categories";
+  if (header.startsWith("EUSR - ")) return "EUSR categories";
+  return "Cards & site safety";
+}
+
+/** Input label: "CSCS", "Face Fit", "N001 - Ind FLT", "EUSR - SHEA Gas". */
+export function matrixEditorLabel(header: string): string {
+  return matrixEditorGroup(header) === "Cards & site safety"
+    ? `${matrixEditorSectionTitle(header)} expiry`
+    : header;
 }

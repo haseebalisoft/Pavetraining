@@ -27,7 +27,9 @@ import {
   isRegisterImportType,
   previewRegisterImport,
 } from "@/lib/services/bulkUpload/registerImporter";
+import { countNotProcessed } from "@/lib/services/bulkUpload/commitDeadline";
 import { parseSpreadsheetBuffer } from "@/lib/services/bulkUpload/parseSpreadsheet";
+import type { JobDeadline } from "@/lib/jobs/jobOutcome";
 import {
   BULK_IMPORT_TEMPLATES,
   buildTemplateCsv,
@@ -40,6 +42,7 @@ import type {
   BulkDuplicateMode,
   BulkImportType,
   BulkPreviewResult,
+  BulkPreviewRow,
 } from "@/types/bulkUpload";
 
 const MAX_BULK_UPLOAD_BYTES = 15 * 1024 * 1024;
@@ -232,6 +235,18 @@ export async function previewBulkUpload(input: {
   throw new ValidationError("Import type is not implemented.");
 }
 
+function stoppedEarlyFor(
+  rows: BulkPreviewRow[],
+): BulkCommitResult["stoppedEarly"] {
+  const notProcessedRows = countNotProcessed(rows);
+  return notProcessedRows > 0
+    ? {
+        reason: "the import reached the server time limit.",
+        notProcessedRows,
+      }
+    : null;
+}
+
 export async function commitBulkUpload(input: {
   importType: string;
   fileName?: string | null;
@@ -242,6 +257,14 @@ export async function commitBulkUpload(input: {
   rows: BulkCommitRowInput[];
   /** Live progress sink (e.g. streamed to the admin UI). */
   onEvent?: (event: BulkLogEvent) => void;
+  /**
+   * Server time budget. Serial imports (Training Matrix, registers) stop
+   * between rows once it passes and report the rest as Not processed, instead
+   * of being killed mid-request at the route's maxDuration.
+   */
+  deadline?: JobDeadline;
+  /** Admin running the import (named as "Updated by" in emails). */
+  actorEmail?: string | null;
 }): Promise<BulkCommitResult> {
   const importType = parseImportType(input.importType);
   const template = getBulkImportTemplate(importType);
@@ -354,6 +377,7 @@ export async function commitBulkUpload(input: {
       // Matrix always upserts (create or override); mode kept for API shape.
       duplicateMode: "update",
       log,
+      deadline: input.deadline,
     });
     const summary = summarizeBulkRows(rows);
     logDone(summary);
@@ -366,6 +390,7 @@ export async function commitBulkUpload(input: {
       summary,
       message:
         "Training Matrix import finished (create if missing, override if exists).",
+      stoppedEarly: stoppedEarlyFor(rows),
     };
   }
 
@@ -374,6 +399,11 @@ export async function commitBulkUpload(input: {
       importType,
       rows: input.rows,
       duplicateMode,
+      deadline: input.deadline,
+      // "Suppress notifications" unticked: results email each record's
+      // assigned Training Manager, same as a single save.
+      notifyTrainingManagers: !suppressNotifications,
+      actorEmail: input.actorEmail,
     });
     const summary = summarizeBulkRows(rows);
     logDone(summary);
@@ -388,6 +418,7 @@ export async function commitBulkUpload(input: {
         importType === "inHouse" || importType === "nvq"
           ? `${template.label} import completed (standalone — Training Matrix not updated).`
           : `${template.label} import completed. Matching Training Matrix rows were synced for Pass outcomes.`,
+      stoppedEarly: stoppedEarlyFor(rows),
     };
   }
 

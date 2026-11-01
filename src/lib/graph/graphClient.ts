@@ -1,8 +1,16 @@
 import "server-only";
 
 import { ClientSecretCredential } from "@azure/identity";
-import { Client } from "@microsoft/microsoft-graph-client";
+import { Client, MiddlewareFactory } from "@microsoft/microsoft-graph-client";
 import { TokenCredentialAuthenticationProvider } from "@microsoft/microsoft-graph-client/authProviders/azureTokenCredentials";
+
+import {
+  GraphTimeoutError,
+  GraphTimeoutHandler,
+  graphErrorStatus,
+  isGraphTimeoutError,
+  isTransientGraphError,
+} from "@/lib/graph/graphRequestGuards";
 
 let cachedClient: Client | null = null;
 
@@ -10,42 +18,14 @@ const GRAPH_READ_MAX_ATTEMPTS = 3;
 const GRAPH_MUTATION_MAX_ATTEMPTS = 4;
 const GRAPH_RETRY_BASE_MS = 300;
 
-function errorStatus(error: unknown): number | null {
-  if (!error || typeof error !== "object") return null;
-  const value = (error as { statusCode?: unknown; status?: unknown }).statusCode ??
-    (error as { status?: unknown }).status;
-  return typeof value === "number" ? value : null;
-}
+const errorStatus = graphErrorStatus;
 
-function errorText(error: unknown): string {
-  if (error instanceof Error) {
-    const cause = "cause" in error ? String(error.cause ?? "") : "";
-    return `${error.message} ${cause}`.toLowerCase();
-  }
-  return String(error ?? "").toLowerCase();
-}
-
-/** True for transient network / throttling failures Graph SDK surfaces poorly. */
-export function isTransientGraphError(error: unknown): boolean {
-  const status = errorStatus(error);
-  if (status === -1 || status === 408 || status === 425 || status === 429) {
-    return true;
-  }
-  if (status !== null && status >= 500) return true;
-
-  const text = errorText(error);
-  return [
-    "fetch failed",
-    "terminated",
-    "econnreset",
-    "econnrefused",
-    "etimedout",
-    "socket hang up",
-    "und_err_",
-    "network",
-    "other side closed",
-  ].some((marker) => text.includes(marker));
-}
+export {
+  GraphTimeoutError,
+  GraphTimeoutHandler,
+  isGraphTimeoutError,
+  isTransientGraphError,
+};
 
 /** @deprecated Prefer isTransientGraphError — kept for existing import sites. */
 export function isTransientGraphReadError(error: unknown): boolean {
@@ -155,6 +135,24 @@ export function getGraphClient(): Client {
     scopes: ["https://graph.microsoft.com/.default"],
   });
 
-  cachedClient = Client.initWithMiddleware({ authProvider });
+  // Default chain (auth → retry → redirect → telemetry → HTTP) with a timeout
+  // inserted just before the HTTP handler, so every attempt — including SDK
+  // retries — is individually capped.
+  const middleware = MiddlewareFactory.getDefaultMiddlewareChain(authProvider);
+  middleware.splice(
+    middleware.length - 1,
+    0,
+    new GraphTimeoutHandler(graphRequestTimeoutMs()),
+  );
+
+  cachedClient = Client.initWithMiddleware({ middleware });
   return cachedClient;
 }
+
+const DEFAULT_GRAPH_REQUEST_TIMEOUT_MS = 45_000;
+
+function graphRequestTimeoutMs(): number {
+  const raw = Number(process.env.GRAPH_REQUEST_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_GRAPH_REQUEST_TIMEOUT_MS;
+}
+

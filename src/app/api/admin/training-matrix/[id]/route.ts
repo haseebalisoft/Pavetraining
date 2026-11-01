@@ -1,7 +1,7 @@
 import { withAdminApi } from "@/lib/api/adminApi";
 import {
   deleteAdminMatrix,
-  updateAdminMatrix,
+  updateAdminMatrixAndRelink,
 } from "@/lib/services/adminCrudService";
 
 export const dynamic = "force-dynamic";
@@ -15,8 +15,9 @@ export async function PATCH(
     "PATCH /api/admin/training-matrix/[id]",
     async (_ctx, req) => {
       const body = (await req.json()) as Record<string, unknown>;
-      const record = await updateAdminMatrix(id, body);
-      return { record };
+      // A corrected name / DOB re-runs Workforce matching; `relink` says what
+      // happened (linked, merged into the existing row, or still unmatched).
+      return updateAdminMatrixAndRelink(id, body);
     },
     { errorMessage: "Failed to update matrix row" },
     request,

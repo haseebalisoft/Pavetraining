@@ -4,6 +4,7 @@ import { getSharePointSiteApiRoot } from "@/lib/config/sharepoint";
 import { getGraphClient } from "@/lib/graph/graphClient";
 import { writeAuditLog } from "@/lib/services/auditLogService";
 import { ValidationError } from "@/lib/services/validationService";
+import { defaultNotificationTypes } from "@/types/notifications";
 import type {
   CalendarSyncDirection,
   PortalSettings,
@@ -34,6 +35,7 @@ export function getDefaultSettings(): PortalSettings {
     enableExpiryReminders: true,
     enableAdminAlerts: true,
     suppressNotificationsDuringBulkUpload: true,
+    notificationTypes: defaultNotificationTypes(),
 
     urgentWindowDays: 90,
     upcomingWindowDays: 180,
@@ -147,6 +149,18 @@ export function mergeWithDefaults(
       partial.suppressNotificationsDuringBulkUpload,
       defaults.suppressNotificationsDuringBulkUpload,
     ),
+    // Per key, so a type added later defaults to on for existing tenants.
+    notificationTypes: Object.fromEntries(
+      Object.entries(defaults.notificationTypes).map(([key, fallback]) => [
+        key,
+        asBool(
+          (partial.notificationTypes as Record<string, unknown> | undefined)?.[
+            key
+          ],
+          fallback,
+        ),
+      ]),
+    ) as PortalSettings["notificationTypes"],
 
     urgentWindowDays: asPositiveInt(
       partial.urgentWindowDays,

@@ -15,6 +15,9 @@ export function messageForHttpStatus(status: number, fallback?: string): string 
   if (status === 404) {
     return PUBLIC_ERROR_MESSAGES.notFound;
   }
+  if (status === 502 || status === 503 || status === 504) {
+    return "The server took too long to respond or was unavailable. Some changes may already be saved — reload the page to check, then try again.";
+  }
   if (status >= 500) {
     return PUBLIC_ERROR_MESSAGES.serverError;
   }

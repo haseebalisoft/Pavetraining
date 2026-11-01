@@ -4,11 +4,19 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
+  useSyncExternalStore,
   type DragEvent,
 } from "react";
 
+import {
+  clearBulkCommitJob,
+  getBulkCommitJob,
+  getServerBulkCommitJob,
+  startBulkCommit,
+  subscribeBulkCommitJob,
+  type CommitProgressState,
+} from "@/components/admin/bulkUpload/bulkCommitJob";
 import { useAdminToast } from "@/components/admin/AdminToast";
 import { Breadcrumbs } from "@/components/ui/Breadcrumbs";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -17,11 +25,17 @@ import {
   checkBulkUploadRowLimit,
 } from "@/lib/services/bulkUpload/bulkUploadLimits";
 import { readPublicApiError } from "@/lib/errors/publicMessages";
+import {
+  JOB_OUTCOME_LABELS,
+  describeJobTransportFailure,
+  reviewReasonSummary,
+  type JobOutcome,
+  type JobTerminalStatus,
+} from "@/lib/jobs/jobOutcome";
 import type { StatusTone } from "@/lib/ui/status";
 import {
   BULK_FOLDER_OUTCOME_LABELS,
   BULK_LINK_OUTCOME_LABELS,
-  type BulkCommitResult,
   type BulkDuplicateMode,
   type BulkImportSummary,
   type BulkImportType,
@@ -31,75 +45,6 @@ import {
 } from "@/types/bulkUpload";
 
 import styles from "@/components/admin/admin.module.css";
-
-/** "Alder & Finch Ltd.PNG" → "alderfinchltd" — loose key for logo matching. */
-function logoMatchKey(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/\.(png|jpe?g|gif|webp|bmp|svg)$/, "")
-    .replace(/[^a-z0-9]+/g, "");
-}
-
-/**
- * After a Company import, upload each attached logo file to its company.
- * A file matches a row by the name in its Company Logo cell, or — when that
- * cell is blank — by the company name (e.g. "Alder & Finch Ltd.png").
- */
-async function uploadAttachedCompanyLogos(
-  rows: BulkCommitResult["rows"],
-  files: File[],
-): Promise<{
-  uploaded: number;
-  failed: string[];
-  unmatched: string[];
-  notAttached: string[];
-}> {
-  const byKey = new Map(files.map((file) => [logoMatchKey(file.name), file]));
-  const used = new Set<File>();
-  const failed: string[] = [];
-  const notAttached: string[] = [];
-  let uploaded = 0;
-
-  for (const row of rows) {
-    const companyId = row.savedEntityId ?? row.matchedEntityId;
-    if (!companyId || row.status === "Error") continue;
-    const cell = row.fields.companyLogo?.trim() ?? "";
-    const isUrl = /^[a-z][a-z0-9+.-]*:\/\//i.test(cell);
-    const file =
-      (cell && !isUrl ? byKey.get(logoMatchKey(cell)) : undefined) ??
-      (row.fields.companyName
-        ? byKey.get(logoMatchKey(row.fields.companyName))
-        : undefined);
-    if (!file) {
-      if (cell && !isUrl && /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(cell)) {
-        notAttached.push(cell);
-      }
-      continue;
-    }
-    if (used.has(file)) continue;
-    used.add(file);
-    try {
-      const form = new FormData();
-      form.set("file", file);
-      const response = await fetch(`/api/admin/companies/${companyId}/logo`, {
-        method: "POST",
-        body: form,
-      });
-      if (!response.ok) throw new Error(await readPublicApiError(response));
-      uploaded += 1;
-    } catch (error) {
-      failed.push(
-        `${file.name}: ${error instanceof Error ? error.message : "upload failed"}`,
-      );
-    }
-  }
-
-  const unmatched = files
-    .filter((file) => !used.has(file))
-    .map((file) => file.name);
-  return { uploaded, failed, unmatched, notAttached };
-}
 
 const IMPORT_OPTIONS: Array<{
   value: BulkImportType;
@@ -194,6 +139,9 @@ function SummaryCards({ summary }: { summary: BulkImportSummary }) {
     { label: "Errors", value: summary.errorRows },
     { label: "Skipped", value: summary.skippedRows },
     { label: "Imported", value: summary.importedRows },
+    ...(summary.notProcessedRows
+      ? [{ label: "Not processed", value: summary.notProcessedRows }]
+      : []),
   ];
   return (
     <div className={styles.bulkSummaryGrid}>
@@ -286,6 +234,12 @@ function PreviewTable({
                   {row.linkOutcome
                     ? BULK_LINK_OUTCOME_LABELS[row.linkOutcome]
                     : "—"}
+                  {row.reviewReason ? (
+                    <>
+                      <br />
+                      <strong>{row.reviewReason.label}</strong>
+                    </>
+                  ) : null}
                 </td>
               ) : null}
               {showFolder ? (
@@ -311,89 +265,26 @@ function PreviewTable({
   );
 }
 
-/** One phase of a commit, with the display label and a rough weight (share of
- *  total time) so the gauge advances smoothly across phases of very different
- *  cost. `parallel` phases show the "running in parallel" hint. */
-interface CommitPhaseModel {
-  key: string;
-  label: string;
-  weight: number;
-  parallel?: boolean;
-}
+/** Preview route maxDuration is 300s. */
+const PREVIEW_TIMEOUT_MS = 310_000;
 
-const WORKFORCE_PHASE_MODEL: CommitPhaseModel[] = [
-  { key: "load", label: "Loading data", weight: 2 },
-  { key: "phase1:validate+companies", label: "Validating rows", weight: 3 },
-  {
-    key: "phase2:permissions+departments",
-    label: "Setting up people & departments",
-    weight: 5,
-  },
-  { key: "phase3a:updates", label: "Updating existing records", weight: 5 },
-  {
-    key: "phase3b:creates",
-    label: "Creating workforce records",
-    weight: 20,
-    parallel: true,
-  },
-  {
-    key: "phase3c:trainingMatrix",
-    label: "Building Training Matrix",
-    weight: 30,
-    parallel: true,
-  },
-  {
-    key: "phase3d:documentFolders",
-    label: "Creating document folders",
-    weight: 35,
-    parallel: true,
-  },
-];
+const OUTCOME_TONE: Record<JobOutcome, StatusTone> = {
+  completed: "ok",
+  completed_with_warnings: "warn",
+  failed: "danger",
+};
 
-const COMPANY_PHASE_MODEL: CommitPhaseModel[] = [
-  { key: "load:companies", label: "Loading companies", weight: 5 },
-  { key: "commit:rows", label: "Importing companies", weight: 95 },
-];
-
-function phaseModelFor(importType: BulkImportType): CommitPhaseModel[] {
-  if (importType === "workforce") return WORKFORCE_PHASE_MODEL;
-  if (importType === "company") return COMPANY_PHASE_MODEL;
-  // Other import types only report start/done — no weighted phases, so the
-  // gauge runs indeterminate until the result arrives.
-  return [];
-}
-
-interface CommitProgressState {
-  totalRows: number;
-  phaseLabel: string;
-  phaseKey: string | null;
-  done: number;
-  total: number;
-  completed: string[];
-  parallel: boolean;
-  /** null = indeterminate (no weighted phase model / not started). */
-  overallPct: number | null;
-}
-
-function computeOverallPct(
-  model: CommitPhaseModel[],
-  completed: Set<string>,
-  phaseKey: string | null,
-  done: number,
-  total: number,
-): number | null {
-  if (model.length === 0) return null;
-  const totalWeight = model.reduce((sum, phase) => sum + phase.weight, 0);
-  let acc = 0;
-  for (const phase of model) {
-    if (completed.has(phase.key)) {
-      acc += phase.weight;
-    } else if (phase.key === phaseKey && total > 0) {
-      acc += phase.weight * Math.min(1, done / total);
-    }
-  }
-  // Cap below 100 until the final "done" event flips it to complete.
-  return Math.min(99, Math.round((acc / totalWeight) * 100));
+/** Persistent terminal state for the last commit — survives the toast. */
+function CommitOutcomeBanner({ status }: { status: JobTerminalStatus }) {
+  return (
+    <div className={styles.bulkHint} role="status" aria-live="polite">
+      <StatusBadge
+        label={JOB_OUTCOME_LABELS[status.outcome]}
+        tone={OUTCOME_TONE[status.outcome]}
+      />{" "}
+      {status.reason}
+    </div>
+  );
 }
 
 /** Circular "progress clock" shown live during a bulk commit. */
@@ -456,45 +347,117 @@ function BulkCommitClock({
         {progress.parallel ? (
           <p className={styles.commitClockParallel}>Running 12 in parallel</p>
         ) : null}
-        <p className={styles.commitClockHint}>Please keep this window open…</p>
+        <p className={styles.commitClockHint}>
+          You can open other admin pages — the import keeps running and its
+          result will be here when you come back. Closing or reloading this tab
+          won&apos;t stop it, but you would lose this report.
+        </p>
       </div>
     </div>
   );
 }
 
+/** "Alder-Finch.PNG" → "alderfinch" — same loose match the uploader uses. */
+function imageMatchKey(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/\.(png|jpe?g|gif|webp|bmp|svg)$/, "")
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+/** Image file names a preview names in `cellField` that are not attached. */
+function unattachedImageNames(
+  rows: BulkPreviewRow[],
+  cellField: string,
+  attachedFiles: File[],
+): string[] {
+  const attached = new Set(attachedFiles.map((file) => imageMatchKey(file.name)));
+  const named = new Set<string>();
+  for (const row of rows) {
+    const cell = row.fields[cellField]?.trim() ?? "";
+    if (
+      row.status !== "Error" &&
+      /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(cell) &&
+      !/^[a-z][a-z0-9+.-]*:\/\//i.test(cell) &&
+      !row.messages.some((message) => message.includes("already this company's logo")) &&
+      !attached.has(imageMatchKey(cell))
+    ) {
+      named.add(cell);
+    }
+  }
+  return [...named];
+}
+
 export function AdminBulkUploadClient() {
   const { pushToast } = useAdminToast();
-  const [importType, setImportType] = useState<BulkImportType>("workforce");
-  const [file, setFile] = useState<File | null>(null);
+  // The commit job lives in a module store so it survives navigation; a page
+  // mounted while a job exists re-attaches to it (same preview, same file).
+  const job = useSyncExternalStore(
+    subscribeBulkCommitJob,
+    getBulkCommitJob,
+    getServerBulkCommitJob,
+  );
+  const [importType, setImportType] = useState<BulkImportType>(
+    () => getBulkCommitJob()?.preview.importType ?? "workforce",
+  );
+  const [file, setFile] = useState<File | null>(
+    () => getBulkCommitJob()?.file ?? null,
+  );
   /** Company imports: logo images matched to rows by file name. */
   const [logoFiles, setLogoFiles] = useState<File[]>([]);
+  /** Workforce imports: candidate photos matched to rows by file name. */
+  const [photoFiles, setPhotoFiles] = useState<File[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [suppressNotifications, setSuppressNotifications] = useState(true);
-  const [duplicateMode, setDuplicateMode] =
-    useState<BulkDuplicateMode>("skip");
+  const [duplicateMode, setDuplicateMode] = useState<BulkDuplicateMode>(
+    () => getBulkCommitJob()?.duplicateMode ?? "skip",
+  );
   const [previewing, setPreviewing] = useState(false);
-  const [committing, setCommitting] = useState(false);
-  const [preview, setPreview] = useState<BulkPreviewResult | null>(null);
-  const [commitResult, setCommitResult] = useState<BulkCommitResult | null>(
-    null,
+  const [preview, setPreview] = useState<BulkPreviewResult | null>(
+    () => getBulkCommitJob()?.preview ?? null,
   );
   const [statusFilter, setStatusFilter] = useState<"" | BulkRowStatus>("");
-  const [commitProgress, setCommitProgress] =
-    useState<CommitProgressState | null>(null);
+
+  // Job state applies only while the page shows the preview that job imports.
+  const pageJob = job && job.preview === preview ? job : null;
+  /** Any import still in flight (blocks a second commit and new previews). */
+  const jobActive = job != null && job.phase !== "done";
+  const committing = pageJob?.phase === "running";
+  const commitProgress = committing ? (pageJob?.progress ?? null) : null;
+  const commitResult = pageJob?.result ?? null;
+  /**
+   * Rows are saved; the browser is still uploading attached logos / photos.
+   * Not finished yet — no final banner, and leaving would stop the uploads.
+   */
+  const finishingImages = pageJob?.phase === "finishing";
+  /** Terminal state of the last commit: Completed / with warnings / Failed. */
+  const commitOutcome = pageJob?.phase === "done" ? pageJob.outcome : null;
+  const needsRepreview = pageJob?.needsRepreview ?? false;
+
   // Client-side clock: ticks every 500ms while committing so the elapsed time
   // keeps moving smoothly even between server progress events.
-  const commitStartRef = useRef(0);
-  const [nowTick, setNowTick] = useState(0);
-
+  const [nowTick, setNowTick] = useState(() => Date.now());
   useEffect(() => {
     if (!committing) return;
     const id = setInterval(() => setNowTick(Date.now()), 500);
     return () => clearInterval(id);
   }, [committing]);
+  const commitElapsedMs =
+    committing && pageJob ? Math.max(0, nowTick - pageJob.startedAt) : 0;
 
-  const commitElapsedMs = committing
-    ? Math.max(0, nowTick - commitStartRef.current)
-    : 0;
+  // In-app navigation is always safe (the job outlives this page). Closing or
+  // reloading the tab would lose the report, so warn — but only while a job
+  // is actually running.
+  useEffect(() => {
+    if (!jobActive) return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [jobActive]);
 
   const selectedOption = IMPORT_OPTIONS.find((o) => o.value === importType);
 
@@ -505,6 +468,29 @@ export function AdminBulkUploadClient() {
   }, [commitResult, preview, statusFilter]);
 
   const activeSummary = commitResult?.summary ?? preview?.summary ?? null;
+  const activeReviewReasons = reviewReasonSummary(
+    commitResult?.rows ?? preview?.rows ?? [],
+  );
+
+  /**
+   * Image file names in the sheet (Company Logo / Candidate Photo) with no
+   * matching attached file. Checked here because only the browser knows what
+   * was attached.
+   */
+  const missingLogoFiles = useMemo(
+    () =>
+      preview?.importType === "company"
+        ? unattachedImageNames(preview.rows, "companyLogo", logoFiles)
+        : [],
+    [logoFiles, preview],
+  );
+  const missingPhotoFiles = useMemo(
+    () =>
+      preview?.importType === "workforce"
+        ? unattachedImageNames(preview.rows, "candidatePhoto", photoFiles)
+        : [],
+    [photoFiles, preview],
+  );
 
   /** Row cap for the currently selected import type (null = no limit). */
   const selectedRowLimit = bulkUploadRowLimit(importType);
@@ -523,6 +509,8 @@ export function AdminBulkUploadClient() {
     !!preview?.implemented &&
     !!preview.rows.length &&
     !commitResult &&
+    !needsRepreview &&
+    !jobActive &&
     !rowLimitError &&
     (preview.summary.readyRows > 0 ||
       preview.summary.warningRows > 0 ||
@@ -531,6 +519,12 @@ export function AdminBulkUploadClient() {
   /** Explains why Confirm import is greyed out (client-blocking clarity). */
   const commitBlockedReason = useMemo(() => {
     if (!preview?.implemented || commitResult) return null;
+    if (needsRepreview) {
+      return "The last import did not confirm its result, so some rows may already be saved. Run Preview validation again — saved rows will then show as Duplicates — before importing again.";
+    }
+    if (jobActive && !committing) {
+      return "Another import is still running. Wait for it to finish.";
+    }
     if (!preview.rows.length) return "No preview rows to import.";
     if (rowLimitError) return rowLimitError;
     if (
@@ -552,19 +546,27 @@ export function AdminBulkUploadClient() {
       return "All matched rows are Duplicates. Change “If duplicate found” to “Update existing” to refresh Training Matrix, or keep Skip (Confirm will only skip).";
     }
     return null;
-  }, [commitResult, duplicateMode, preview, rowLimitError]);
+  }, [
+    commitResult,
+    committing,
+    duplicateMode,
+    jobActive,
+    needsRepreview,
+    preview,
+    rowLimitError,
+  ]);
 
   const onFileChosen = (next: File | null) => {
     setFile(next);
     setPreview(null);
-    setCommitResult(null);
+    clearBulkCommitJob();
   };
 
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setDragOver(false);
     const dropped = event.dataTransfer.files?.[0] ?? null;
-    if (!dropped) return;
+    if (!dropped || jobActive) return;
     const lower = dropped.name.toLowerCase();
     if (!lower.endsWith(".xlsx") && !lower.endsWith(".csv")) {
       pushToast("Only .xlsx and .csv files are supported.", "error");
@@ -579,7 +581,7 @@ export function AdminBulkUploadClient() {
       return;
     }
     setPreviewing(true);
-    setCommitResult(null);
+    clearBulkCommitJob();
     try {
       const form = new FormData();
       form.set("file", file);
@@ -595,6 +597,8 @@ export function AdminBulkUploadClient() {
       const response = await fetch("/api/admin/bulk-upload/preview", {
         method: "POST",
         body: form,
+        // Never leave "Validating…" up forever if the server stops answering.
+        signal: AbortSignal.timeout(PREVIEW_TIMEOUT_MS),
       });
       if (!response.ok) throw new Error(await readPublicApiError(response));
       const data = (await response.json()) as BulkPreviewResult;
@@ -620,10 +624,7 @@ export function AdminBulkUploadClient() {
         );
       }
     } catch (error) {
-      pushToast(
-        error instanceof Error ? error.message : "Preview failed",
-        "error",
-      );
+      pushToast(describeJobTransportFailure(error, "preview"), "error");
     } finally {
       setPreviewing(false);
     }
@@ -634,7 +635,7 @@ export function AdminBulkUploadClient() {
     suppressNotifications,
   ]);
 
-  const runCommit = useCallback(async () => {
+  const runCommit = useCallback(() => {
     if (!preview?.implemented) return;
     // Mirror the server row limit before committing so oversized uploads are
     // stopped client-side with the same clear message.
@@ -657,235 +658,22 @@ export function AdminBulkUploadClient() {
       );
       if (!confirmed) return;
     }
-
-    const startedAt = Date.now();
-    commitStartRef.current = startedAt;
-    setNowTick(startedAt);
-    setCommitting(true);
-
-    // Live progress state accumulated from the streamed events.
-    const model = phaseModelFor(preview.importType);
-    const state = {
-      totalRows: preview.rows.length,
-      phaseKey: null as string | null,
-      phaseLabel: "Starting…",
-      done: 0,
-      total: 0,
-      completed: new Set<string>(),
-      parallel: false,
-    };
-    const publish = () => {
-      setCommitProgress({
-        totalRows: state.totalRows,
-        phaseKey: state.phaseKey,
-        phaseLabel: state.phaseLabel,
-        done: state.done,
-        total: state.total,
-        completed: [...state.completed],
-        parallel: state.parallel,
-        overallPct: computeOverallPct(
-          model,
-          state.completed,
-          state.phaseKey,
-          state.done,
-          state.total,
-        ),
-      });
-    };
-    publish();
-
-    const applyEvent = (event: {
-      type?: string;
-      label?: string;
-      event?: string;
-      details?: Record<string, unknown>;
-    }) => {
-      if (event.type === "phase-start" && event.label) {
-        state.phaseKey = event.label;
-        const known = model.find((phase) => phase.key === event.label);
-        state.phaseLabel = known?.label ?? event.label;
-        state.parallel = Boolean(known?.parallel);
-        state.done = 0;
-        state.total = 0;
-        publish();
-      } else if (event.type === "phase-end" && event.label) {
-        state.completed.add(event.label);
-        if (state.phaseKey === event.label && state.total > 0) {
-          state.done = state.total;
-        }
-        publish();
-      } else if (event.type === "log") {
-        const details = event.details ?? {};
-        if (event.event === "start" && typeof details.rows === "number") {
-          state.totalRows = details.rows;
-          publish();
-        } else if (event.event === "progress") {
-          if (typeof details.done === "number") state.done = details.done;
-          if (typeof details.total === "number") state.total = details.total;
-          publish();
-        }
-      }
-    };
-
-    try {
-      const response = await fetch("/api/admin/bulk-upload/commit-progress", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          importType: preview.importType,
-          fileName: preview.fileName,
-          duplicateMode,
-          suppressNotifications,
-          autoCreateMissingCompanies:
-            preview.importType === "workforce" ? true : false,
-          autoCreateMissingDepartments:
-            preview.importType === "workforce" ? true : false,
-          rows: preview.rows.map((row) => ({
-            rowNumber: row.rowNumber,
-            fields: row.fields,
-            source: row.source,
-          })),
-        }),
-      });
-      if (!response.ok || !response.body) {
-        throw new Error(await readPublicApiError(response));
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let data: BulkCommitResult | null = null;
-      let streamError: string | null = null;
-
-      const consumeLine = (line: string) => {
-        const trimmed = line.trim();
-        if (!trimmed) return;
-        let message: {
-          kind?: string;
-          result?: BulkCommitResult;
-          message?: string;
-          event?: Record<string, unknown>;
-        };
-        try {
-          message = JSON.parse(trimmed);
-        } catch {
-          return; // ignore a partial / malformed line
-        }
-        if (message.kind === "result" && message.result) {
-          data = message.result;
-        } else if (message.kind === "error") {
-          streamError = message.message ?? "Import failed.";
-        } else if (message.kind === "progress" && message.event) {
-          applyEvent(message.event);
-        }
-      };
-
-      // Read the NDJSON stream: update the clock as events arrive; the last
-      // "result" line is the final import result.
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        let newline = buffer.indexOf("\n");
-        while (newline >= 0) {
-          consumeLine(buffer.slice(0, newline));
-          buffer = buffer.slice(newline + 1);
-          newline = buffer.indexOf("\n");
-        }
-      }
-      if (buffer) consumeLine(buffer);
-
-      if (streamError) throw new Error(streamError);
-      if (!data) throw new Error("Import ended without a result.");
-
-      const result: BulkCommitResult = data;
-      setCommitResult(result);
-      if (result.importType === "company") {
-        const logos = await uploadAttachedCompanyLogos(result.rows, logoFiles);
-        const parts = [`${logos.uploaded} company logo(s) uploaded`];
-        if (logos.unmatched.length) {
-          parts.push(
-            `no matching company for: ${logos.unmatched.slice(0, 5).join(", ")}${logos.unmatched.length > 5 ? "…" : ""}`,
-          );
-        }
-        if (logos.notAttached.length) {
-          parts.push(
-            `named in the sheet but not attached: ${logos.notAttached.slice(0, 5).join(", ")}${logos.notAttached.length > 5 ? "…" : ""}`,
-          );
-        }
-        if (logos.failed.length) {
-          parts.push(`failed: ${logos.failed.slice(0, 3).join("; ")}`);
-        }
-        const problems =
-          logos.failed.length + logos.unmatched.length + logos.notAttached.length;
-        if (logos.uploaded > 0 || problems > 0) {
-          pushToast(`${parts.join(" — ")}.`, problems > 0 ? "error" : "success");
-        }
-      }
-      const firstError = result.rows.find(
-        (row) => row.status === "Error" && row.messages.length,
-      );
-      const warningN =
-        result.summary.warningRows ??
-        result.rows.filter((row) => row.status === "Warning").length;
-      // Matrix imports save Needs Review rows to SharePoint even when they
-      // can't be auto-linked to Workforce. Reporting them as "imported=0"
-      // makes the client think the upload failed — the client rule is
-      // "N Matrix rows uploaded. X linked, Y need review, Z empty rows
-      // skipped, W failed." Every non-matrix import keeps its existing
-      // Imported / Skipped / Warnings phrasing.
-      const isMatrix = result.importType === "trainingMatrix";
-      if (result.summary.importedRows === 0 && result.summary.errorRows > 0) {
-        pushToast(
-          firstError?.messages.slice(-1)[0] ??
-            `Import failed for ${result.summary.errorRows} row(s). Check Messages in the table.`,
-          "error",
-        );
-      } else if (isMatrix) {
-        const savedRows = result.summary.importedRows + warningN;
-        const parts = [
-          `${savedRows} Matrix row${savedRows === 1 ? "" : "s"} uploaded`,
-          `${result.summary.importedRows} linked`,
-        ];
-        if (warningN > 0) parts.push(`${warningN} need review`);
-        if (result.summary.skippedRows > 0) {
-          parts.push(
-            `${result.summary.skippedRows} empty row${result.summary.skippedRows === 1 ? "" : "s"} skipped`,
-          );
-        }
-        if (result.summary.errorRows > 0) {
-          parts.push(`${result.summary.errorRows} failed`);
-        }
-        pushToast(`${parts.join(", ")}.`, result.summary.errorRows > 0 ? "error" : "success");
-      } else if (result.summary.errorRows > 0) {
-        pushToast(
-          `Import finished with errors: ${result.summary.importedRows} imported, ${result.summary.skippedRows} skipped, ${result.summary.errorRows} failed` +
-            (warningN ? `, ${warningN} warning(s)` : "") +
-            `. Review row Messages.`,
-          "error",
-        );
-      } else {
-        pushToast(
-          `Import finished: ${result.summary.importedRows} imported, ${result.summary.skippedRows} skipped` +
-            (warningN
-              ? `, ${warningN} warning(s) — see row messages for exact reasons`
-              : "") +
-            ".",
-          warningN > 0 ? "error" : "success",
-        );
-      }
-    } catch (error) {
-      pushToast(
-        error instanceof Error ? error.message : "Import failed",
-        "error",
-      );
-    } finally {
-      setCommitting(false);
-      setCommitProgress(null);
-    }
+    // The job lives outside this component so it survives navigation; the
+    // page re-attaches to it through useSyncExternalStore.
+    startBulkCommit({
+      preview,
+      file,
+      duplicateMode,
+      suppressNotifications,
+      logoFiles,
+      photoFiles,
+      notify: pushToast,
+    });
   }, [
     duplicateMode,
+    file,
     logoFiles,
+    photoFiles,
     preview,
     pushToast,
     suppressNotifications,
@@ -957,6 +745,7 @@ export function AdminBulkUploadClient() {
       "Row",
       "Status",
       "Link",
+      "Review Reason",
       "Folder",
       ...dataHeaders,
       "Matched Id",
@@ -979,6 +768,9 @@ export function AdminBulkUploadClient() {
           String(row.rowNumber),
           row.status,
           row.linkOutcome ? BULK_LINK_OUTCOME_LABELS[row.linkOutcome] : "",
+          row.reviewReason
+            ? `${row.reviewReason.label}: ${row.reviewReason.detail}`
+            : "",
           row.folderOutcome ? BULK_FOLDER_OUTCOME_LABELS[row.folderOutcome] : "",
           ...cells,
           row.matchedEntityId ?? "",
@@ -1000,7 +792,7 @@ export function AdminBulkUploadClient() {
   const resetAll = () => {
     setFile(null);
     setPreview(null);
-    setCommitResult(null);
+    clearBulkCommitJob();
     setStatusFilter("");
   };
 
@@ -1025,6 +817,8 @@ export function AdminBulkUploadClient() {
         <button
           type="button"
           className={styles.secondaryButton}
+          disabled={jobActive}
+          title={jobActive ? "Wait for the running import to finish." : undefined}
           onClick={resetAll}
         >
           Clear
@@ -1047,10 +841,11 @@ export function AdminBulkUploadClient() {
               <select
                 className={styles.bulkSelect}
                 value={importType}
+                disabled={jobActive}
                 onChange={(event) => {
                   setImportType(event.target.value as BulkImportType);
                   setPreview(null);
-                  setCommitResult(null);
+                  clearBulkCommitJob();
                 }}
               >
                 {IMPORT_OPTIONS.map((option) => (
@@ -1114,6 +909,7 @@ export function AdminBulkUploadClient() {
                   type="file"
                   accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                   className={styles.bulkFileInput}
+                  disabled={jobActive}
                   onChange={(event) =>
                     onFileChosen(event.target.files?.[0] ?? null)
                   }
@@ -1147,6 +943,49 @@ export function AdminBulkUploadClient() {
                         .join(", ")}`
                     : "Two ways to add logos: put an image web link (https://…) in the Company Logo column, or type the logo's file name there (e.g. alder-finch.png) and pick those image files here. A file named after the company (e.g. Alder & Finch Supplies Ltd.png) also matches when the cell is blank. Logos upload right after the import."}
                 </p>
+                {missingLogoFiles.length > 0 ? (
+                  <p className={styles.formError} role="status">
+                    The spreadsheet names {missingLogoFiles.length} logo file
+                    {missingLogoFiles.length === 1 ? "" : "s"} you have not
+                    attached: {missingLogoFiles.slice(0, 6).join(", ")}
+                    {missingLogoFiles.length > 6 ? "…" : ""}. Those companies
+                    will import without a logo unless you attach them.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
+            {importType === "workforce" ? (
+              <div className={styles.bulkLogoPicker}>
+                <label className={styles.secondaryButton}>
+                  Candidate photo files (optional)
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml,image/bmp"
+                    multiple
+                    className={styles.bulkFileInput}
+                    onChange={(event) =>
+                      setPhotoFiles(Array.from(event.target.files ?? []))
+                    }
+                  />
+                </label>
+                <p className={styles.bulkHint}>
+                  {photoFiles.length > 0
+                    ? `${photoFiles.length} photo file(s) selected: ${photoFiles
+                        .map((photo) => photo.name)
+                        .join(", ")}`
+                    : "Photos are optional. Put the photo's file name in the Candidate Photo column (e.g. zaid.jpg) and pick those files here, or name each file after the candidate's Workforce Number (e.g. PAVE-W0001.jpg) and leave the cell blank. An https image link in the cell also works. Photos upload right after the import; a missing photo never stops a candidate importing."}
+                </p>
+                {missingPhotoFiles.length > 0 ? (
+                  <p className={styles.formError} role="status">
+                    The spreadsheet names {missingPhotoFiles.length} photo file
+                    {missingPhotoFiles.length === 1 ? "" : "s"} you have not
+                    attached: {missingPhotoFiles.slice(0, 6).join(", ")}
+                    {missingPhotoFiles.length > 6 ? "…" : ""}. Those
+                    candidates will import without a photo unless you attach
+                    them.
+                  </p>
+                ) : null}
               </div>
             ) : null}
 
@@ -1159,7 +998,9 @@ export function AdminBulkUploadClient() {
                 }
               />
               <span>
-                Suppress customer notifications during import (recommended)
+                Suppress notifications during import (recommended). Untick to
+                email each candidate&apos;s Training Manager about the NPORS /
+                EUSR / Streetworks / In-House / NVQ results being imported.
               </span>
             </label>
 
@@ -1167,7 +1008,7 @@ export function AdminBulkUploadClient() {
               <button
                 type="button"
                 className={styles.primaryButton}
-                disabled={!file || previewing}
+                disabled={!file || previewing || jobActive}
                 onClick={() => void runPreview()}
               >
                 {previewing ? "Validating…" : "Preview validation"}
@@ -1179,12 +1020,20 @@ export function AdminBulkUploadClient() {
         {preview || commitResult ? (
           <section className={styles.settingsCard}>
             <header className={styles.settingsCardHeader}>
-              <h2>{commitResult ? "4. Import summary" : "3. Preview results"}</h2>
+              <h2>
+                {commitResult
+                  ? "4. Import summary"
+                  : committing
+                    ? "4. Importing…"
+                    : "3. Preview results"}
+              </h2>
               <p>
                 {commitResult
                   ? commitResult.message ??
                     "Import finished. Download the validation report for your records."
-                  : "Review Ready, Warning, Duplicate, and Error rows before confirming import. Invalid rows are never imported."}
+                  : committing
+                    ? "Nothing below has changed yet: the counts and statuses are from the preview and switch to the import result when it finishes."
+                    : "Review Ready, Warning, Duplicate, and Error rows before confirming import. Invalid rows are never imported."}
               </p>
             </header>
             <div className={styles.settingsCardBody}>
@@ -1195,7 +1044,28 @@ export function AdminBulkUploadClient() {
                 />
               ) : null}
 
+              {finishingImages ? (
+                <p className={styles.bulkHint} role="status" aria-live="polite">
+                  <strong>Rows saved — uploading the attached{" "}
+                  {pageJob?.preview.importType === "company" ? "logos" : "photos"}…</strong>{" "}
+                  Stay on this tab until this finishes (other admin pages are
+                  fine); closing it would stop the remaining uploads. The
+                  imported records themselves are already saved.
+                </p>
+              ) : null}
+
+              {!committing && commitOutcome ? (
+                <CommitOutcomeBanner status={commitOutcome} />
+              ) : null}
+
               {activeSummary ? <SummaryCards summary={activeSummary} /> : null}
+
+              {activeReviewReasons ? (
+                <p className={styles.bulkHint} role="status">
+                  <strong>Needs Review reasons:</strong> {activeReviewReasons}.
+                  See the Link and Messages columns for each row.
+                </p>
+              ) : null}
 
               {rowLimitError ? (
                 <p className={styles.formError} role="alert">
@@ -1273,7 +1143,7 @@ export function AdminBulkUploadClient() {
                         ? (commitBlockedReason ?? "Nothing to import")
                         : undefined
                     }
-                    onClick={() => void runCommit()}
+                    onClick={runCommit}
                   >
                     {committing ? "Importing…" : "Confirm import"}
                   </button>

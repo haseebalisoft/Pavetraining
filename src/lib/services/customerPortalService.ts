@@ -1,4 +1,5 @@
 import "server-only";
+import { isEventCustomerVisible } from "@/lib/training/eventVisibility";
 
 import { getSharePointFields } from "@/lib/schema/sharepointSchema";
 import {
@@ -230,10 +231,8 @@ function mapEvent(
   companyId: string,
   companyName: string,
 ): CustomerEventRecord | null {
-  const visible =
-    asBoolean(fields[eventFields.customerVisible]) ||
-    asBoolean(fields.CustomerVisible);
-  if (!visible) {
+  // Both visibility columns must agree — unticking "Customer visible" hides it.
+  if (!isEventCustomerVisible(fields)) {
     return null;
   }
 
@@ -528,8 +527,21 @@ export async function downloadCustomerDocumentFile(documentId: string) {
   return getListItemFileContent("customerDocuments", documentId);
 }
 
+/**
+ * Same rule the document view/download routes apply to company-level files
+ * (getCustomerDocumentForAccess): company-wide scope, or a Training Manager.
+ * Event documents are listed only to users who can actually open them.
+ */
+function canOpenCompanyDocuments(context: CustomerContext): boolean {
+  return (
+    isCompanyWideScope(context.normalizedAccessScope) ||
+    context.customerRole === "TrainingManager"
+  );
+}
+
 export async function getCustomerEventRecords(
   companyId: string,
+  context?: CustomerContext,
 ): Promise<CustomerEventRecord[]> {
   const companyName = await resolveCompanyName(companyId);
   const id = Number(companyId);
@@ -548,7 +560,7 @@ export async function getCustomerEventRecords(
     items = await getListItemsByKey("events", { top: 5000 });
   }
 
-  return items
+  const events = items
     .map((item) => mapEvent(item.id, item.fields, companyId, companyName))
     .filter((row): row is CustomerEventRecord => row !== null)
     .sort((a, b) => {
@@ -556,6 +568,24 @@ export async function getCustomerEventRecords(
       const bTime = b.eventDate ? new Date(b.eventDate).getTime() : 0;
       return aTime - bTime;
     });
+
+  if (!context || !canOpenCompanyDocuments(context) || !events.length) {
+    return events;
+  }
+  // Only customer-visible files, from this company's own folder.
+  const { listCompanyEventDocuments } = await import(
+    "@/lib/services/eventDocumentService"
+  );
+  const byEvent = await listCompanyEventDocuments(companyId).catch((error) => {
+    console.error("[events] event documents could not be loaded", error);
+    return new Map();
+  });
+  return events.map((event) => {
+    const documents = (byEvent.get(event.id) ?? [])
+      .filter((doc: { customerVisible: boolean }) => doc.customerVisible)
+      .map((doc: { id: string; name: string }) => ({ id: doc.id, name: doc.name }));
+    return documents.length ? { ...event, documents } : event;
+  });
 }
 
 export async function getCustomerOfferRecords(

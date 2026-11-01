@@ -1,6 +1,7 @@
 import "server-only";
 
 import { getGraphClient } from "@/lib/graph/graphClient";
+import { cleanEnvValue } from "@/lib/config/envValue";
 import type {
   OutlookEventPayload,
   OutlookEventResult,
@@ -30,9 +31,9 @@ export type OutlookCalendarConfig =
  *   OUTLOOK_USER_ID = mailbox UPN or Graph user id
  */
 export function getOutlookCalendarConfig(): OutlookCalendarConfig | null {
-  const groupId = process.env.OUTLOOK_GROUP_ID?.trim() || "";
-  const userId = process.env.OUTLOOK_USER_ID?.trim() || "";
-  const calendarId = process.env.OUTLOOK_CALENDAR_ID?.trim() || null;
+  const groupId = cleanEnvValue("OUTLOOK_GROUP_ID");
+  const userId = cleanEnvValue("OUTLOOK_USER_ID");
+  const calendarId = cleanEnvValue("OUTLOOK_CALENDAR_ID") || null;
 
   if (groupId) {
     return { mode: "group", groupId, calendarId };

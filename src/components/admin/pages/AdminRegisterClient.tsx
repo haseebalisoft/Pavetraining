@@ -181,6 +181,7 @@ function fieldsFor(
         // for each of them (e.g. John, Wayne, Paul → Paver, Roller, 360).
         label: "NPORS tests done (tick all that apply)",
         type: "multiselect",
+        searchable: true,
         required: true,
         section: "Training",
         options: categoryOptions.length
